@@ -26,6 +26,10 @@ interface PartRig {
   scale: number;
   rotation: number;
   flip: boolean;
+  /** 部件图片中作为关节的归一化坐标 */
+  anchor?: { x: number; y: number };
+  /** 挂到父关节后使用局部坐标，方便后续直接旋转骨骼 */
+  parent?: string;
 }
 
 interface ArcherRig {
@@ -42,6 +46,7 @@ interface ArcherRig {
  */
 export class FrostArcher extends Container {
   private readonly root = new Container();
+  private readonly joints = new Map<string, Container>();
   private loaded = false;
 
   constructor(scale = 1) {
@@ -60,26 +65,32 @@ export class FrostArcher extends Container {
 
     for (const name of rig.order) {
       const part = rig.parts[name];
-      if (!part) continue;
-
-      const frame = new Rectangle(part.frame.x, part.frame.y, part.frame.w, part.frame.h);
-      const texture = new Texture({
-        source: sheetTexture.source,
-        frame,
-      });
-
-      const sprite = new Sprite(texture);
-      sprite.label = name;
-      sprite.anchor.set(0.5);
-      sprite.position.set(part.x, part.y);
-      sprite.scale.set(part.flip ? -part.scale : part.scale, part.scale);
-      // rig 里 rotation 是角度（度），Pixi 用弧度
-      sprite.rotation = (part.rotation * Math.PI) / 180;
-
-      this.root.addChild(sprite);
+      if (part) this.addPart(name, part, sheetTexture);
     }
 
     this.loaded = true;
+  }
+
+  private addPart(name: string, part: PartRig, sheetTexture: PixiTexture): void {
+    const frame = new Rectangle(part.frame.x, part.frame.y, part.frame.w, part.frame.h);
+    const texture = new Texture({ source: sheetTexture.source, frame });
+    const joint = new Container();
+    const sprite = new Sprite(texture);
+    const parent = part.parent ? this.joints.get(part.parent) : this.root;
+
+    if (!parent) throw new Error(`FrostArcher joint not found: ${part.parent}`);
+
+    joint.label = `${name}Joint`;
+    joint.position.set(part.x, part.y);
+    joint.rotation = (part.rotation * Math.PI) / 180;
+
+    sprite.label = name;
+    sprite.anchor.set(part.anchor?.x ?? 0.5, part.anchor?.y ?? 0.5);
+    sprite.scale.set(part.flip ? -part.scale : part.scale, part.scale);
+
+    joint.addChild(sprite);
+    parent.addChild(joint);
+    this.joints.set(name, joint);
   }
 }
 
