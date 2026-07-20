@@ -21,8 +21,8 @@ async function bootstrap(): Promise<void> {
 
   const scene = new EmptyScene(app.screen.width, app.screen.height);
   app.stage.addChild(scene);
+  await scene.init();
 
-  // 窗口 / 容器尺寸变化时同步空场景
   app.renderer.on('resize', () => {
     scene.resize(app.screen.width, app.screen.height);
   });

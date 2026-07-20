@@ -1,0 +1,193 @@
+{
+  "sheet": "/assets/frost-archer/parts/atlas.png",
+  "order": [
+    "cape",
+    "thighL",
+    "thighR",
+    "bootL",
+    "bootR",
+    "torso",
+    "armUpperL",
+    "armLowerL",
+    "armUpperR",
+    "armLowerR",
+    "head",
+    "arrow",
+    "bow"
+  ],
+  "feet": {
+    "x": 508,
+    "y": 1135
+  },
+  "parts": {
+    "cape": {
+      "frame": {
+        "x": 23,
+        "y": 587,
+        "w": 502,
+        "h": 324
+      },
+      "x": -58,
+      "y": -235,
+      "scale": 0.95,
+      "rotation": 0,
+      "flip": false
+    },
+    "thighL": {
+      "frame": {
+        "x": 166,
+        "y": 967,
+        "w": 93,
+        "h": 96
+      },
+      "x": -46,
+      "y": -130,
+      "scale": 1.0,
+      "rotation": 0,
+      "flip": false
+    },
+    "thighR": {
+      "frame": {
+        "x": 313,
+        "y": 981,
+        "w": 86,
+        "h": 89
+      },
+      "x": 44,
+      "y": -125,
+      "scale": 1.0,
+      "rotation": 0,
+      "flip": false
+    },
+    "bootL": {
+      "frame": {
+        "x": 118,
+        "y": 1097,
+        "w": 109,
+        "h": 187
+      },
+      "x": -52,
+      "y": -17,
+      "scale": 1.0,
+      "rotation": 0,
+      "flip": false
+    },
+    "bootR": {
+      "frame": {
+        "x": 340,
+        "y": 1096,
+        "w": 73,
+        "h": 184
+      },
+      "x": 52,
+      "y": -17,
+      "scale": 1.0,
+      "rotation": 0,
+      "flip": false
+    },
+    "torso": {
+      "frame": {
+        "x": 737,
+        "y": 182,
+        "w": 233,
+        "h": 252
+      },
+      "x": 2,
+      "y": -275,
+      "scale": 1.12,
+      "rotation": 0,
+      "flip": false
+    },
+    "armUpperL": {
+      "frame": {
+        "x": 670,
+        "y": 550,
+        "w": 103,
+        "h": 122
+      },
+      "x": -113,
+      "y": -285,
+      "scale": 1.0,
+      "rotation": 30,
+      "flip": false
+    },
+    "armLowerL": {
+      "frame": {
+        "x": 603,
+        "y": 728,
+        "w": 102,
+        "h": 125
+      },
+      "x": -178,
+      "y": -190,
+      "scale": 1.0,
+      "rotation": 48,
+      "flip": false
+    },
+    "armUpperR": {
+      "frame": {
+        "x": 897,
+        "y": 549,
+        "w": 103,
+        "h": 125
+      },
+      "x": 112,
+      "y": -310,
+      "scale": 1.0,
+      "rotation": -45,
+      "flip": false
+    },
+    "armLowerR": {
+      "frame": {
+        "x": 937,
+        "y": 718,
+        "w": 94,
+        "h": 121
+      },
+      "x": 207,
+      "y": -250,
+      "scale": 1.0,
+      "rotation": -70,
+      "flip": false
+    },
+    "head": {
+      "frame": {
+        "x": 97,
+        "y": 31,
+        "w": 517,
+        "h": 522
+      },
+      "x": -8,
+      "y": -580,
+      "scale": 1.18,
+      "rotation": 0,
+      "flip": false
+    },
+    "arrow": {
+      "frame": {
+        "x": 963,
+        "y": 903,
+        "w": 124,
+        "h": 423
+      },
+      "x": 87,
+      "y": -335,
+      "scale": 0.92,
+      "rotation": -52,
+      "flip": false
+    },
+    "bow": {
+      "frame": {
+        "x": 474,
+        "y": 833,
+        "w": 417,
+        "h": 535
+      },
+      "x": 227,
+      "y": -180,
+      "scale": 0.95,
+      "rotation": -12,
+      "flip": false
+    }
+  }
+}

@@ -1,43 +1,68 @@
 import { Container, Graphics, Text } from 'pixi.js';
+import { FrostArcher, FrostArcherOriginal } from '../entities/FrostArcher';
 
 /**
- * 空场景：占位容器，后续可替换为正式关卡 / 菜单场景。
+ * 空场景：原图 vs 部件组装，左右对比。
  */
 export class EmptyScene extends Container {
+  private readonly bg: Graphics;
+  private readonly original: FrostArcherOriginal;
+  private readonly assembled: FrostArcher;
+  private readonly labelLeft: Text;
+  private readonly labelRight: Text;
+
   constructor(width: number, height: number) {
     super();
     this.label = 'EmptyScene';
 
-    // 深色背景
-    const bg = new Graphics()
+    this.bg = new Graphics()
       .rect(0, 0, width, height)
       .fill({ color: 0x0b0f14 });
-    this.addChild(bg);
+    this.addChild(this.bg);
 
-    // 居中提示，确认场景已挂载
-    const hint = new Text({
-      text: 'Empty Scene',
-      style: {
-        fontFamily: 'system-ui, sans-serif',
-        fontSize: 28,
-        fill: 0x6b7280,
-      },
-    });
-    hint.anchor.set(0.5);
-    hint.position.set(width / 2, height / 2);
-    this.addChild(hint);
+    const characterScale = 0.28;
+
+    this.original = new FrostArcherOriginal(characterScale);
+    this.assembled = new FrostArcher(characterScale);
+
+    this.labelLeft = makeLabel('原图');
+    this.labelRight = makeLabel('部件组装');
+
+    this.addChild(this.original, this.assembled, this.labelLeft, this.labelRight);
+    this.layout(width, height);
   }
 
-  /** 窗口尺寸变化时由外部调用 */
+  async init(): Promise<void> {
+    await Promise.all([this.original.load(), this.assembled.load()]);
+  }
+
   resize(width: number, height: number): void {
-    const bg = this.children[0] as Graphics | undefined;
-    if (bg) {
-      bg.clear().rect(0, 0, width, height).fill({ color: 0x0b0f14 });
-    }
-
-    const hint = this.children[1] as Text | undefined;
-    if (hint) {
-      hint.position.set(width / 2, height / 2);
-    }
+    this.bg.clear().rect(0, 0, width, height).fill({ color: 0x0b0f14 });
+    this.layout(width, height);
   }
+
+  private layout(width: number, height: number): void {
+    const midY = height / 2 + 40;
+    const leftX = width * 0.28;
+    const rightX = width * 0.72;
+
+    this.original.position.set(leftX, midY);
+    this.assembled.position.set(rightX, midY);
+
+    this.labelLeft.position.set(leftX, midY + 120);
+    this.labelRight.position.set(rightX, midY + 120);
+  }
+}
+
+function makeLabel(text: string): Text {
+  const t = new Text({
+    text,
+    style: {
+      fontFamily: 'system-ui, sans-serif',
+      fontSize: 18,
+      fill: 0x9ca3af,
+    },
+  });
+  t.anchor.set(0.5, 0);
+  return t;
 }
