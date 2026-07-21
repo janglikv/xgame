@@ -1,13 +1,12 @@
 import { Container, Graphics, Rectangle, Text } from 'pixi.js';
 import {
-  BLAST_KNOCK_SPEED,
-  BLAST_MAX_DAMAGE,
-  BLAST_RADIUS,
   BombProjectile,
   BOMB_MAX_RANGE,
+  DEFAULT_BOMB_STABILITY,
   loadBombTextures,
 } from '../entities/BombProjectile';
 import { FrostArcher } from '../entities/FrostArcher';
+import { loadSpiderTexture, Spider } from '../entities/Spider';
 import { Keyboard } from '../input/Keyboard';
 import { HealthBar } from '../ui/HealthBar';
 import { CartoonGrass } from '../world/CartoonGrass';
@@ -20,10 +19,28 @@ const THROW_MIN_DIST = 12;
 /** 血条相对脚底向上的偏移（屏幕像素） */
 const HP_BAR_OFFSET_Y = 86;
 const PLAYER_MAX_HP = 100;
-/** 击退速度指数衰减（越小滑得越远） */
+/**
+ * 目标侧：击退速度在世界里的衰减（摩擦力）。
+ * 击飞“威力”在炸弹 blast.knockSpeed；这里只管滑行多远。
+ */
 const KNOCK_DRAG = 2.6;
 /** 击退很强时削弱 WASD 控制 */
 const KNOCK_CONTROL_SOFTEN = 220;
+/** 蜘蛛对击飞的接收倍率（目标抗性，非炸弹属性） */
+const SPIDER_KNOCK_SCALE = 0.85;
+/**
+ * 玩家手雷稳定性 0~1。
+ * 越低越容易扔出随机缩小的弱弹（范围 / 伤害 / 击飞一起变小）。
+ */
+const PLAYER_BOMB_STABILITY = DEFAULT_BOMB_STABILITY;
+
+/**
+ * 黑夜关卡场地半宽/半高（世界像素，原点在玩家出生点）。
+ * 四角蜘蛛放在 (±halfW, ±halfH)。
+ */
+const NIGHT_ARENA_HALF_W = 420;
+const NIGHT_ARENA_HALF_H = 300;
+const SPIDER_SCALE = 0.1;
 
 export type LevelSceneOptions = {
   theme: LevelTheme;
@@ -51,6 +68,9 @@ export class LevelScene extends Container implements GameScene {
   private readonly nightOverlay: NightOverlay | null;
   private readonly archer: FrostArcher;
   private readonly healthBar: HealthBar;
+  /** 怪物层（草地/夜色之上，角色之下） */
+  private readonly entityLayer: Container;
+  private readonly spiders: Spider[] = [];
   /** 飞行炸弹 / 爆炸特效层（在角色之上，暂停层之下） */
   private readonly projectileLayer: Container;
   private readonly bombs: BombProjectile[] = [];
@@ -102,6 +122,16 @@ export class LevelScene extends Container implements GameScene {
     if (this.nightOverlay) {
       this.worldLayer.addChild(this.nightOverlay);
       this.nightOverlay.layout(width, height);
+    }
+
+    // 实体层：蜘蛛等世界单位（夜景之上、玩家之下）
+    this.entityLayer = new Container();
+    this.entityLayer.label = 'EntityLayer';
+    this.entityLayer.eventMode = 'none';
+    this.addChild(this.entityLayer);
+
+    if (options.theme === 'night') {
+      this.spawnCornerSpiders();
     }
 
     this.archer = new FrostArcher(0.07);
@@ -214,7 +244,42 @@ export class LevelScene extends Container implements GameScene {
   async init(): Promise<void> {
     this.onBackground?.(getThemeBackground(this.theme));
     this.keyboard.bind();
-    await Promise.all([this.archer.load(), loadBombTextures()]);
+
+    const loads: Promise<void>[] = [this.archer.load(), loadBombTextures()];
+    if (this.spiders.length > 0) {
+      loads.push(loadSpiderTexture());
+    }
+    await Promise.all(loads);
+
+    await Promise.all(this.spiders.map((s) => s.load()));
+    this.syncAllSpidersToScreen();
+  }
+
+  /** 黑夜关：场地四角各一只蜘蛛，出生时朝向中心 */
+  private spawnCornerSpiders(): void {
+    const hw = NIGHT_ARENA_HALF_W;
+    const hh = NIGHT_ARENA_HALF_H;
+    const corners: Array<[number, number]> = [
+      [-hw, -hh],
+      [hw, -hh],
+      [-hw, hh],
+      [hw, hh],
+    ];
+
+    for (const [wx, wy] of corners) {
+      const spider = new Spider(wx, wy, { scale: SPIDER_SCALE });
+      spider.faceToward(0, 0);
+      this.entityLayer.addChild(spider);
+      this.spiders.push(spider);
+    }
+  }
+
+  private syncAllSpidersToScreen(): void {
+    const cx = this.viewWidth / 2;
+    const cy = this.viewHeight / 2;
+    for (const spider of this.spiders) {
+      spider.syncToScreen(this.worldX, this.worldY, cx, cy);
+    }
   }
 
   destroy(options?: Parameters<Container['destroy']>[0]): void {
@@ -268,11 +333,21 @@ export class LevelScene extends Container implements GameScene {
       moved = true;
     }
 
-    if (moved) this.redrawWorld(false);
+    if (moved) {
+      this.redrawWorld(false);
+      this.syncAllSpidersToScreen();
+    }
 
     this.archer.update(deltaMS, moving && knockSpeed < 80);
     this.healthBar.update(deltaMS);
     this.syncHealthBar();
+
+    let spidersMoved = false;
+    for (const spider of this.spiders) {
+      if (spider.update(deltaMS)) spidersMoved = true;
+    }
+    if (spidersMoved) this.syncAllSpidersToScreen();
+
     this.updateBombs(deltaMS);
   }
 
@@ -286,6 +361,7 @@ export class LevelScene extends Container implements GameScene {
     this.layoutPauseMenu();
     this.redrawWorld(true);
     this.syncAllBombsToScreen();
+    this.syncAllSpidersToScreen();
   }
 
   private readonly onPointerTap = (e: {
@@ -325,7 +401,9 @@ export class LevelScene extends Container implements GameScene {
     this.archer.setFacingFromMoveX(endX - startX);
     this.archer.playThrowRecoil();
 
-    const bomb = new BombProjectile(startX, startY, endX, endY);
+    const bomb = new BombProjectile(startX, startY, endX, endY, {
+      stability: PLAYER_BOMB_STABILITY,
+    });
     this.projectileLayer.addChild(bomb);
     this.bombs.push(bomb);
     bomb.syncToScreen(this.worldX, this.worldY, cx, cy);
@@ -337,13 +415,12 @@ export class LevelScene extends Container implements GameScene {
 
     for (let i = this.bombs.length - 1; i >= 0; i--) {
       const bomb = this.bombs[i]!;
-      const wasFlying = bomb.getPhase() === 'flying';
       const phase = bomb.update(deltaMS);
       bomb.syncToScreen(this.worldX, this.worldY, cx, cy);
 
-      // 落地瞬间结算爆炸伤害 / 击退（可炸到自己）
-      if (wasFlying && phase === 'exploding') {
-        this.applyExplosionAt(bomb.groundX, bomb.groundY);
+      // 落地瞬间：用该炸弹自身的 blast 属性结算伤害 / 击飞
+      if (bomb.consumeBlastResolve()) {
+        this.applyBombBlast(bomb);
       }
 
       if (phase === 'done') {
@@ -355,42 +432,40 @@ export class LevelScene extends Container implements GameScene {
   }
 
   /**
-   * 爆炸结算：范围内扣血；方向为远离爆心，把自己崩飞。
+   * 场景只负责把炸弹算出的命中结果接到目标上。
+   * 半径 / 伤害 / 击飞速度等全部读 bomb.blast。
    */
-  private applyExplosionAt(blastX: number, blastY: number): void {
-    const dx = this.worldX - blastX;
-    const dy = this.worldY - blastY;
-    const dist = Math.hypot(dx, dy);
-
-    if (dist > BLAST_RADIUS) return;
-
-    // 边缘仍有一定伤害；中心最强
-    const falloff = 1 - dist / BLAST_RADIUS;
-    const strength = falloff * falloff; // 靠近中心更猛
-    const damage = Math.max(6, Math.round(BLAST_MAX_DAMAGE * (0.35 + 0.65 * strength)));
-    this.healthBar.applyDelta(-damage);
-
-    // 击退方向：远离爆心；脚踩爆心时用面朝反方向顶开
-    let nx: number;
-    let ny: number;
-    if (dist < 6) {
-      // 几乎贴脸：朝当前面朝的反方向崩（scale.x 正 = 朝右）
-      const face = this.archer.scale.x >= 0 ? 1 : -1;
-      nx = -face;
-      ny = -0.35;
-      const inv = 1 / Math.hypot(nx, ny);
-      nx *= inv;
-      ny *= inv;
-    } else {
-      nx = dx / dist;
-      ny = dy / dist;
+  private applyBombBlast(bomb: BombProjectile): void {
+    const face: 1 | -1 = this.archer.scale.x >= 0 ? 1 : -1;
+    const playerHit = bomb.evaluateHit(this.worldX, this.worldY, face);
+    if (playerHit) {
+      this.healthBar.applyDelta(-playerHit.damage);
+      this.knockVelX += playerHit.knockVelX;
+      this.knockVelY += playerHit.knockVelY;
+      this.archer.playBlastKnock(playerHit.poseStrength, playerHit.dirX);
     }
 
-    const impulse = BLAST_KNOCK_SPEED * (0.45 + 0.55 * strength);
-    this.knockVelX += nx * impulse;
-    this.knockVelY += ny * impulse;
+    let anySpider = false;
+    for (let i = this.spiders.length - 1; i >= 0; i--) {
+      const spider = this.spiders[i]!;
+      if (!spider.isAlive) continue;
 
-    this.archer.playBlastKnock(0.55 + 0.7 * strength, nx);
+      const hit = bomb.evaluateHit(
+        spider.worldX,
+        spider.worldY,
+        spider.worldX >= bomb.groundX ? 1 : -1,
+      );
+      if (!hit) continue;
+
+      anySpider = true;
+      const alive = spider.applyBlastHit(hit, SPIDER_KNOCK_SCALE);
+      if (!alive) {
+        this.entityLayer.removeChild(spider);
+        spider.destroy({ children: true });
+        this.spiders.splice(i, 1);
+      }
+    }
+    if (anySpider) this.syncAllSpidersToScreen();
   }
 
   private syncAllBombsToScreen(): void {

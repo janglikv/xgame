@@ -5,25 +5,103 @@ const EXPLOSION_URL = '/assets/bomb/explosion.png';
 
 /** 最远投掷距离（世界像素） */
 export const BOMB_MAX_RANGE = 280;
-/** 爆炸伤害 / 击退半径（世界像素） */
-export const BLAST_RADIUS = 96;
-/** 中心最大伤害 */
-export const BLAST_MAX_DAMAGE = 28;
-/** 中心最大击退初速度（像素/秒） */
-export const BLAST_KNOCK_SPEED = 920;
+
+/**
+ * 炸弹爆炸属性：伤害 + 击飞都由炸弹持有，方便后续调参 / 做不同炸弹类型。
+ * 距离衰减：strength = (1 - dist/radius)²，中心 1、边缘 0。
+ */
+export type BombBlastStats = {
+  /** 伤害 / 击退半径（世界像素） */
+  radius: number;
+  /** 中心最大伤害 */
+  maxDamage: number;
+  /** 边缘保底伤害 */
+  minDamage: number;
+  /**
+   * 伤害混合：damage = maxDamage * (damageFloor + (1-damageFloor) * strength)
+   * 再 clamp 到 minDamage。
+   */
+  damageFloor: number;
+  /** 中心最大击飞初速度（像素/秒） */
+  knockSpeed: number;
+  /**
+   * 击飞混合：impulse = knockSpeed * (knockFloor + (1-knockFloor) * strength)
+   */
+  knockFloor: number;
+  /** 姿态反馈基准（0~1+），最终 pose = poseBase + poseGain * strength */
+  poseBase: number;
+  poseGain: number;
+};
+
+/** 满尺寸时的基准爆炸配置（再乘 sizeScale） */
+export const DEFAULT_BOMB_BLAST: Readonly<BombBlastStats> = {
+  radius: 96,
+  maxDamage: 28,
+  minDamage: 6,
+  damageFloor: 0.35,
+  knockSpeed: 920,
+  knockFloor: 0.45,
+  poseBase: 0.55,
+  poseGain: 0.7,
+};
+
+/**
+ * 默认稳定性 0~1。
+ * 1 = 始终满尺寸；越低越容易随机扔出缩小版炸弹。
+ */
+export const DEFAULT_BOMB_STABILITY = 0.4;
+
+/**
+ * 稳定性为 0 时，随机尺寸下限（相对满尺寸）。
+ * 再低会几乎看不见且数值过废。
+ */
+export const BOMB_MIN_SIZE_SCALE = 0.35;
+
+/** 对某个目标的一次爆炸结算结果（由炸弹算出，场景只负责应用） */
+export type BlastHit = {
+  /** 0~1，越近越大（已平方衰减） */
+  strength: number;
+  damage: number;
+  /** 击飞初速度向量（世界像素/秒，远离爆心） */
+  knockVelX: number;
+  knockVelY: number;
+  /** 单位方向（远离爆心） */
+  dirX: number;
+  dirY: number;
+  /** 建议姿态强度 */
+  poseStrength: number;
+};
+
+// 兼容旧导出名
+export const BLAST_RADIUS = DEFAULT_BOMB_BLAST.radius;
+export const BLAST_MAX_DAMAGE = DEFAULT_BOMB_BLAST.maxDamage;
+export const BLAST_KNOCK_SPEED = DEFAULT_BOMB_BLAST.knockSpeed;
 
 const ARC_PEAK = 100;
-/** 出手点相对脚底抬高（屏幕像素），略高于腰部 */
 const THROW_ORIGIN_HEIGHT = 32;
 const MIN_FLIGHT = 0.32;
 const MAX_FLIGHT = 0.65;
 const EXPLOSION_LIFE = 0.42;
-/** 出手时最小、落地时最大 */
+/** 满尺寸视觉缩放 */
 const BOMB_SCALE_START = 0.028;
 const BOMB_SCALE_END = 0.095;
 const EXPLOSION_SCALE = 0.14;
 
 export type BombPhase = 'flying' | 'exploding' | 'done';
+
+export type BombProjectileOptions = {
+  /** 覆盖满尺寸基准爆炸属性（再被 sizeScale 缩放） */
+  blast?: Partial<BombBlastStats>;
+  /**
+   * 稳定性 0~1。
+   * 越低，扔出时尺寸越可能随机缩小；缩小后范围 / 伤害 / 击飞同步变弱。
+   */
+  stability?: number;
+  /**
+   * 固定尺寸倍率（调试用）。不传则按 stability 随机 roll。
+   */
+  sizeScale?: number;
+};
 
 let sharedBomb: Texture | null = null;
 let sharedExplosion: Texture | null = null;
@@ -38,9 +116,44 @@ export async function loadBombTextures(): Promise<void> {
   sharedExplosion = explosion;
 }
 
+function clamp01(v: number): number {
+  return Math.max(0, Math.min(1, v));
+}
+
+/**
+ * 按稳定性 roll 出本颗炸弹尺寸 0~1（相对满尺寸）。
+ * - stability = 1 → 恒为 1
+ * - stability = 0 → 均匀落在 [BOMB_MIN_SIZE_SCALE, 1]
+ * - 中间：下限随稳定性抬高，仍可随机偏小
+ */
+export function rollBombSizeScale(stability: number, rng: () => number = Math.random): number {
+  const s = clamp01(stability);
+  const minSize = BOMB_MIN_SIZE_SCALE + (1 - BOMB_MIN_SIZE_SCALE) * s;
+  // minSize..1 上均匀；s=1 时 minSize=1 → 恒 1
+  return minSize + (1 - minSize) * rng();
+}
+
+/** 满尺寸 blast 按尺寸倍率缩放（范围 / 伤害 / 击飞） */
+export function scaleBlastStats(
+  base: BombBlastStats,
+  sizeScale: number,
+): BombBlastStats {
+  const t = Math.max(0.05, sizeScale);
+  return {
+    radius: Math.max(20, base.radius * t),
+    maxDamage: Math.max(1, Math.round(base.maxDamage * t)),
+    minDamage: Math.max(1, Math.round(base.minDamage * t)),
+    damageFloor: base.damageFloor,
+    knockSpeed: base.knockSpeed * t,
+    knockFloor: base.knockFloor,
+    poseBase: base.poseBase * (0.65 + 0.35 * t),
+    poseGain: base.poseGain * (0.65 + 0.35 * t),
+  };
+}
+
 /**
  * 抛物线投出的炸弹：沿地面插值飞向落点，视觉上抬起再落下，落地后播爆炸。
- * 位置用世界坐标存储，由外部按摄像机同步到屏幕。
+ * 稳定性 → 随机尺寸；尺寸越小，视觉与爆炸范围 / 威力 / 击飞越弱。
  */
 export class BombProjectile extends Container {
   private readonly bomb: Sprite;
@@ -50,24 +163,55 @@ export class BombProjectile extends Container {
   private readonly endX: number;
   private readonly endY: number;
   private readonly flightDuration: number;
+  private readonly bombScaleStart: number;
+  private readonly bombScaleEnd: number;
+  private readonly explosionScale: number;
+
+  /** 本颗炸弹的爆炸 / 击飞配置（已含尺寸缩放） */
+  readonly blast: BombBlastStats;
+  /** 扔出时的稳定性 0~1 */
+  readonly stability: number;
+  /** 本颗实际尺寸倍率（相对满尺寸），越小越弱 */
+  readonly sizeScale: number;
 
   private phase: BombPhase = 'flying';
   private elapsed = 0;
   private explodeElapsed = 0;
+  private blastResolved = false;
 
-  /** 地面投影世界坐标 */
   groundX: number;
   groundY: number;
-  /** 抛物线抬升高度（屏幕向上为正，勿用 height 以免与 Container 冲突） */
   arcHeight = 0;
 
-  constructor(startX: number, startY: number, endX: number, endY: number) {
+  constructor(
+    startX: number,
+    startY: number,
+    endX: number,
+    endY: number,
+    options: BombProjectileOptions = {},
+  ) {
     super();
     this.label = 'BombProjectile';
 
     if (!sharedBomb || !sharedExplosion) {
       throw new Error('Bomb textures not loaded — call loadBombTextures() first');
     }
+
+    this.stability = clamp01(options.stability ?? DEFAULT_BOMB_STABILITY);
+    this.sizeScale =
+      options.sizeScale !== undefined
+        ? Math.max(BOMB_MIN_SIZE_SCALE * 0.5, options.sizeScale)
+        : rollBombSizeScale(this.stability);
+
+    const baseBlast: BombBlastStats = {
+      ...DEFAULT_BOMB_BLAST,
+      ...options.blast,
+    };
+    this.blast = scaleBlastStats(baseBlast, this.sizeScale);
+
+    this.bombScaleStart = BOMB_SCALE_START * this.sizeScale;
+    this.bombScaleEnd = BOMB_SCALE_END * this.sizeScale;
+    this.explosionScale = EXPLOSION_SCALE * this.sizeScale;
 
     this.startX = startX;
     this.startY = startY;
@@ -83,7 +227,7 @@ export class BombProjectile extends Container {
 
     this.bomb = new Sprite(sharedBomb);
     this.bomb.anchor.set(0.5, 0.7);
-    this.bomb.scale.set(BOMB_SCALE_START);
+    this.bomb.scale.set(this.bombScaleStart);
     this.bomb.label = 'BombSprite';
     this.addChild(this.bomb);
 
@@ -100,8 +244,64 @@ export class BombProjectile extends Container {
   }
 
   /**
-   * @returns 当前阶段；外部在 `done` 时销毁实例
+   * 对世界坐标上的目标做一次爆炸命中检测与数值结算。
+   * 半径 / 伤害 / 击飞均来自本实例已缩放的 blast。
    */
+  evaluateHit(
+    targetX: number,
+    targetY: number,
+    fallbackFace: 1 | -1 = 1,
+  ): BlastHit | null {
+    const dx = targetX - this.groundX;
+    const dy = targetY - this.groundY;
+    const dist = Math.hypot(dx, dy);
+    const { radius } = this.blast;
+
+    if (dist > radius) return null;
+
+    const falloff = 1 - dist / radius;
+    const strength = falloff * falloff;
+
+    const {
+      maxDamage,
+      minDamage,
+      damageFloor,
+      knockSpeed,
+      knockFloor,
+      poseBase,
+      poseGain,
+    } = this.blast;
+
+    const damage = Math.max(
+      minDamage,
+      Math.round(maxDamage * (damageFloor + (1 - damageFloor) * strength)),
+    );
+    const impulse = knockSpeed * (knockFloor + (1 - knockFloor) * strength);
+
+    let dirX: number;
+    let dirY: number;
+    if (dist < 6) {
+      dirX = -fallbackFace;
+      dirY = -0.35;
+      const inv = 1 / Math.hypot(dirX, dirY);
+      dirX *= inv;
+      dirY *= inv;
+    } else {
+      dirX = dx / dist;
+      dirY = dy / dist;
+    }
+
+    return {
+      strength,
+      damage,
+      knockVelX: dirX * impulse,
+      knockVelY: dirY * impulse,
+      dirX,
+      dirY,
+      poseStrength: poseBase + poseGain * strength,
+    };
+  }
+
   update(deltaMS: number): BombPhase {
     const dt = deltaMS / 1000;
 
@@ -110,8 +310,6 @@ export class BombProjectile extends Container {
       const raw = this.elapsed / this.flightDuration;
       const u = Math.min(1, raw);
       this.sampleFlight(u);
-
-      // 飞行中轻微自旋
       this.bomb.rotation += dt * 8;
 
       if (u >= 1) {
@@ -120,14 +318,12 @@ export class BombProjectile extends Container {
     } else if (this.phase === 'exploding') {
       this.explodeElapsed += dt;
       const p = Math.min(1, this.explodeElapsed / EXPLOSION_LIFE);
-      // 先快速弹开，再淡出
       const pop = p < 0.25 ? p / 0.25 : 1;
       const fade = p < 0.45 ? 1 : 1 - (p - 0.45) / 0.55;
-      const scale = EXPLOSION_SCALE * (0.55 + 0.55 * pop);
+      const scale = this.explosionScale * (0.55 + 0.55 * pop);
       this.explosion.scale.set(scale);
       this.explosion.alpha = fade;
-      // 轻微上浮
-      this.arcHeight = 12 * (1 - p);
+      this.arcHeight = 12 * (1 - p) * this.sizeScale;
 
       if (p >= 1) {
         this.phase = 'done';
@@ -137,10 +333,12 @@ export class BombProjectile extends Container {
     return this.phase;
   }
 
-  /**
-   * 按当前摄像机把世界坐标写到屏幕位置。
-   * 玩家固定在屏幕中心，摄像机原点 = 玩家世界坐标。
-   */
+  consumeBlastResolve(): boolean {
+    if (this.phase !== 'exploding' || this.blastResolved) return false;
+    this.blastResolved = true;
+    return true;
+  }
+
   syncToScreen(
     cameraWorldX: number,
     cameraWorldY: number,
@@ -156,13 +354,12 @@ export class BombProjectile extends Container {
   private sampleFlight(u: number): void {
     this.groundX = this.startX + (this.endX - this.startX) * u;
     this.groundY = this.startY + (this.endY - this.startY) * u;
-    // 从胸口高度落到地面，中间再叠抛物线抬升
     const fromHand = THROW_ORIGIN_HEIGHT * (1 - u);
     const arc = 4 * ARC_PEAK * u * (1 - u);
     this.arcHeight = fromHand + arc;
-    // 飞行全程由小到大（ease-out，落地时接近最大）
     const grow = 1 - (1 - u) * (1 - u);
-    const s = BOMB_SCALE_START + (BOMB_SCALE_END - BOMB_SCALE_START) * grow;
+    const s =
+      this.bombScaleStart + (this.bombScaleEnd - this.bombScaleStart) * grow;
     this.bomb.scale.set(s);
   }
 
@@ -171,10 +368,10 @@ export class BombProjectile extends Container {
     this.explodeElapsed = 0;
     this.groundX = this.endX;
     this.groundY = this.endY;
-    this.arcHeight = 8;
+    this.arcHeight = 8 * this.sizeScale;
     this.bomb.visible = false;
     this.explosion.visible = true;
     this.explosion.alpha = 1;
-    this.explosion.scale.set(EXPLOSION_SCALE * 0.55);
+    this.explosion.scale.set(this.explosionScale * 0.55);
   }
 }
