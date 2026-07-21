@@ -28,13 +28,25 @@ const THROW = {
   settle: 9,
 } as const;
 
-/** 被炸飞时的姿态反馈 */
+/** 被炸飞时的姿态反馈（高度由场景 knock 抛物线负责，这里只留轻微余量） */
 const BLAST = {
   lean: 0.55,
-  lift: 28,
+  lift: 8,
   tumble: 0.9,
   settle: 5.5,
 } as const;
+
+/** 大弹空中旋转两圈（额外抬升交给世界高度抛物线） */
+const AIR_SPIN = {
+  /** 转完两圈的时长（秒） */
+  duration: 0.62,
+  /** 旋转期间额外局部抬升（主高度已在轨迹里） */
+  lift: 0,
+} as const;
+
+/** 脚底锚点 / 中心锚点（旋转时切到中心） */
+const ANCHOR_FOOT_Y = 0.92;
+const ANCHOR_CENTER_Y = 0.5;
 
 /**
  * 寒冰射手（整图预览）
@@ -58,6 +70,12 @@ export class FrostArcher extends Container {
   private throwRecoil = 0;
   /** 被炸飞姿态强度 0→1+ */
   private blastKnock = 0;
+  /** 空中旋转进度 0→1；>0 时播放多圈旋转 */
+  private spinT = 0;
+  /** 目标旋转弧度（如 2 圈 = 4π） */
+  private spinTarget = 0;
+  /** 旋转方向（与击飞水平方向一致） */
+  private spinSign: 1 | -1 = 1;
 
   constructor(scale = 1) {
     super();
@@ -71,7 +89,7 @@ export class FrostArcher extends Container {
 
     const texture = await Assets.load(PREVIEW_URL);
     const sprite = new Sprite(texture);
-    sprite.anchor.set(0.5, 0.92);
+    sprite.anchor.set(0.5, ANCHOR_FOOT_Y);
     sprite.label = 'FrostArcherSprite';
     this.sprite = sprite;
     this.addChild(sprite);
@@ -96,14 +114,26 @@ export class FrostArcher extends Container {
   }
 
   /**
-   * 被爆炸崩飞时的姿态：抬起 + 翻仰。
+   * 被爆炸崩飞时的姿态：抬起 + 翻仰；大弹可空中转多圈。
    * @param strength 0~1，距爆心越近越大
-   * @param dirX 击退水平方向（世界），用于转身
+   * @param dirX 击退水平方向（世界），用于转身 / 旋转方向
+   * @param airSpinTurns 空中旋转圈数（大弹为 2）
    */
-  playBlastKnock(strength: number, dirX = 0): void {
+  playBlastKnock(strength: number, dirX = 0, airSpinTurns = 0): void {
     this.throwRecoil = 0;
     this.blastKnock = Math.max(this.blastKnock, Math.min(1.25, strength));
     if (dirX !== 0) this.setFacingFromMoveX(dirX);
+
+    if (airSpinTurns > 0) {
+      this.spinT = 0;
+      this.spinTarget = airSpinTurns * Math.PI * 2;
+      this.spinSign = dirX < 0 ? -1 : 1;
+    }
+  }
+
+  /** 是否在空中翻滚（走路晃动应关闭） */
+  get isAirSpinning(): boolean {
+    return this.spinT > 0 && this.spinT < 1;
   }
 
   /**
@@ -116,7 +146,8 @@ export class FrostArcher extends Container {
     if (!sprite) return;
 
     const dt = deltaMS / 1000;
-    const tumbling = this.blastKnock > 0.15;
+    const spinning = this.spinTarget > 0 && this.spinT < 1;
+    const tumbling = this.blastKnock > 0.15 || spinning;
 
     if (moving && !tumbling) {
       this.bobPhase += (Math.PI * 2 * dt) / BOB.period;
@@ -142,7 +173,8 @@ export class FrostArcher extends Container {
         this.poseX === 0 &&
         this.poseY === 0 &&
         this.throwRecoil <= 0 &&
-        this.blastKnock <= 0
+        this.blastKnock <= 0 &&
+        !spinning
       ) {
         this.bobPhase = 0;
       }
@@ -165,17 +197,47 @@ export class FrostArcher extends Container {
 
     if (this.blastKnock > 0) {
       const b = this.blastKnock;
-      // 抬起、后仰翻滚感
+      // 普通被炸：抬起、后仰；大弹转圈时主要用 spin 旋转，这里只保留抬升
       oy += -BLAST.lift * b;
-      orot += -BLAST.lean * b - BLAST.tumble * b * b;
+      if (!spinning) {
+        orot += -BLAST.lean * b - BLAST.tumble * b * b;
+      }
       ox += -8 * b;
 
       this.blastKnock *= Math.exp(-BLAST.settle * dt);
       if (this.blastKnock < 0.03) this.blastKnock = 0;
     }
 
-    sprite.x = ox;
-    sprite.y = oy;
+    // 大弹：约 0.62s 内转满 spinTarget（默认两圈），绕身体中心旋转
+    if (this.spinTarget > 0 && this.spinT < 1) {
+      this.spinT = Math.min(1, this.spinT + dt / AIR_SPIN.duration);
+      // ease-out：先快后慢
+      const u = this.spinT;
+      const eased = 1 - (1 - u) * (1 - u);
+      orot += this.spinSign * this.spinTarget * eased;
+      // 抛物线抬升：中间最高
+      const loft = 4 * u * (1 - u);
+      oy += -AIR_SPIN.lift * loft;
+
+      if (this.spinT >= 1) {
+        this.spinTarget = 0;
+        this.spinT = 0;
+      }
+    }
+
+    // 转圈时锚点切到中心，脚底原点改算到身体中心，避免绕脚甩
+    if (spinning || (this.spinTarget > 0 && this.spinT > 0)) {
+      const h = sprite.texture.height;
+      // 脚底 → 中心的本地偏移（贴图像素；父级 scale 统一缩放）
+      const toCenterY = (ANCHOR_CENTER_Y - ANCHOR_FOOT_Y) * h;
+      sprite.anchor.set(0.5, ANCHOR_CENTER_Y);
+      sprite.x = ox;
+      sprite.y = oy + toCenterY;
+    } else {
+      sprite.anchor.set(0.5, ANCHOR_FOOT_Y);
+      sprite.x = ox;
+      sprite.y = oy;
+    }
     sprite.rotation = orot;
   }
 }

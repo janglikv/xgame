@@ -1,4 +1,10 @@
 import { Assets, Container, Sprite, Texture } from 'pixi.js';
+import {
+  applyKnockImpulse,
+  createKnockArcState,
+  stepKnockArc,
+  type KnockArcState,
+} from './knockArc';
 import { HealthBar } from '../ui/HealthBar';
 
 const SPIDER_URL = '/assets/spider/spider.png';
@@ -12,16 +18,23 @@ const HP_BAR_OFFSET_Y = 620;
 const HP_BAR_WIDTH = 42;
 const HP_BAR_HEIGHT = 5;
 
-/** 被炸飞姿态（作用在 sprite 局部） */
+/** 被炸飞姿态（作用在 sprite 局部；高度由 knock 抛物线负责） */
 const BLAST = {
   lean: 0.5,
-  lift: 22,
+  lift: 6,
   tumble: 0.75,
   settle: 5.2,
 } as const;
 
-/** 击退速度指数衰减（与玩家同量级，略快一点停） */
-const KNOCK_DRAG = 2.8;
+/** 大弹空中旋转两圈（额外抬升交给世界高度抛物线） */
+const AIR_SPIN = {
+  duration: 0.62,
+  lift: 0,
+} as const;
+
+/** 脚底锚点 / 中心锚点（旋转时切到中心） */
+const ANCHOR_FOOT_Y = 0.88;
+const ANCHOR_CENTER_Y = 0.5;
 
 let sharedTexture: Texture | null = null;
 
@@ -48,9 +61,12 @@ export class Spider extends Container {
   private facing: 1 | -1 = 1;
   /** 被炸飞姿态强度 */
   private blastKnock = 0;
-  /** 世界空间击退速度（像素/秒） */
-  private knockVelX = 0;
-  private knockVelY = 0;
+  /** 击飞抛物线（地面速度 + 高度） */
+  private readonly knock: KnockArcState = createKnockArcState();
+  /** 空中旋转进度 0→1 */
+  private spinT = 0;
+  private spinTarget = 0;
+  private spinSign: 1 | -1 = 1;
 
   /** 世界坐标（与玩家 worldX/Y 同一空间） */
   worldX: number;
@@ -100,7 +116,7 @@ export class Spider extends Container {
 
     const sprite = new Sprite(sharedTexture);
     // 脚底略偏下：蜘蛛图主体在中部，腿向下伸
-    sprite.anchor.set(0.5, 0.88);
+    sprite.anchor.set(0.5, ANCHOR_FOOT_Y);
     sprite.label = 'SpiderSprite';
     this.sprite = sprite;
     this.applyFacingToSprite();
@@ -118,9 +134,10 @@ export class Spider extends Container {
     screenCenterX: number,
     screenCenterY: number,
   ): void {
+    // 高度抛物线：屏幕向上抬
     this.position.set(
       this.worldX - cameraWorldX + screenCenterX,
-      this.worldY - cameraWorldY + screenCenterY,
+      this.worldY - cameraWorldY + screenCenterY - this.knock.height,
     );
   }
 
@@ -140,7 +157,7 @@ export class Spider extends Container {
   }
 
   /**
-   * 应用炸弹结算结果：扣血 + 世界击退速度 + 姿态翻仰。
+   * 应用炸弹结算结果：扣血 + 世界击退速度 + 姿态 / 空中转圈。
    * 击飞数值由炸弹属性算出，目标侧只负责接收（可再乘抗性）。
    * @param knockScale 击飞抗性，1 = 全吃，0.85 = 略抗
    */
@@ -151,6 +168,7 @@ export class Spider extends Container {
       knockVelY: number;
       dirX: number;
       poseStrength: number;
+      airSpinTurns?: number;
     },
     knockScale = 1,
   ): boolean {
@@ -158,8 +176,7 @@ export class Spider extends Container {
 
     this.healthBar.applyDelta(-Math.abs(hit.damage));
 
-    this.knockVelX += hit.knockVelX * knockScale;
-    this.knockVelY += hit.knockVelY * knockScale;
+    applyKnockImpulse(this.knock, hit.knockVelX, hit.knockVelY, knockScale);
 
     this.blastKnock = Math.max(
       this.blastKnock,
@@ -170,11 +187,18 @@ export class Spider extends Container {
       this.applyFacingToSprite();
     }
 
+    const turns = hit.airSpinTurns ?? 0;
+    if (turns > 0) {
+      this.spinT = 0;
+      this.spinTarget = turns * Math.PI * 2;
+      this.spinSign = hit.dirX < 0 ? -1 : 1;
+    }
+
     return this.isAlive;
   }
 
   /**
-   * 每帧：击退位移 + 姿态回正 + 血条动画。
+   * 每帧：击退位移 + 姿态 / 空中转圈 + 血条动画。
    * @returns 世界坐标是否变化（需要刷新屏幕位置）
    */
   update(deltaMS: number): boolean {
@@ -182,17 +206,10 @@ export class Spider extends Container {
     this.healthBar.update(deltaMS);
 
     let moved = false;
-    const knockSpeed = Math.hypot(this.knockVelX, this.knockVelY);
-    if (knockSpeed > 4) {
-      this.worldX += this.knockVelX * dt;
-      this.worldY += this.knockVelY * dt;
-      const damp = Math.exp(-KNOCK_DRAG * dt);
-      this.knockVelX *= damp;
-      this.knockVelY *= damp;
-      if (Math.hypot(this.knockVelX, this.knockVelY) < 12) {
-        this.knockVelX = 0;
-        this.knockVelY = 0;
-      }
+    const knockStep = stepKnockArc(this.knock, dt);
+    if (knockStep.moved) {
+      this.worldX += knockStep.dx;
+      this.worldY += knockStep.dy;
       moved = true;
     }
 
@@ -201,20 +218,48 @@ export class Spider extends Container {
       let ox = 0;
       let oy = 0;
       let orot = 0;
+      const spinning = this.spinTarget > 0 && this.spinT < 1;
 
       if (this.blastKnock > 0) {
         const b = this.blastKnock;
         oy += -BLAST.lift * b;
-        // 旋转与朝向一致：scale.x 已含 facing，局部负旋转 = 向后仰
-        orot += -BLAST.lean * b - BLAST.tumble * b * b;
+        if (!spinning) {
+          orot += -BLAST.lean * b - BLAST.tumble * b * b;
+        }
         ox += -6 * b;
 
         this.blastKnock *= Math.exp(-BLAST.settle * dt);
         if (this.blastKnock < 0.03) this.blastKnock = 0;
       }
 
-      sprite.x = ox;
-      sprite.y = oy;
+      if (this.spinTarget > 0 && this.spinT < 1) {
+        this.spinT = Math.min(1, this.spinT + dt / AIR_SPIN.duration);
+        const u = this.spinT;
+        const eased = 1 - (1 - u) * (1 - u);
+        orot += this.spinSign * this.spinTarget * eased;
+        const loft = 4 * u * (1 - u);
+        oy += -AIR_SPIN.lift * loft;
+
+        if (this.spinT >= 1) {
+          this.spinTarget = 0;
+          this.spinT = 0;
+        }
+      }
+
+      // 转圈时绕身体中心转：锚点切到中心，补偿脚底→中心偏移
+      // scale 在 sprite 上，父空间偏移 = 锚点差 * 贴图高 * |scale|
+      if (spinning) {
+        const sy = Math.abs(sprite.scale.y) || 1;
+        const toCenterY =
+          (ANCHOR_CENTER_Y - ANCHOR_FOOT_Y) * sprite.texture.height * sy;
+        sprite.anchor.set(0.5, ANCHOR_CENTER_Y);
+        sprite.x = ox;
+        sprite.y = oy + toCenterY;
+      } else {
+        sprite.anchor.set(0.5, ANCHOR_FOOT_Y);
+        sprite.x = ox;
+        sprite.y = oy;
+      }
       sprite.rotation = orot;
     }
 

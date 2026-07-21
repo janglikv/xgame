@@ -6,6 +6,12 @@ import {
   loadBombTextures,
 } from '../entities/BombProjectile';
 import { FrostArcher } from '../entities/FrostArcher';
+import {
+  applyKnockImpulse,
+  createKnockArcState,
+  stepKnockArc,
+  type KnockArcState,
+} from '../entities/knockArc';
 import { loadSpiderTexture, Spider } from '../entities/Spider';
 import { Keyboard } from '../input/Keyboard';
 import { HealthBar } from '../ui/HealthBar';
@@ -19,12 +25,7 @@ const THROW_MIN_DIST = 12;
 /** 血条相对脚底向上的偏移（屏幕像素） */
 const HP_BAR_OFFSET_Y = 86;
 const PLAYER_MAX_HP = 100;
-/**
- * 目标侧：击退速度在世界里的衰减（摩擦力）。
- * 击飞“威力”在炸弹 blast.knockSpeed；这里只管滑行多远。
- */
-const KNOCK_DRAG = 2.6;
-/** 击退很强时削弱 WASD 控制 */
+/** 击退很强时削弱 WASD 控制（水平速度） */
 const KNOCK_CONTROL_SOFTEN = 220;
 /** 蜘蛛对击飞的接收倍率（目标抗性，非炸弹属性） */
 const SPIDER_KNOCK_SCALE = 0.85;
@@ -88,9 +89,8 @@ export class LevelScene extends Container implements GameScene {
   private viewHeight: number;
   private worldX = 0;
   private worldY = 0;
-  /** 被炸飞的世界速度（像素/秒） */
-  private knockVelX = 0;
-  private knockVelY = 0;
+  /** 被炸飞：地面平面速度 + 高度抛物线 */
+  private readonly knock: KnockArcState = createKnockArcState();
   private paused = false;
   private escWasDown = false;
 
@@ -305,40 +305,40 @@ export class LevelScene extends Container implements GameScene {
     const { x, y } = this.keyboard.getMoveAxis();
     let moved = false;
 
-    // 被炸飞：先施加击退位移
-    const knockSpeed = Math.hypot(this.knockVelX, this.knockVelY);
-    if (knockSpeed > 4) {
-      this.worldX += this.knockVelX * dt;
-      this.worldY += this.knockVelY * dt;
-      const damp = Math.exp(-KNOCK_DRAG * dt);
-      this.knockVelX *= damp;
-      this.knockVelY *= damp;
-      if (Math.hypot(this.knockVelX, this.knockVelY) < 12) {
-        this.knockVelX = 0;
-        this.knockVelY = 0;
-      }
+    // 被炸飞：抛物线（地面推开 + 高度起落）
+    const knockStep = stepKnockArc(this.knock, dt);
+    if (knockStep.moved) {
+      this.worldX += knockStep.dx;
+      this.worldY += knockStep.dy;
       moved = true;
     }
+    const knockSpeed = Math.hypot(this.knock.velX, this.knock.velY);
+    const airborne = knockStep.airborne;
 
-    // WASD：击退中控制变钝
+    // WASD：空中几乎失控；贴地时强击退会变钝
     const moving = x !== 0 || y !== 0;
     if (moving) {
       this.archer.setFacingFromMoveX(x);
-      const control =
-        knockSpeed > KNOCK_CONTROL_SOFTEN
-          ? Math.max(0.2, 1 - knockSpeed / (KNOCK_CONTROL_SOFTEN * 3))
-          : 1;
+      let control = 1;
+      if (airborne) {
+        control = 0.08;
+      } else if (knockSpeed > KNOCK_CONTROL_SOFTEN) {
+        control = Math.max(0.2, 1 - knockSpeed / (KNOCK_CONTROL_SOFTEN * 3));
+      }
       this.worldX += x * MOVE_SPEED * control * dt;
       this.worldY += y * MOVE_SPEED * control * dt;
       moved = true;
     }
+
+    // 玩家固定屏幕中心，高度用竖直抬升表现
+    this.centerArcher();
 
     if (moved) {
       this.redrawWorld(false);
       this.syncAllSpidersToScreen();
     }
 
-    this.archer.update(deltaMS, moving && knockSpeed < 80);
+    this.archer.update(deltaMS, moving && !airborne && knockSpeed < 80);
     this.healthBar.update(deltaMS);
     this.syncHealthBar();
 
@@ -440,9 +440,16 @@ export class LevelScene extends Container implements GameScene {
     const playerHit = bomb.evaluateHit(this.worldX, this.worldY, face);
     if (playerHit) {
       this.healthBar.applyDelta(-playerHit.damage);
-      this.knockVelX += playerHit.knockVelX;
-      this.knockVelY += playerHit.knockVelY;
-      this.archer.playBlastKnock(playerHit.poseStrength, playerHit.dirX);
+      applyKnockImpulse(
+        this.knock,
+        playerHit.knockVelX,
+        playerHit.knockVelY,
+      );
+      this.archer.playBlastKnock(
+        playerHit.poseStrength,
+        playerHit.dirX,
+        playerHit.airSpinTurns,
+      );
     }
 
     let anySpider = false;
@@ -484,7 +491,11 @@ export class LevelScene extends Container implements GameScene {
   }
 
   private centerArcher(): void {
-    this.archer.position.set(this.viewWidth / 2, this.viewHeight / 2);
+    // 击飞高度：屏幕向上抬（世界 Y 是地面平面，高度单独叠）
+    this.archer.position.set(
+      this.viewWidth / 2,
+      this.viewHeight / 2 - this.knock.height,
+    );
   }
 
   /** 血条钉在角色头顶（脚底原点向上） */

@@ -57,6 +57,18 @@ export const DEFAULT_BOMB_STABILITY = 0.4;
  */
 export const BOMB_MIN_SIZE_SCALE = 0.35;
 
+/**
+ * 尺寸 ≥ 此值视为“大弹”：额外击飞加成 + 被炸目标空中旋转两圈。
+ * （相对满尺寸 sizeScale）
+ */
+export const BOMB_SPIN_SIZE_THRESHOLD = 0.88;
+
+/** 大弹在阈值处起算的额外击飞倍率上限（size=1 时再乘这么多） */
+export const BOMB_LARGE_KNOCK_BONUS = 0.4;
+
+/** 大弹空中旋转圈数 */
+export const BOMB_AIR_SPIN_TURNS = 2;
+
 /** 对某个目标的一次爆炸结算结果（由炸弹算出，场景只负责应用） */
 export type BlastHit = {
   /** 0~1，越近越大（已平方衰减） */
@@ -70,6 +82,11 @@ export type BlastHit = {
   dirY: number;
   /** 建议姿态强度 */
   poseStrength: number;
+  /**
+   * 空中旋转圈数；大弹为 2，普通弹为 0。
+   * 目标侧负责播放旋转动画。
+   */
+  airSpinTurns: number;
 };
 
 // 兼容旧导出名
@@ -276,7 +293,16 @@ export class BombProjectile extends Container {
       minDamage,
       Math.round(maxDamage * (damageFloor + (1 - damageFloor) * strength)),
     );
-    const impulse = knockSpeed * (knockFloor + (1 - knockFloor) * strength);
+    let impulse = knockSpeed * (knockFloor + (1 - knockFloor) * strength);
+
+    // 大弹：额外推远 + 空中转圈
+    let airSpinTurns = 0;
+    if (this.sizeScale >= BOMB_SPIN_SIZE_THRESHOLD) {
+      const span = Math.max(1e-6, 1 - BOMB_SPIN_SIZE_THRESHOLD);
+      const largeT = Math.min(1, (this.sizeScale - BOMB_SPIN_SIZE_THRESHOLD) / span);
+      impulse *= 1 + BOMB_LARGE_KNOCK_BONUS * largeT;
+      airSpinTurns = BOMB_AIR_SPIN_TURNS;
+    }
 
     let dirX: number;
     let dirY: number;
@@ -299,6 +325,7 @@ export class BombProjectile extends Container {
       dirX,
       dirY,
       poseStrength: poseBase + poseGain * strength,
+      airSpinTurns,
     };
   }
 
