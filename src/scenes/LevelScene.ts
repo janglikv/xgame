@@ -344,11 +344,35 @@ export class LevelScene extends Container implements GameScene {
 
     let spidersMoved = false;
     for (const spider of this.spiders) {
-      if (spider.update(deltaMS)) spidersMoved = true;
+      if (!spider.isAlive) continue;
+      const result = spider.update(deltaMS, this.worldX, this.worldY);
+      if (result.moved) spidersMoved = true;
+      if (result.attackHit) {
+        this.applySpiderAttack(result.attackHit);
+      }
     }
     if (spidersMoved) this.syncAllSpidersToScreen();
 
     this.updateBombs(deltaMS);
+  }
+
+  /** 蜘蛛扑咬命中：扣血 + 轻击退 + 姿态反馈 */
+  private applySpiderAttack(hit: {
+    damage: number;
+    dirX: number;
+    dirY: number;
+    knockImpulse: number;
+  }): void {
+    this.healthBar.applyDelta(-Math.abs(hit.damage));
+    applyKnockImpulse(
+      this.knock,
+      hit.dirX * hit.knockImpulse,
+      hit.dirY * hit.knockImpulse,
+    );
+    // 轻伤姿态（不转圈）
+    this.archer.playBlastKnock(0.45, hit.dirX, 0);
+    this.centerArcher();
+    this.syncHealthBar();
   }
 
   resize(width: number, height: number): void {
