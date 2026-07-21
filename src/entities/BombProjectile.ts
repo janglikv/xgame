@@ -5,6 +5,12 @@ const EXPLOSION_URL = '/assets/bomb/explosion.png';
 
 /** 最远投掷距离（世界像素） */
 export const BOMB_MAX_RANGE = 280;
+/** 爆炸伤害 / 击退半径（世界像素） */
+export const BLAST_RADIUS = 96;
+/** 中心最大伤害 */
+export const BLAST_MAX_DAMAGE = 28;
+/** 中心最大击退初速度（像素/秒） */
+export const BLAST_KNOCK_SPEED = 920;
 
 const ARC_PEAK = 100;
 /** 出手点相对脚底抬高（屏幕像素），略高于腰部 */

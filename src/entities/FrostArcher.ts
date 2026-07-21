@@ -28,6 +28,14 @@ const THROW = {
   settle: 9,
 } as const;
 
+/** 被炸飞时的姿态反馈 */
+const BLAST = {
+  lean: 0.55,
+  lift: 28,
+  tumble: 0.9,
+  settle: 5.5,
+} as const;
+
 /**
  * 寒冰射手（整图预览）
  * 原点在脚底中心附近。
@@ -48,6 +56,8 @@ export class FrostArcher extends Container {
    * 作用在 sprite 局部，翻转后仍相对朝向“向后”。
    */
   private throwRecoil = 0;
+  /** 被炸飞姿态强度 0→1+ */
+  private blastKnock = 0;
 
   constructor(scale = 1) {
     super();
@@ -86,7 +96,18 @@ export class FrostArcher extends Container {
   }
 
   /**
-   * 每帧更新。移动时图片上下晃 + 轻微摇摆，停下回正；可叠加扔弹后仰。
+   * 被爆炸崩飞时的姿态：抬起 + 翻仰。
+   * @param strength 0~1，距爆心越近越大
+   * @param dirX 击退水平方向（世界），用于转身
+   */
+  playBlastKnock(strength: number, dirX = 0): void {
+    this.throwRecoil = 0;
+    this.blastKnock = Math.max(this.blastKnock, Math.min(1.25, strength));
+    if (dirX !== 0) this.setFacingFromMoveX(dirX);
+  }
+
+  /**
+   * 每帧更新。移动时图片上下晃 + 轻微摇摆，停下回正；可叠加扔弹后仰 / 被炸。
    * @param deltaMS 帧间隔毫秒
    * @param moving 是否在移动
    */
@@ -95,8 +116,9 @@ export class FrostArcher extends Container {
     if (!sprite) return;
 
     const dt = deltaMS / 1000;
+    const tumbling = this.blastKnock > 0.15;
 
-    if (moving) {
+    if (moving && !tumbling) {
       this.bobPhase += (Math.PI * 2 * dt) / BOB.period;
       // 双频：一步两拍弹跳
       const step = Math.sin(this.bobPhase * 2);
@@ -105,7 +127,7 @@ export class FrostArcher extends Container {
       this.poseY = -Math.abs(step) * BOB.ampY;
       this.poseX = sway * BOB.ampX;
       this.poseRot = sway * BOB.ampRot;
-    } else {
+    } else if (!tumbling) {
       // 走路姿态指数回正（与后仰分开存，避免叠算）
       const k = 1 - Math.exp(-BOB.settle * dt);
       this.poseX += (0 - this.poseX) * k;
@@ -116,12 +138,17 @@ export class FrostArcher extends Container {
       if (Math.abs(this.poseY) < 0.05) this.poseY = 0;
       if (Math.abs(this.poseRot) < 0.001) this.poseRot = 0;
 
-      if (this.poseX === 0 && this.poseY === 0 && this.throwRecoil <= 0) {
+      if (
+        this.poseX === 0 &&
+        this.poseY === 0 &&
+        this.throwRecoil <= 0 &&
+        this.blastKnock <= 0
+      ) {
         this.bobPhase = 0;
       }
     }
 
-    // 后仰叠在走路姿态上：出手拉满，再指数衰减
+    // 后仰 / 被炸叠在走路姿态上
     let ox = this.poseX;
     let oy = this.poseY;
     let orot = this.poseRot;
@@ -134,6 +161,17 @@ export class FrostArcher extends Container {
 
       this.throwRecoil *= Math.exp(-THROW.settle * dt);
       if (this.throwRecoil < 0.02) this.throwRecoil = 0;
+    }
+
+    if (this.blastKnock > 0) {
+      const b = this.blastKnock;
+      // 抬起、后仰翻滚感
+      oy += -BLAST.lift * b;
+      orot += -BLAST.lean * b - BLAST.tumble * b * b;
+      ox += -8 * b;
+
+      this.blastKnock *= Math.exp(-BLAST.settle * dt);
+      if (this.blastKnock < 0.03) this.blastKnock = 0;
     }
 
     sprite.x = ox;

@@ -1,20 +1,29 @@
 import { Container, Graphics, Rectangle, Text } from 'pixi.js';
 import {
+  BLAST_KNOCK_SPEED,
+  BLAST_MAX_DAMAGE,
+  BLAST_RADIUS,
   BombProjectile,
   BOMB_MAX_RANGE,
   loadBombTextures,
 } from '../entities/BombProjectile';
 import { FrostArcher } from '../entities/FrostArcher';
 import { Keyboard } from '../input/Keyboard';
+import { HealthBar } from '../ui/HealthBar';
 import { CartoonGrass } from '../world/CartoonGrass';
 import { getThemeBackground, NightOverlay } from '../world/NightOverlay';
 import type { GameScene, LevelTheme } from './types';
 
 const MOVE_SPEED = 220;
-/** 瞄准圈半径（屏幕像素） */
-const AIM_RADIUS = 28;
-/** 太近不显示瞄准 / 不扔 */
-const AIM_MIN_DIST = 12;
+/** 点太近不扔 */
+const THROW_MIN_DIST = 12;
+/** 血条相对脚底向上的偏移（屏幕像素） */
+const HP_BAR_OFFSET_Y = 86;
+const PLAYER_MAX_HP = 100;
+/** 击退速度指数衰减（越小滑得越远） */
+const KNOCK_DRAG = 2.6;
+/** 击退很强时削弱 WASD 控制 */
+const KNOCK_CONTROL_SOFTEN = 220;
 
 export type LevelSceneOptions = {
   theme: LevelTheme;
@@ -41,11 +50,10 @@ export class LevelScene extends Container implements GameScene {
   private readonly grass: CartoonGrass;
   private readonly nightOverlay: NightOverlay | null;
   private readonly archer: FrostArcher;
+  private readonly healthBar: HealthBar;
   /** 飞行炸弹 / 爆炸特效层（在角色之上，暂停层之下） */
   private readonly projectileLayer: Container;
   private readonly bombs: BombProjectile[] = [];
-  /** 实际落点 / 爆炸位置瞄准圈 */
-  private readonly aimReticle: Graphics;
   private readonly keyboard = new Keyboard();
   private readonly pauseLayer: Container;
   private readonly pauseVeil: Graphics;
@@ -60,11 +68,11 @@ export class LevelScene extends Container implements GameScene {
   private viewHeight: number;
   private worldX = 0;
   private worldY = 0;
+  /** 被炸飞的世界速度（像素/秒） */
+  private knockVelX = 0;
+  private knockVelY = 0;
   private paused = false;
   private escWasDown = false;
-  /** 指针屏幕坐标（用于瞄准圈） */
-  private pointerX: number;
-  private pointerY: number;
 
   constructor(width: number, height: number, options: LevelSceneOptions) {
     super();
@@ -74,15 +82,12 @@ export class LevelScene extends Container implements GameScene {
     this.onBackground = options.onBackground;
     this.viewWidth = width;
     this.viewHeight = height;
-    this.pointerX = width / 2;
-    this.pointerY = height / 2;
 
-    // 全屏可点：点击落点扔炸弹；移动更新瞄准圈
+    // 全屏可点：点击落点扔炸弹
     this.eventMode = 'static';
     this.cursor = 'crosshair';
     this.hitArea = new Rectangle(0, 0, width, height);
     this.on('pointertap', this.onPointerTap);
-    this.on('pointermove', this.onPointerMove);
 
     this.worldLayer = new Container();
     this.worldLayer.label = 'WorldLayer';
@@ -99,16 +104,13 @@ export class LevelScene extends Container implements GameScene {
       this.nightOverlay.layout(width, height);
     }
 
-    // 瞄准圈在草地之上、角色之下，表示地面落点
-    this.aimReticle = new Graphics();
-    this.aimReticle.label = 'AimReticle';
-    this.aimReticle.eventMode = 'none';
-    this.aimReticle.visible = false;
-    this.drawAimReticle();
-    this.addChild(this.aimReticle);
-
     this.archer = new FrostArcher(0.07);
     this.addChild(this.archer);
+
+    // 血条独立挂载，不随角色左右翻转
+    this.healthBar = new HealthBar({ maxHp: PLAYER_MAX_HP, width: 50, height: 5 });
+    this.healthBar.setHealth(PLAYER_MAX_HP);
+    this.addChild(this.healthBar);
 
     this.projectileLayer = new Container();
     this.projectileLayer.label = 'ProjectileLayer';
@@ -146,6 +148,7 @@ export class LevelScene extends Container implements GameScene {
     );
 
     this.centerArcher();
+    this.syncHealthBar();
     this.layoutPauseMenu();
     this.redrawWorld(true);
   }
@@ -216,7 +219,6 @@ export class LevelScene extends Container implements GameScene {
 
   destroy(options?: Parameters<Container['destroy']>[0]): void {
     this.off('pointertap', this.onPointerTap);
-    this.off('pointermove', this.onPointerMove);
     this.keyboard.unbind();
     super.destroy(options);
   }
@@ -231,24 +233,47 @@ export class LevelScene extends Container implements GameScene {
     if (this.paused) {
       // 暂停时角色回正、不处理移动；炸弹也冻结
       this.archer.update(deltaMS, false);
-      this.aimReticle.visible = false;
       return;
     }
 
+    const dt = deltaMS / 1000;
     const { x, y } = this.keyboard.getMoveAxis();
-    const moving = x !== 0 || y !== 0;
+    let moved = false;
 
-    if (moving) {
-      this.archer.setFacingFromMoveX(x);
-      const dt = deltaMS / 1000;
-      this.worldX += x * MOVE_SPEED * dt;
-      this.worldY += y * MOVE_SPEED * dt;
-      this.redrawWorld(false);
+    // 被炸飞：先施加击退位移
+    const knockSpeed = Math.hypot(this.knockVelX, this.knockVelY);
+    if (knockSpeed > 4) {
+      this.worldX += this.knockVelX * dt;
+      this.worldY += this.knockVelY * dt;
+      const damp = Math.exp(-KNOCK_DRAG * dt);
+      this.knockVelX *= damp;
+      this.knockVelY *= damp;
+      if (Math.hypot(this.knockVelX, this.knockVelY) < 12) {
+        this.knockVelX = 0;
+        this.knockVelY = 0;
+      }
+      moved = true;
     }
 
-    this.archer.update(deltaMS, moving);
+    // WASD：击退中控制变钝
+    const moving = x !== 0 || y !== 0;
+    if (moving) {
+      this.archer.setFacingFromMoveX(x);
+      const control =
+        knockSpeed > KNOCK_CONTROL_SOFTEN
+          ? Math.max(0.2, 1 - knockSpeed / (KNOCK_CONTROL_SOFTEN * 3))
+          : 1;
+      this.worldX += x * MOVE_SPEED * control * dt;
+      this.worldY += y * MOVE_SPEED * control * dt;
+      moved = true;
+    }
+
+    if (moved) this.redrawWorld(false);
+
+    this.archer.update(deltaMS, moving && knockSpeed < 80);
+    this.healthBar.update(deltaMS);
+    this.syncHealthBar();
     this.updateBombs(deltaMS);
-    this.updateAimReticle();
   }
 
   resize(width: number, height: number): void {
@@ -256,51 +281,32 @@ export class LevelScene extends Container implements GameScene {
     this.viewHeight = height;
     this.hitArea = new Rectangle(0, 0, width, height);
     this.centerArcher();
+    this.syncHealthBar();
     this.nightOverlay?.layout(width, height);
     this.layoutPauseMenu();
     this.redrawWorld(true);
     this.syncAllBombsToScreen();
-    this.updateAimReticle();
   }
 
   private readonly onPointerTap = (e: {
     global: { x: number; y: number };
   }): void => {
     if (this.paused) return;
-    this.pointerX = e.global.x;
-    this.pointerY = e.global.y;
-    this.updateAimReticle();
     this.throwBombAtScreen(e.global.x, e.global.y);
   };
 
-  private readonly onPointerMove = (e: {
-    global: { x: number; y: number };
-  }): void => {
-    this.pointerX = e.global.x;
-    this.pointerY = e.global.y;
-    if (!this.paused) this.updateAimReticle();
-  };
-
   /**
-   * 屏幕指针 → 实际落点（世界坐标 + 屏幕坐标）。
-   * 超出最大射程时钳到最远方向；过近返回 null。
+   * 以角色（屏幕中心 / 世界原点）为起点抛物线扔炸弹。
+   * 射程内落点 = 点击位置；超出则钳到最远方向。
    */
-  private resolveLanding(
-    screenX: number,
-    screenY: number,
-  ): {
-    endX: number;
-    endY: number;
-    landScreenX: number;
-    landScreenY: number;
-  } | null {
+  private throwBombAtScreen(screenX: number, screenY: number): void {
     const cx = this.viewWidth / 2;
     const cy = this.viewHeight / 2;
     const dx = screenX - cx;
     const dy = screenY - cy;
     const dist = Math.hypot(dx, dy);
 
-    if (dist < AIM_MIN_DIST) return null;
+    if (dist < THROW_MIN_DIST) return;
 
     let landDx = dx;
     let landDy = dy;
@@ -310,55 +316,10 @@ export class LevelScene extends Container implements GameScene {
       landDy *= s;
     }
 
-    return {
-      endX: this.worldX + landDx,
-      endY: this.worldY + landDy,
-      landScreenX: cx + landDx,
-      landScreenY: cy + landDy,
-    };
-  }
-
-  private drawAimReticle(): void {
-    const g = this.aimReticle;
-    g.clear();
-    // 细线红圈，标落点
-    g.circle(0, 0, AIM_RADIUS).stroke({
-      width: 1.5,
-      color: 0xff3333,
-      alpha: 0.7,
-    });
-  }
-
-  /** 瞄准圈跟实际爆炸落点一致（含最大射程钳制） */
-  private updateAimReticle(): void {
-    if (this.paused) {
-      this.aimReticle.visible = false;
-      return;
-    }
-
-    const land = this.resolveLanding(this.pointerX, this.pointerY);
-    if (!land) {
-      this.aimReticle.visible = false;
-      return;
-    }
-
-    this.aimReticle.visible = true;
-    this.aimReticle.position.set(land.landScreenX, land.landScreenY);
-  }
-
-  /**
-   * 以角色（屏幕中心 / 世界原点）为起点抛物线扔炸弹。
-   * 落点与瞄准圈一致：射程内点哪落哪，超出钳到最远。
-   */
-  private throwBombAtScreen(screenX: number, screenY: number): void {
-    const land = this.resolveLanding(screenX, screenY);
-    if (!land) return;
-
-    const cx = this.viewWidth / 2;
-    const cy = this.viewHeight / 2;
     const startX = this.worldX;
     const startY = this.worldY;
-    const { endX, endY } = land;
+    const endX = this.worldX + landDx;
+    const endY = this.worldY + landDy;
 
     // 朝扔出方向转身，并后仰一下
     this.archer.setFacingFromMoveX(endX - startX);
@@ -376,8 +337,14 @@ export class LevelScene extends Container implements GameScene {
 
     for (let i = this.bombs.length - 1; i >= 0; i--) {
       const bomb = this.bombs[i]!;
+      const wasFlying = bomb.getPhase() === 'flying';
       const phase = bomb.update(deltaMS);
       bomb.syncToScreen(this.worldX, this.worldY, cx, cy);
+
+      // 落地瞬间结算爆炸伤害 / 击退（可炸到自己）
+      if (wasFlying && phase === 'exploding') {
+        this.applyExplosionAt(bomb.groundX, bomb.groundY);
+      }
 
       if (phase === 'done') {
         this.projectileLayer.removeChild(bomb);
@@ -385,6 +352,45 @@ export class LevelScene extends Container implements GameScene {
         this.bombs.splice(i, 1);
       }
     }
+  }
+
+  /**
+   * 爆炸结算：范围内扣血；方向为远离爆心，把自己崩飞。
+   */
+  private applyExplosionAt(blastX: number, blastY: number): void {
+    const dx = this.worldX - blastX;
+    const dy = this.worldY - blastY;
+    const dist = Math.hypot(dx, dy);
+
+    if (dist > BLAST_RADIUS) return;
+
+    // 边缘仍有一定伤害；中心最强
+    const falloff = 1 - dist / BLAST_RADIUS;
+    const strength = falloff * falloff; // 靠近中心更猛
+    const damage = Math.max(6, Math.round(BLAST_MAX_DAMAGE * (0.35 + 0.65 * strength)));
+    this.healthBar.applyDelta(-damage);
+
+    // 击退方向：远离爆心；脚踩爆心时用面朝反方向顶开
+    let nx: number;
+    let ny: number;
+    if (dist < 6) {
+      // 几乎贴脸：朝当前面朝的反方向崩（scale.x 正 = 朝右）
+      const face = this.archer.scale.x >= 0 ? 1 : -1;
+      nx = -face;
+      ny = -0.35;
+      const inv = 1 / Math.hypot(nx, ny);
+      nx *= inv;
+      ny *= inv;
+    } else {
+      nx = dx / dist;
+      ny = dy / dist;
+    }
+
+    const impulse = BLAST_KNOCK_SPEED * (0.45 + 0.55 * strength);
+    this.knockVelX += nx * impulse;
+    this.knockVelY += ny * impulse;
+
+    this.archer.playBlastKnock(0.55 + 0.7 * strength, nx);
   }
 
   private syncAllBombsToScreen(): void {
@@ -400,15 +406,18 @@ export class LevelScene extends Container implements GameScene {
     this.pauseLayer.visible = value;
     // 清掉按键，避免继续后突然冲刺
     this.keyboard.clear();
-    if (value) {
-      this.aimReticle.visible = false;
-    } else {
-      this.updateAimReticle();
-    }
   }
 
   private centerArcher(): void {
     this.archer.position.set(this.viewWidth / 2, this.viewHeight / 2);
+  }
+
+  /** 血条钉在角色头顶（脚底原点向上） */
+  private syncHealthBar(): void {
+    this.healthBar.position.set(
+      this.archer.x,
+      this.archer.y - HP_BAR_OFFSET_Y,
+    );
   }
 
   private layoutPauseMenu(): void {
