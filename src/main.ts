@@ -1,5 +1,8 @@
 import { Application } from 'pixi.js';
-import { EmptyScene } from './scenes/EmptyScene';
+import { LevelScene } from './scenes/LevelScene';
+import { MainScene } from './scenes/MainScene';
+import { SceneManager } from './scenes/SceneManager';
+import type { LevelTheme } from './scenes/types';
 
 async function bootstrap(): Promise<void> {
   const host = document.getElementById('app');
@@ -11,7 +14,7 @@ async function bootstrap(): Promise<void> {
 
   await app.init({
     resizeTo: host,
-    background: 0x0b0f14,
+    background: 0x5a8f3c,
     antialias: true,
     resolution: Math.min(window.devicePixelRatio || 1, 2),
     autoDensity: true,
@@ -19,12 +22,51 @@ async function bootstrap(): Promise<void> {
 
   host.appendChild(app.canvas);
 
-  const scene = new EmptyScene(app.screen.width, app.screen.height);
-  app.stage.addChild(scene);
-  await scene.init();
+  const setBackground = (color: number): void => {
+    app.renderer.background.color = color;
+    document.body.style.background = `#${color.toString(16).padStart(6, '0')}`;
+  };
+
+  const scenes = new SceneManager(app.stage, () => ({
+    width: app.screen.width,
+    height: app.screen.height,
+  }));
+
+  const goMain = (): void => {
+    void scenes.setScene(
+      () =>
+        new MainScene(app.screen.width, app.screen.height, {
+          onSelectLevel: goLevel,
+          onBackground: setBackground,
+        }),
+    );
+  };
+
+  const goLevel = (theme: LevelTheme): void => {
+    void scenes.setScene(
+      () =>
+        new LevelScene(app.screen.width, app.screen.height, {
+          theme,
+          onBack: goMain,
+          onBackground: setBackground,
+        }),
+    );
+  };
+
+  await scenes.setScene(
+    () =>
+      new MainScene(app.screen.width, app.screen.height, {
+        onSelectLevel: goLevel,
+        onBackground: setBackground,
+      }),
+  );
+
+  app.ticker.add((ticker) => {
+    scenes.update(ticker.deltaMS);
+  });
 
   app.renderer.on('resize', () => {
-    scene.resize(app.screen.width, app.screen.height);
+    scenes.resize(app.screen.width, app.screen.height);
   });
 }
 
