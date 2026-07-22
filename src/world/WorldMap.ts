@@ -4,29 +4,29 @@ import { PineTree } from './PineTree';
 /** 九宫格边长（3×3 岛） */
 export const GRID = 3;
 
-/** 单岛外沿边长（世界像素） */
-export const ISLAND_SIZE = 960;
+/** 单岛外沿边长（世界像素，双倍放大的广阔关卡空间） */
+export const ISLAND_SIZE = 1920;
 
 /** 松树网格间距（越小越密） */
 const PINE_SPACING = 36;
 
-/** 林带厚度：三棵树 */
-const FOREST_TREE_DEPTH = 3;
+/** 林带厚度：十二棵树 */
+const FOREST_TREE_DEPTH = 12;
 
-/** 岛与岛之间的森林走廊宽度（三棵树厚） */
+/** 岛与岛之间的森林走廊宽度（十二棵树厚） */
 export const FOREST_WIDTH = FOREST_TREE_DEPTH * PINE_SPACING;
 
-/** 整图最外圈松林带宽（围住九宫格，三棵树厚） */
+/** 整图最外圈松林带宽（围住九宫格，十二棵树厚） */
 export const OUTER_FOREST_WIDTH = FOREST_TREE_DEPTH * PINE_SPACING;
 
 /** 松树整体尺寸倍率（碰撞过道净空用；绘制见 PineTree） */
 const PINE_SCALE = 2.7;
 
 /** 岛内装饰内缩（避免贴边） */
-const EDGE_INSET = 16;
+const EDGE_INSET = 24;
 
-/** 林间通道 / 墙洞宽度（视觉与可行走草坪宽） */
-const PATH_WIDTH = 78;
+/** 林间通道 / 墙洞宽度（视觉与可行走草坪宽，双倍放大） */
+const PATH_WIDTH = 156;
 
 /** 角色/实体默认碰撞半径（世界像素） */
 export const DEFAULT_BODY_RADIUS = 16;
@@ -116,9 +116,21 @@ function pointInAnyRect(px: number, py: number, rects: Rect[]): boolean {
   return false;
 }
 
+/**
+ * 出生岛格子：下中 (1, GRID-1)。
+ * 其左右水平过道封闭，开局只能沿竖直过道往上走。
+ */
+const SPAWN_ISLAND = { ix: 1, iy: GRID - 1 } as const;
+
+/** 是否是被移除并用密林填满的房间（出生点左右房间：(0, 2) 与 (2, 2)） */
+export function isRemovedIsland(ix: number, iy: number): boolean {
+  return iy === GRID - 1 && (ix === 0 || ix === GRID - 1);
+}
+
 function pointInAnyIsland(px: number, py: number, margin: number): boolean {
   for (let iy = 0; iy < GRID; iy++) {
     for (let ix = 0; ix < GRID; ix++) {
+      if (isRemovedIsland(ix, iy)) continue;
       const b = islandBounds(ix, iy);
       if (
         px >= b.left - margin &&
@@ -133,7 +145,7 @@ function pointInAnyIsland(px: number, py: number, margin: number): boolean {
   return false;
 }
 
-/** 可种树区域：外圈林带 + 岛间十字走廊 */
+/** 可种树区域：外圈林带 + 岛间十字走廊 + 被删除的角落岛 */
 function collectForestRects(): Rect[] {
   const h = MAP_WORLD_HALF;
   const o = OUTER_FOREST_WIDTH;
@@ -161,14 +173,24 @@ function collectForestRects(): Rect[] {
       h: FOREST_WIDTH,
     });
   }
+
+  // 将被删除的左右房间区域填满森林
+  for (let iy = 0; iy < GRID; iy++) {
+    for (let ix = 0; ix < GRID; ix++) {
+      if (isRemovedIsland(ix, iy)) {
+        const b = islandBounds(ix, iy);
+        rects.push({
+          x: b.left,
+          y: b.top,
+          w: ISLAND_SIZE,
+          h: ISLAND_SIZE,
+        });
+      }
+    }
+  }
+
   return rects;
 }
-
-/**
- * 出生岛格子：下中 (1, GRID-1)。
- * 其左右水平过道封闭，开局只能沿竖直过道往上走。
- */
-const SPAWN_ISLAND = { ix: 1, iy: GRID - 1 } as const;
 
 /**
  * 林间过道（无树可行走）。
@@ -200,6 +222,10 @@ function collectPathRects(): Rect[] {
 
   for (let iy = 0; iy < GRID - 1; iy++) {
     for (let ix = 0; ix < GRID; ix++) {
+      // 封闭通往被移除左右房间的竖直过道
+      if (iy === GRID - 2 && (ix === 0 || ix === GRID - 1)) {
+        continue;
+      }
       const a = islandCenter(ix, iy);
       const b = islandCenter(ix, iy + 1);
       const y0 = a.y + ISLAND_SIZE / 2;
@@ -450,6 +476,7 @@ export class WorldMap extends Container {
   private drawIslandDecorAll(decor: Graphics): void {
     for (let iy = 0; iy < GRID; iy++) {
       for (let ix = 0; ix < GRID; ix++) {
+        if (isRemovedIsland(ix, iy)) continue;
         this.drawIslandDecor(decor, ix, iy, islandBounds(ix, iy));
       }
     }
@@ -471,11 +498,11 @@ export class WorldMap extends Container {
     const x1 = b.right - EDGE_INSET - 8;
     const y1 = b.bottom - EDGE_INSET - 8;
 
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < 35; i++) {
       const x = x0 + rng() * (x1 - x0);
       const y = y0 + rng() * (y1 - y0);
-      const rx = 28 + rng() * 48;
-      const ry = 20 + rng() * 36;
+      const rx = 36 + rng() * 64;
+      const ry = 28 + rng() * 48;
       const color =
         rng() < 0.4
           ? COLORS.grassDark
@@ -485,11 +512,11 @@ export class WorldMap extends Container {
       g.ellipse(x, y, rx, ry).fill({ color, alpha: 0.28 });
     }
 
-    for (let i = 0; i < 4; i++) {
-      if (rng() > 0.7) continue;
+    for (let i = 0; i < 14; i++) {
+      if (rng() > 0.75) continue;
       const x = x0 + rng() * (x1 - x0);
       const y = y0 + rng() * (y1 - y0);
-      const r = 10 + rng() * 14;
+      const r = 12 + rng() * 18;
       g.ellipse(x, y, r * 1.1, r * 0.7).fill({
         color: COLORS.dirtDark,
         alpha: 0.3,
@@ -497,13 +524,13 @@ export class WorldMap extends Container {
       g.ellipse(x, y, r, r * 0.55).fill({ color: COLORS.dirt, alpha: 0.45 });
     }
 
-    for (let i = 0; i < 22; i++) {
+    for (let i = 0; i < 75; i++) {
       const x = x0 + rng() * (x1 - x0);
       const y = y0 + rng() * (y1 - y0);
       const blades = 2 + Math.floor(rng() * 3);
       for (let k = 0; k < blades; k++) {
         const lean = -0.5 + rng();
-        const hh = 10 + rng() * 12;
+        const hh = 12 + rng() * 14;
         const tipX = x + lean * 6 + (k - 1) * 3;
         const tipY = y - hh;
         g.moveTo(x + (k - 1) * 2, y);
@@ -531,7 +558,7 @@ export class WorldMap extends Container {
       COLORS.flowerYellow,
       COLORS.flowerWhite,
     ];
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 24; i++) {
       if (rng() > 0.55) continue;
       const x = x0 + rng() * (x1 - x0);
       const y = y0 + rng() * (y1 - y0);

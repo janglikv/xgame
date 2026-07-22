@@ -45,8 +45,8 @@ const NIGHT_TREE_TINT = 0x6a7f9e;
 const SELECT_MAP_TINT = 0x6a7088;
 const SELECT_TREE_TINT = 0x5a6278;
 const SELECT_SPIDER_ALPHA = 0.55;
-/** 选角站位：相对出生点左右间距（世界像素） */
-const SELECT_SPACING = 120;
+/** 选角站位：相对出生点左右间距（世界像素，配合双倍关卡空间） */
+const SELECT_SPACING = 240;
 /** 选角点击热区（本地像素，贴图未缩放） */
 const SELECT_HIT = { w: 520, h: 900 } as const;
 
@@ -114,6 +114,8 @@ type PauseButton = {
   hoverColor: number;
 };
 
+const LAST_CHARACTER_KEY = 'lu_o_lu_last_character';
+
 type CharacterCandidate = {
   id: CharacterId;
   entity: PlayerCharacterBase;
@@ -121,6 +123,7 @@ type CharacterCandidate = {
   worldY: number;
   pedestal: Graphics;
   hovered: boolean;
+  isDefault: boolean;
 };
 
 /** 选角后留在场上的未选角色（可被挤走；可吃武器击飞但不掉血） */
@@ -203,7 +206,18 @@ export class LevelScene extends Container implements GameScene {
   private escWasDown = false;
   private fitWasDown = false;
   private resetZoomWasDown = false;
+  private confirmWasDown = false;
   private treesMounted = false;
+
+  private static getLastSelectedCharacter(): CharacterId {
+    try {
+      const saved = localStorage.getItem(LAST_CHARACTER_KEY);
+      if (saved === 'bomb-girl' || saved === 'ice-ranger') {
+        return saved as CharacterId;
+      }
+    } catch {}
+    return 'bomb-girl';
+  }
 
   constructor(width: number, height: number, options: LevelSceneOptions) {
     super();
@@ -311,6 +325,7 @@ export class LevelScene extends Container implements GameScene {
 
   /** 出发岛左右摆放可选角色 + 脚底光环 */
   private mountCharacterCandidates(): void {
+    const defaultCharId = LevelScene.getLastSelectedCharacter();
     const roster: Array<{ id: CharacterId; entity: PlayerCharacterBase; offsetX: number }> = [
       { id: 'bomb-girl', entity: new BombGirl(0.07), offsetX: -SELECT_SPACING },
       { id: 'ice-ranger', entity: new IceRanger(0.066), offsetX: SELECT_SPACING },
@@ -319,11 +334,12 @@ export class LevelScene extends Container implements GameScene {
     for (const entry of roster) {
       const worldX = PLAYER_SPAWN.x + entry.offsetX;
       const worldY = PLAYER_SPAWN.y;
+      const isDefault = entry.id === defaultCharId;
 
       const pedestal = new Graphics();
       pedestal.label = `Pedestal:${entry.id}`;
       pedestal.eventMode = 'none';
-      this.paintPedestal(pedestal, false, 0);
+      this.paintPedestal(pedestal, false, isDefault, 0);
 
       const entity = entry.entity;
       entity.eventMode = 'static';
@@ -342,6 +358,7 @@ export class LevelScene extends Container implements GameScene {
         worldY,
         pedestal,
         hovered: false,
+        isDefault,
       };
 
       entity.on('pointerover', () => {
@@ -363,23 +380,28 @@ export class LevelScene extends Container implements GameScene {
     }
   }
 
-  private paintPedestal(g: Graphics, hovered: boolean, pulse: number): void {
+  private paintPedestal(
+    g: Graphics,
+    hovered: boolean,
+    isDefault: boolean,
+    pulse: number,
+  ): void {
     const breathe = 1 + pulse * 0.08;
     const rx = 48 * breathe;
     const ry = 18 * breathe;
-    const core = hovered ? 0xffffff : 0x9ee8ff;
-    const glow = hovered ? 0xc8f4ff : 0x5ec8ff;
+    const core = hovered ? 0xffffff : isDefault ? 0xffd700 : 0x9ee8ff;
+    const glow = hovered ? 0xc8f4ff : isDefault ? 0xffea79 : 0x5ec8ff;
     g.clear();
-    g.ellipse(0, 0, rx * 1.35, ry * 1.35).fill({
+    g.ellipse(0, 0, rx * 1.45, ry * 1.45).fill({
       color: glow,
-      alpha: 0.16 + pulse * 0.08,
+      alpha: (isDefault ? 0.26 : 0.16) + pulse * 0.08,
     });
     g.ellipse(0, 0, rx, ry).fill({
       color: core,
-      alpha: 0.22 + pulse * 0.1,
+      alpha: (isDefault ? 0.32 : 0.22) + pulse * 0.1,
     });
     g.ellipse(0, 0, rx * 0.92, ry * 0.92).stroke({
-      width: hovered ? 3.5 : 2.5,
+      width: hovered || isDefault ? 3.5 : 2.5,
       color: core,
       alpha: 0.9,
     });
@@ -390,6 +412,10 @@ export class LevelScene extends Container implements GameScene {
     if (!this.selectingCharacter) return;
     const chosen = this.candidates.find((c) => c.id === id);
     if (!chosen) return;
+
+    try {
+      localStorage.setItem(LAST_CHARACTER_KEY, id);
+    } catch {}
 
     this.player = chosen.entity;
     this.worldX = chosen.worldX;
@@ -569,14 +595,12 @@ export class LevelScene extends Container implements GameScene {
     }
   }
 
-  /** 黑夜关：九宫格四角岛各一只蜘蛛，出生时朝向中心 */
+  /** 黑夜关：九宫格上方角落岛各一只蜘蛛，出生时朝向中心 */
   private spawnCornerSpiders(): void {
     const last = GRID - 1;
     const corners: Array<[number, number]> = [
       [0, 0],
       [last, 0],
-      [0, last],
-      [last, last],
     ];
 
     for (const [ix, iy] of corners) {
@@ -1258,14 +1282,29 @@ export class LevelScene extends Container implements GameScene {
       return;
     }
 
+    const confirmPressed =
+      this.keyboard.isDown('Enter') ||
+      this.keyboard.isDown('Space') ||
+      this.keyboard.isDown('KeyJ');
+    if (confirmPressed && !this.confirmWasDown) {
+      const defaultCand =
+        this.candidates.find((c) => c.isDefault) || this.candidates[0];
+      if (defaultCand) {
+        this.confirmWasDown = true;
+        this.confirmCharacter(defaultCand.id);
+        return;
+      }
+    }
+    this.confirmWasDown = confirmPressed;
+
     this.selectPulse = (this.selectPulse + (deltaMS / 1000) * 2.2) % (Math.PI * 2);
     const pulse = 0.5 + 0.5 * Math.sin(this.selectPulse);
 
     for (const c of this.candidates) {
-      this.paintPedestal(c.pedestal, c.hovered, pulse);
-      // 轻微待机晃动，悬停时更明显
-      c.entity.update(deltaMS, c.hovered);
-      c.entity.alpha = c.hovered ? 1 : 0.92 + pulse * 0.08;
+      this.paintPedestal(c.pedestal, c.hovered, c.isDefault, pulse);
+      // 轻微待机晃动，悬停或默认选中时更明显
+      c.entity.update(deltaMS, c.hovered || c.isDefault);
+      c.entity.alpha = c.hovered || c.isDefault ? 1 : 0.82 + pulse * 0.1;
     }
 
     this.syncWorldActors();
