@@ -7,8 +7,9 @@ export type HealthBarOptions = {
 };
 
 /**
- * 头顶血条：深色底 + 绿色填充 + 细边框。
- * 不跟角色一起翻转，适合作为角色 sibling 挂在头顶。
+ * 血条：深色底 + 绿色填充 + 细边框。
+ * 以中心为原点；可挂在单位头顶，也可作屏幕 HUD。
+ * 不跟角色一起翻转时，应作为 sibling / 独立 UI 节点，而非贴在会翻转的 sprite 上。
  */
 export class HealthBar extends Container {
   private readonly track: Graphics;
@@ -50,6 +51,10 @@ export class HealthBar extends Container {
     return this.maxHp;
   }
 
+  get size(): { width: number; height: number } {
+    return { width: this.barWidth, height: this.barHeight };
+  }
+
   /** 设置当前 / 最大生命（会钳到合法范围） */
   setHealth(hp: number, maxHp?: number): void {
     if (maxHp !== undefined && maxHp > 0) {
@@ -83,10 +88,10 @@ export class HealthBar extends Container {
   private paintTrack(): void {
     const w = this.barWidth;
     const h = this.barHeight;
-    // 以中心为原点，便于钉在头顶
+    // 以中心为原点，便于钉在头顶 / 屏幕底边居中
     this.track
       .clear()
-      .roundRect(-w / 2, -h / 2, w, h, 3)
+      .roundRect(-w / 2, -h / 2, w, h, Math.min(4, h / 2))
       .fill({ color: 0x1a1a1a, alpha: 0.75 });
   }
 
@@ -95,15 +100,15 @@ export class HealthBar extends Container {
     const h = this.barHeight;
     this.frame
       .clear()
-      .roundRect(-w / 2, -h / 2, w, h, 3)
-      .stroke({ width: 1, color: 0xffffff, alpha: 0.35 });
+      .roundRect(-w / 2, -h / 2, w, h, Math.min(4, h / 2))
+      .stroke({ width: 1.5, color: 0xffffff, alpha: 0.35 });
   }
 
   private paintFill(ratio: number): void {
     const r = Math.max(0, Math.min(1, ratio));
     const w = this.barWidth;
     const h = this.barHeight;
-    const pad = 1;
+    const pad = Math.max(1, Math.round(h * 0.15));
     const innerW = Math.max(0, (w - pad * 2) * r);
     const innerH = h - pad * 2;
     const x0 = -w / 2 + pad;
@@ -116,7 +121,7 @@ export class HealthBar extends Container {
     const color = r > 0.5 ? 0x4caf50 : r > 0.25 ? 0xe6b422 : 0xe53935;
 
     this.fill
-      .roundRect(x0, y0, innerW, innerH, 2)
+      .roundRect(x0, y0, innerW, innerH, Math.min(3, innerH / 2))
       .fill({ color, alpha: 0.95 });
   }
 }

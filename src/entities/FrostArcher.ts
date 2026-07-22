@@ -2,6 +2,13 @@ import { Assets, Container, Sprite } from 'pixi.js';
 
 const PREVIEW_URL = '/assets/frost-archer/preview.png';
 
+/**
+ * 贴图默认水平朝向修正。
+ * preview.png 已左右翻转，未修正时 scale.x>0 会面朝左；
+ * -1 使逻辑朝右（facing=1）时视觉也朝右。
+ */
+const TEXTURE_FLIP_X: 1 | -1 = -1;
+
 /** 走路晃动参数（作用在 sprite 局部，不改世界坐标） */
 const BOB = {
   /** 完整一步的周期（秒） */
@@ -107,8 +114,14 @@ export class FrostArcher extends Container {
 
   private applyContainerScale(): void {
     const s = this.baseScale * this.viewScale;
-    this.scale.x = s * this.facing;
+    // 逻辑朝向 × 贴图修正（scale.x 符号不再等同于 facing）
+    this.scale.x = s * this.facing * TEXTURE_FLIP_X;
     this.scale.y = s;
+  }
+
+  /** 逻辑朝向：1 = 朝右，-1 = 朝左（不受贴图翻转影响） */
+  get facingDir(): 1 | -1 {
+    return this.facing;
   }
 
   /**

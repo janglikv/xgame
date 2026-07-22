@@ -1,4 +1,6 @@
 import { Application } from 'pixi.js';
+import { LocalSaveStore } from './data/SaveStore';
+import type { SavedScene } from './data/types';
 import { LevelScene } from './scenes/LevelScene';
 import { MainScene } from './scenes/MainScene';
 import { SceneManager } from './scenes/SceneManager';
@@ -22,6 +24,8 @@ async function bootstrap(): Promise<void> {
 
   host.appendChild(app.canvas);
 
+  const saveStore = new LocalSaveStore();
+
   const setBackground = (color: number): void => {
     app.renderer.background.color = color;
     document.body.style.background = `#${color.toString(16).padStart(6, '0')}`;
@@ -32,7 +36,12 @@ async function bootstrap(): Promise<void> {
     height: app.screen.height,
   }));
 
+  const persistScene = (scene: SavedScene): void => {
+    saveStore.saveScene(scene);
+  };
+
   const goMain = (): void => {
+    persistScene({ kind: 'main' });
     void scenes.setScene(
       () =>
         new MainScene(app.screen.width, app.screen.height, {
@@ -43,6 +52,7 @@ async function bootstrap(): Promise<void> {
   };
 
   const goLevel = (theme: LevelTheme): void => {
+    persistScene({ kind: 'level', theme });
     void scenes.setScene(
       () =>
         new LevelScene(app.screen.width, app.screen.height, {
@@ -53,13 +63,26 @@ async function bootstrap(): Promise<void> {
     );
   };
 
-  await scenes.setScene(
-    () =>
-      new MainScene(app.screen.width, app.screen.height, {
-        onSelectLevel: goLevel,
-        onBackground: setBackground,
-      }),
-  );
+  /** 按存档恢复上次场景；损坏 / 无档则进主菜单 */
+  const bootScene = saveStore.load().progress.scene;
+  if (bootScene.kind === 'level') {
+    await scenes.setScene(
+      () =>
+        new LevelScene(app.screen.width, app.screen.height, {
+          theme: bootScene.theme,
+          onBack: goMain,
+          onBackground: setBackground,
+        }),
+    );
+  } else {
+    await scenes.setScene(
+      () =>
+        new MainScene(app.screen.width, app.screen.height, {
+          onSelectLevel: goLevel,
+          onBackground: setBackground,
+        }),
+    );
+  }
 
   app.ticker.add((ticker) => {
     scenes.update(ticker.deltaMS);

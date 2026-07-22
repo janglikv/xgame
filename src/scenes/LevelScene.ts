@@ -35,8 +35,10 @@ const PLAYER_BODY_R = 18;
 const SPIDER_BODY_R = 20;
 /** 点太近不扔（屏幕像素） */
 const THROW_MIN_DIST = 12;
-/** 血条相对脚底向上的偏移（屏幕像素） */
-const HP_BAR_OFFSET_Y = 86;
+/** 玩家 HUD 血条尺寸 / 底边边距（屏幕像素） */
+const HUD_HP_WIDTH = 240;
+const HUD_HP_HEIGHT = 14;
+const HUD_HP_MARGIN_BOTTOM = 28;
 const PLAYER_MAX_HP = 100;
 /** 击退很强时削弱 WASD 控制（水平速度） */
 const KNOCK_CONTROL_SOFTEN = 220;
@@ -172,8 +174,12 @@ export class LevelScene extends Container implements GameScene {
     this.archer = new FrostArcher(0.07);
     this.sortLayer.addChild(this.archer);
 
-    // 血条在屏幕空间，不进 sortLayer（避免被树/角色遮挡 UI）
-    this.healthBar = new HealthBar({ maxHp: PLAYER_MAX_HP, width: 50, height: 5 });
+    // 玩家血条 HUD：屏幕底部，不进 worldRoot / sortLayer
+    this.healthBar = new HealthBar({
+      maxHp: PLAYER_MAX_HP,
+      width: HUD_HP_WIDTH,
+      height: HUD_HP_HEIGHT,
+    });
     this.healthBar.setHealth(PLAYER_MAX_HP);
     this.addChild(this.healthBar);
 
@@ -210,7 +216,7 @@ export class LevelScene extends Container implements GameScene {
     this.updateCameraAndPlayerBounds();
     this.applyCamera();
     this.syncWorldActors();
-    this.syncHealthBar();
+    this.layoutHealthHud();
     this.layoutPauseMenu();
   }
 
@@ -423,7 +429,6 @@ export class LevelScene extends Container implements GameScene {
     this.syncWorldActors();
     this.cullTrees();
     this.sortDepth();
-    this.syncHealthBar();
   }
 
   /** 缩到刚好看全图，镜头回到地图中心 */
@@ -436,7 +441,6 @@ export class LevelScene extends Container implements GameScene {
     this.syncWorldActors();
     this.cullTrees();
     this.sortDepth();
-    this.syncHealthBar();
   }
 
   private readonly onWheel = (e: WheelEvent): void => {
@@ -510,7 +514,6 @@ export class LevelScene extends Container implements GameScene {
     this.syncWorldActors();
     this.archer.update(deltaMS, moving && !airborne && knockSpeed < 80);
     this.healthBar.update(deltaMS);
-    this.syncHealthBar();
 
     for (const spider of this.spiders) {
       if (!spider.isAlive) continue;
@@ -555,7 +558,6 @@ export class LevelScene extends Container implements GameScene {
     this.updateCameraAndPlayerBounds();
     this.applyCamera();
     this.syncWorldActors();
-    this.syncHealthBar();
     this.sortDepth();
   }
 
@@ -569,7 +571,7 @@ export class LevelScene extends Container implements GameScene {
     this.syncWorldActors();
     this.cullTrees();
     this.sortDepth();
-    this.syncHealthBar();
+    this.layoutHealthHud();
     // 夜色层按地图尺寸铺在地面，不随视口改
     this.layoutPauseMenu();
   }
@@ -674,7 +676,7 @@ export class LevelScene extends Container implements GameScene {
    * 半径 / 伤害 / 击飞速度等全部读 bomb.blast。
    */
   private applyBombBlast(bomb: BombProjectile): void {
-    const face: 1 | -1 = this.archer.scale.x >= 0 ? 1 : -1;
+    const face = this.archer.facingDir;
     const playerHit = bomb.evaluateHit(this.worldX, this.worldY, face);
     if (playerHit) {
       this.healthBar.applyDelta(-playerHit.damage);
@@ -723,15 +725,12 @@ export class LevelScene extends Container implements GameScene {
     this.keyboard.clear();
   }
 
-  /** 血条：世界坐标 → 屏幕坐标，钉在角色头顶 */
-  private syncHealthBar(): void {
-    const z = this.zoom;
-    const sx = this.viewWidth / 2 + (this.worldX - this.camX) * z;
-    const sy =
-      this.viewHeight / 2 +
-      (this.worldY - this.camY) * z -
-      this.knock.height * z;
-    this.healthBar.position.set(sx, sy - HP_BAR_OFFSET_Y * z);
+  /** 玩家血条 HUD：固定在屏幕底部居中 */
+  private layoutHealthHud(): void {
+    this.healthBar.position.set(
+      this.viewWidth / 2,
+      this.viewHeight - HUD_HP_MARGIN_BOTTOM,
+    );
   }
 
   private layoutPauseMenu(): void {
