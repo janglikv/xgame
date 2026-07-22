@@ -46,14 +46,13 @@ export const DEFAULT_BOMB_BLAST: Readonly<BombBlastStats> = {
 };
 
 /**
- * 默认稳定性 0~1。
- * 1 = 始终满尺寸；越低越容易随机扔出缩小版炸弹。
+ * 默认稳定性（兼容旧 API）。
+ * 炸弹默认始终满尺寸，不再按稳定性随机衰减。
  */
-export const DEFAULT_BOMB_STABILITY = 0.4;
+export const DEFAULT_BOMB_STABILITY = 1;
 
 /**
- * 稳定性为 0 时，随机尺寸下限（相对满尺寸）。
- * 再低会几乎看不见且数值过废。
+ * 显式指定 sizeScale 时的尺寸下限（相对满尺寸）。
  */
 export const BOMB_MIN_SIZE_SCALE = 0.35;
 
@@ -95,6 +94,7 @@ export const BLAST_MAX_DAMAGE = DEFAULT_BOMB_BLAST.maxDamage;
 export const BLAST_KNOCK_SPEED = DEFAULT_BOMB_BLAST.knockSpeed;
 
 const ARC_PEAK = 100;
+/** 未指定出手高度时的默认离地高度（世界像素） */
 const THROW_ORIGIN_HEIGHT = 32;
 const MIN_FLIGHT = 0.32;
 const MAX_FLIGHT = 0.65;
@@ -110,14 +110,15 @@ export type BombProjectileOptions = {
   /** 覆盖满尺寸基准爆炸属性（再被 sizeScale 缩放） */
   blast?: Partial<BombBlastStats>;
   /**
-   * 稳定性 0~1。
-   * 越低，扔出时尺寸越可能随机缩小；缩小后范围 / 伤害 / 击飞同步变弱。
+   * @deprecated 已取消随机尺寸衰减；保留仅兼容旧调用，不再影响威力。
    */
   stability?: number;
   /**
-   * 固定尺寸倍率（调试用）。不传则按 stability 随机 roll。
+   * 尺寸倍率（相对满尺寸）。不传则为 1（满尺寸满伤）。
    */
   sizeScale?: number;
+  /** 出手离地高度（世界像素）；不传则用默认值 */
+  originHeight?: number;
 };
 
 let sharedBomb: Texture | null = null;
@@ -133,21 +134,14 @@ export async function loadBombTextures(): Promise<void> {
   sharedExplosion = explosion;
 }
 
-function clamp01(v: number): number {
-  return Math.max(0, Math.min(1, v));
-}
-
 /**
- * 按稳定性 roll 出本颗炸弹尺寸 0~1（相对满尺寸）。
- * - stability = 1 → 恒为 1
- * - stability = 0 → 均匀落在 [BOMB_MIN_SIZE_SCALE, 1]
- * - 中间：下限随稳定性抬高，仍可随机偏小
+ * @deprecated 已取消随机尺寸衰减；恒返回 1。
  */
-export function rollBombSizeScale(stability: number, rng: () => number = Math.random): number {
-  const s = clamp01(stability);
-  const minSize = BOMB_MIN_SIZE_SCALE + (1 - BOMB_MIN_SIZE_SCALE) * s;
-  // minSize..1 上均匀；s=1 时 minSize=1 → 恒 1
-  return minSize + (1 - minSize) * rng();
+export function rollBombSizeScale(
+  _stability?: number,
+  _rng?: () => number,
+): number {
+  return 1;
 }
 
 /** 满尺寸 blast 按尺寸倍率缩放（范围 / 伤害 / 击飞） */
@@ -170,7 +164,7 @@ export function scaleBlastStats(
 
 /**
  * 抛物线投出的炸弹：沿地面插值飞向落点，视觉上抬起再落下，落地后播爆炸。
- * 稳定性 → 随机尺寸；尺寸越小，视觉与爆炸范围 / 威力 / 击飞越弱。
+ * 默认满尺寸满伤；可用 sizeScale 手动缩放视觉与威力。
  */
 export class BombProjectile extends Container {
   private readonly bomb: Sprite;
@@ -183,6 +177,8 @@ export class BombProjectile extends Container {
   private readonly bombScaleStart: number;
   private readonly bombScaleEnd: number;
   private readonly explosionScale: number;
+  /** 出手离地高度（飞行过程中线性降到 0） */
+  private readonly originHeight: number;
 
   /** 本颗炸弹的爆炸 / 击飞配置（已含尺寸缩放） */
   readonly blast: BombBlastStats;
@@ -214,11 +210,12 @@ export class BombProjectile extends Container {
       throw new Error('Bomb textures not loaded — call loadBombTextures() first');
     }
 
-    this.stability = clamp01(options.stability ?? DEFAULT_BOMB_STABILITY);
+    // 默认满尺寸；不再按 stability 随机衰减伤害 / 范围
+    this.stability = 1;
     this.sizeScale =
       options.sizeScale !== undefined
         ? Math.max(BOMB_MIN_SIZE_SCALE * 0.5, options.sizeScale)
-        : rollBombSizeScale(this.stability);
+        : 1;
 
     const baseBlast: BombBlastStats = {
       ...DEFAULT_BOMB_BLAST,
@@ -234,9 +231,13 @@ export class BombProjectile extends Container {
     this.startY = startY;
     this.endX = endX;
     this.endY = endY;
+    this.originHeight = Math.max(
+      0,
+      options.originHeight ?? THROW_ORIGIN_HEIGHT,
+    );
     this.groundX = startX;
     this.groundY = startY;
-    this.arcHeight = THROW_ORIGIN_HEIGHT;
+    this.arcHeight = this.originHeight;
 
     const dist = Math.hypot(endX - startX, endY - startY);
     const t = Math.min(1, dist / BOMB_MAX_RANGE);
@@ -392,7 +393,7 @@ export class BombProjectile extends Container {
   private sampleFlight(u: number): void {
     this.groundX = this.startX + (this.endX - this.startX) * u;
     this.groundY = this.startY + (this.endY - this.startY) * u;
-    const fromHand = THROW_ORIGIN_HEIGHT * (1 - u);
+    const fromHand = this.originHeight * (1 - u);
     const arc = 4 * ARC_PEAK * u * (1 - u);
     this.arcHeight = fromHand + arc;
     const grow = 1 - (1 - u) * (1 - u);

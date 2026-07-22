@@ -2,10 +2,17 @@ import { Container, Graphics, Rectangle, Text } from 'pixi.js';
 import {
   BombProjectile,
   BOMB_MAX_RANGE,
-  DEFAULT_BOMB_STABILITY,
   loadBombTextures,
+  type BombProjectileOptions,
 } from '../entities/BombProjectile';
-import { FrostArcher } from '../entities/FrostArcher';
+import { BombGirl } from '../entities/BombGirl';
+import { IceRanger } from '../entities/IceRanger';
+import type { PlayerCharacterBase } from '../entities/PlayerCharacterBase';
+import {
+  loadSpearTexture,
+  SpearProjectile,
+} from '../entities/SpearProjectile';
+import type { CharacterId } from '../entities/types';
 import {
   applyKnockImpulse,
   createKnockArcState,
@@ -27,6 +34,14 @@ import type { GameScene, LevelTheme } from './types';
 
 /** 黑夜松树冷色 tint（环境变暗，不盖角色） */
 const NIGHT_TREE_TINT = 0x6a7f9e;
+/** 选角阶段：地面 / 树大幅压暗，角色保持原色 */
+const SELECT_MAP_TINT = 0x6a7088;
+const SELECT_TREE_TINT = 0x5a6278;
+const SELECT_SPIDER_ALPHA = 0.55;
+/** 选角站位：相对出生点左右间距（世界像素） */
+const SELECT_SPACING = 120;
+/** 选角点击热区（本地像素，贴图未缩放） */
+const SELECT_HIT = { w: 520, h: 900 } as const;
 
 const MOVE_SPEED = 220;
 /** 玩家脚底碰撞半径 */
@@ -44,11 +59,6 @@ const PLAYER_MAX_HP = 100;
 const KNOCK_CONTROL_SOFTEN = 220;
 /** 蜘蛛对击飞的接收倍率（目标抗性，非炸弹属性） */
 const SPIDER_KNOCK_SCALE = 0.85;
-/**
- * 玩家手雷稳定性 0~1。
- * 越低越容易扔出随机缩小的弱弹（范围 / 伤害 / 击飞一起变小）。
- */
-const PLAYER_BOMB_STABILITY = DEFAULT_BOMB_STABILITY;
 
 const SPIDER_SCALE = 0.1;
 
@@ -62,6 +72,13 @@ const ZOOM_MAX = 1;
 const ZOOM_KEY_RATE = 1.35;
 /** 滚轮单次倍率 */
 const ZOOM_WHEEL_STEP = 1.12;
+/** 镜头位置跟随（指数趋近，越大越贴） */
+const CAM_FOLLOW_LAMBDA = 12;
+/** 缩放过渡 */
+const CAM_ZOOM_LAMBDA = 9;
+/** 选角确认后短暂加快镜头收束 */
+const CAM_CONFIRM_BOOST_LAMBDA = 16;
+const CAM_CONFIRM_BOOST_TIME = 0.55;
 
 export type LevelSceneOptions = {
   theme: LevelTheme;
@@ -78,8 +95,25 @@ type PauseButton = {
   hoverColor: number;
 };
 
+type CharacterCandidate = {
+  id: CharacterId;
+  entity: PlayerCharacterBase;
+  worldX: number;
+  worldY: number;
+  pedestal: Graphics;
+  hovered: boolean;
+};
+
+/** 选角后留在原地的未选角色 */
+type ParkedCharacter = {
+  entity: PlayerCharacterBase;
+  worldX: number;
+  worldY: number;
+};
+
 /**
  * 可玩关卡：白天 / 黑夜地图，WASD 移动，点击抛物线扔炸弹，Esc 暂停。
+ * 出发地先选角色才能操作；选角时环境压暗、角色高亮。
  * 滚轮 / +/- 缩放，0 复位，F 看全景。
  * 纵深：worldRoot 镜头变换 + sortLayer 按脚底 Y 排序（树/角色/炸弹互遮）。
  * 黑夜 = 白天地图 + NightOverlay 叠加，不单独换色盘。
@@ -98,10 +132,16 @@ export class LevelScene extends Container implements GameScene {
    */
   private readonly sortLayer: Container;
   private readonly nightOverlay: NightOverlay | null;
-  private readonly archer: FrostArcher;
+  /** 选角时盖在地面上的暗幕（树另用 tint 压暗） */
+  private readonly selectGroundVeil: Graphics;
+  private player: PlayerCharacterBase | null = null;
+  private readonly candidates: CharacterCandidate[] = [];
+  /** 未选中的角色，选角结束后仍站在出生岛原地 */
+  private readonly parkedCharacters: ParkedCharacter[] = [];
   private readonly healthBar: HealthBar;
   private readonly spiders: Spider[] = [];
   private readonly bombs: BombProjectile[] = [];
+  private readonly spears: SpearProjectile[] = [];
   private readonly keyboard = new Keyboard();
   private readonly pauseLayer: Container;
   private readonly pauseVeil: Graphics;
@@ -117,14 +157,24 @@ export class LevelScene extends Container implements GameScene {
   /** 玩家世界坐标 */
   private worldX = PLAYER_SPAWN.x;
   private worldY = PLAYER_SPAWN.y;
-  /** 镜头对准的世界坐标（边界处可与玩家分离） */
+  /** 镜头对准的世界坐标（边界处可与玩家分离）— 实际渲染值 */
   private camX = PLAYER_SPAWN.x;
   private camY = PLAYER_SPAWN.y;
-  /** 镜头缩放（1 = 默认） */
+  /** 镜头目标（平滑趋近） */
+  private camTargetX = PLAYER_SPAWN.x;
+  private camTargetY = PLAYER_SPAWN.y;
+  /** 镜头缩放（1 = 默认）— 实际渲染值 */
   private zoom = ZOOM_DEFAULT;
+  /** 缩放目标（平滑趋近） */
+  private zoomTarget = ZOOM_DEFAULT;
+  /** 选角确认后的加速跟随剩余时间（秒） */
+  private camBoostTime = 0;
   /** 被炸飞：地面平面速度 + 高度抛物线 */
   private readonly knock: KnockArcState = createKnockArcState();
   private paused = false;
+  /** true = 尚未选角，禁止移动 / 攻击 */
+  private selectingCharacter = true;
+  private selectPulse = 0;
   private escWasDown = false;
   private fitWasDown = false;
   private resetZoomWasDown = false;
@@ -139,9 +189,9 @@ export class LevelScene extends Container implements GameScene {
     this.viewWidth = width;
     this.viewHeight = height;
 
-    // 全屏可点：点击落点扔炸弹
+    // 全屏可点：选角后点击落点扔炸弹
     this.eventMode = 'static';
-    this.cursor = 'crosshair';
+    this.cursor = 'default';
     this.hitArea = new Rectangle(0, 0, width, height);
     this.on('pointertap', this.onPointerTap);
 
@@ -161,26 +211,35 @@ export class LevelScene extends Container implements GameScene {
       this.worldRoot.addChild(this.nightOverlay);
     }
 
+    // 选角暗幕：盖住地面 / 夜色，不盖 sortLayer 里的角色
+    this.selectGroundVeil = new Graphics();
+    this.selectGroundVeil.label = 'SelectGroundVeil';
+    this.selectGroundVeil
+      .rect(-MAP_WORLD_HALF, -MAP_WORLD_HALF, MAP_SIZE, MAP_SIZE)
+      .fill({ color: 0x000000, alpha: 0.28 });
+    this.worldRoot.addChild(this.selectGroundVeil);
+
     this.sortLayer = new Container();
     this.sortLayer.label = 'SortLayer';
     this.sortLayer.sortableChildren = true;
-    this.sortLayer.eventMode = 'none';
+    // 选角阶段候选角色需要接收点击
+    this.sortLayer.eventMode = 'static';
     this.worldRoot.addChild(this.sortLayer);
 
     if (options.theme === 'night') {
       this.spawnCornerSpiders();
     }
 
-    this.archer = new FrostArcher(0.07);
-    this.sortLayer.addChild(this.archer);
+    this.mountCharacterCandidates();
 
-    // 玩家血条 HUD：屏幕底部，不进 worldRoot / sortLayer
+    // 玩家血条 HUD：选角完成前隐藏
     this.healthBar = new HealthBar({
       maxHp: PLAYER_MAX_HP,
       width: HUD_HP_WIDTH,
       height: HUD_HP_HEIGHT,
     });
     this.healthBar.setHealth(PLAYER_MAX_HP);
+    this.healthBar.visible = false;
     this.addChild(this.healthBar);
 
     // 暂停层（默认隐藏）
@@ -213,11 +272,158 @@ export class LevelScene extends Container implements GameScene {
       this.createPauseButton('返回主场景', 0x5a6a8a, 0x7a8ab0, () => this.onBack()),
     );
 
-    this.updateCameraAndPlayerBounds();
-    this.applyCamera();
+    this.applySelectAtmosphere(true);
+    this.stepCamera(0, true);
     this.syncWorldActors();
     this.layoutHealthHud();
     this.layoutPauseMenu();
+  }
+
+  /** 出发岛左右摆放可选角色 + 脚底光环 */
+  private mountCharacterCandidates(): void {
+    const roster: Array<{ id: CharacterId; entity: PlayerCharacterBase; offsetX: number }> = [
+      { id: 'bomb-girl', entity: new BombGirl(0.07), offsetX: -SELECT_SPACING },
+      { id: 'ice-ranger', entity: new IceRanger(0.066), offsetX: SELECT_SPACING },
+    ];
+
+    for (const entry of roster) {
+      const worldX = PLAYER_SPAWN.x + entry.offsetX;
+      const worldY = PLAYER_SPAWN.y;
+
+      const pedestal = new Graphics();
+      pedestal.label = `Pedestal:${entry.id}`;
+      pedestal.eventMode = 'none';
+      this.paintPedestal(pedestal, false, 0);
+
+      const entity = entry.entity;
+      entity.eventMode = 'static';
+      entity.cursor = 'pointer';
+      entity.hitArea = new Rectangle(
+        -SELECT_HIT.w / 2,
+        -SELECT_HIT.h * 0.92,
+        SELECT_HIT.w,
+        SELECT_HIT.h,
+      );
+
+      const candidate: CharacterCandidate = {
+        id: entry.id,
+        entity,
+        worldX,
+        worldY,
+        pedestal,
+        hovered: false,
+      };
+
+      entity.on('pointerover', () => {
+        if (!this.selectingCharacter) return;
+        candidate.hovered = true;
+        entity.alpha = 1;
+      });
+      entity.on('pointerout', () => {
+        candidate.hovered = false;
+      });
+      entity.on('pointertap', (e) => {
+        e.stopPropagation();
+        if (!this.selectingCharacter || this.paused) return;
+        this.confirmCharacter(entry.id);
+      });
+
+      this.sortLayer.addChild(pedestal, entity);
+      this.candidates.push(candidate);
+    }
+  }
+
+  private paintPedestal(g: Graphics, hovered: boolean, pulse: number): void {
+    const breathe = 1 + pulse * 0.08;
+    const rx = 48 * breathe;
+    const ry = 18 * breathe;
+    const core = hovered ? 0xffffff : 0x9ee8ff;
+    const glow = hovered ? 0xc8f4ff : 0x5ec8ff;
+    g.clear();
+    g.ellipse(0, 0, rx * 1.35, ry * 1.35).fill({
+      color: glow,
+      alpha: 0.16 + pulse * 0.08,
+    });
+    g.ellipse(0, 0, rx, ry).fill({
+      color: core,
+      alpha: 0.22 + pulse * 0.1,
+    });
+    g.ellipse(0, 0, rx * 0.92, ry * 0.92).stroke({
+      width: hovered ? 3.5 : 2.5,
+      color: core,
+      alpha: 0.9,
+    });
+  }
+
+  /** 选角确认：操控所选角色；未选中的留在原地待机，清掉光环 / 点击 */
+  private confirmCharacter(id: CharacterId): void {
+    if (!this.selectingCharacter) return;
+    const chosen = this.candidates.find((c) => c.id === id);
+    if (!chosen) return;
+
+    this.player = chosen.entity;
+    this.worldX = chosen.worldX;
+    this.worldY = chosen.worldY;
+
+    for (const c of this.candidates) {
+      c.entity.off('pointerover');
+      c.entity.off('pointerout');
+      c.entity.off('pointertap');
+      c.entity.eventMode = 'none';
+      c.entity.cursor = 'default';
+      c.entity.hitArea = null;
+      c.entity.alpha = 1;
+
+      this.sortLayer.removeChild(c.pedestal);
+      c.pedestal.destroy();
+
+      if (c.id !== id) {
+        // 未选中角色仍站在出生位，不销毁
+        this.parkedCharacters.push({
+          entity: c.entity,
+          worldX: c.worldX,
+          worldY: c.worldY,
+        });
+      }
+    }
+    this.candidates.length = 0;
+
+    this.selectingCharacter = false;
+    this.selectGroundVeil.visible = false;
+    this.healthBar.visible = true;
+    this.cursor = this.player.canRangedAttack ? 'crosshair' : 'default';
+    this.sortLayer.eventMode = 'none';
+
+    this.applySelectAtmosphere(false);
+    // 镜头从选角构图平滑收束到所选角色，不瞬切
+    this.camBoostTime = CAM_CONFIRM_BOOST_TIME;
+    this.refreshCameraTargets();
+    this.syncWorldActors();
+    this.sortDepth();
+  }
+
+  /**
+   * 选角气氛：地面暗幕 + 地图/树 tint + 蜘蛛压暗；
+   * 角色保持原色高亮。
+   */
+  private applySelectAtmosphere(active: boolean): void {
+    this.selectGroundVeil.visible = active;
+    this.worldMap.tint = active ? SELECT_MAP_TINT : 0xffffff;
+
+    if (this.treesMounted) {
+      const treeTint = active
+        ? SELECT_TREE_TINT
+        : this.theme === 'night'
+          ? NIGHT_TREE_TINT
+          : 0xffffff;
+      for (const tree of this.worldMap.getTrees()) {
+        tree.tint = treeTint;
+      }
+    }
+
+    for (const spider of this.spiders) {
+      spider.alpha = active ? SELECT_SPIDER_ALPHA : 1;
+    }
   }
 
   private createPauseButton(
@@ -285,8 +491,9 @@ export class LevelScene extends Container implements GameScene {
 
     const loads: Promise<void>[] = [
       this.worldMap.load(),
-      this.archer.load(),
+      ...this.candidates.map((c) => c.entity.load()),
       loadBombTextures(),
+      loadSpearTexture(),
     ];
     if (this.spiders.length > 0) {
       loads.push(loadSpiderTexture());
@@ -294,8 +501,17 @@ export class LevelScene extends Container implements GameScene {
     await Promise.all(loads);
 
     this.mountTrees();
-    this.applyCamera();
+    // 树挂载后再刷一遍选角压暗（mountTrees 时 treesMounted 才为 true）
+    if (this.selectingCharacter) {
+      this.applySelectAtmosphere(true);
+    }
+    this.stepCamera(0, true);
     await Promise.all(this.spiders.map((s) => s.load()));
+    if (this.selectingCharacter) {
+      for (const spider of this.spiders) {
+        spider.alpha = SELECT_SPIDER_ALPHA;
+      }
+    }
     this.syncWorldActors();
     this.cullTrees();
     this.sortDepth();
@@ -305,10 +521,13 @@ export class LevelScene extends Container implements GameScene {
   private mountTrees(): void {
     if (this.treesMounted) return;
     this.treesMounted = true;
-    const nightTint = this.theme === 'night';
     for (const tree of this.worldMap.getTrees()) {
-      // 环境树单独冷色 tint；角色/怪/爆炸保持原色
-      if (nightTint) tree.tint = NIGHT_TREE_TINT;
+      // 选角中统一深暗；否则黑夜冷色 / 白天原色
+      if (this.selectingCharacter) {
+        tree.tint = SELECT_TREE_TINT;
+      } else if (this.theme === 'night') {
+        tree.tint = NIGHT_TREE_TINT;
+      }
       this.sortLayer.addChild(tree);
     }
   }
@@ -342,15 +561,164 @@ export class LevelScene extends Container implements GameScene {
     );
   }
 
+  /** 指数趋近（帧率无关） */
+  private static expApproach(
+    current: number,
+    target: number,
+    lambda: number,
+    dt: number,
+  ): number {
+    if (dt <= 0 || lambda <= 0) return target;
+    return current + (target - current) * (1 - Math.exp(-lambda * dt));
+  }
+
+  /**
+   * 选角时镜头焦点固定在候选中点。
+   * 不跟悬停角色走：镜头一动会把角色移出指针下，pointerover/out 来回触发导致闪烁。
+   */
+  private getSelectFocus(): { x: number; y: number } {
+    if (this.candidates.length === 0) {
+      return { x: this.worldX, y: this.worldY };
+    }
+    let sx = 0;
+    let sy = 0;
+    for (const c of this.candidates) {
+      sx += c.worldX;
+      sy += c.worldY;
+    }
+    const n = this.candidates.length;
+    return { x: sx / n, y: sy / n };
+  }
+
+  /** 根据焦点刷新 camTarget（用 zoomTarget 算视口，避免缩放动画中目标抖动） */
+  private refreshCameraTargets(): void {
+    if (!this.selectingCharacter) {
+      const solid = WorldMap.resolveSolid(
+        this.worldX,
+        this.worldY,
+        this.worldX,
+        this.worldY,
+        PLAYER_BODY_R,
+      );
+      this.worldX = solid.x;
+      this.worldY = solid.y;
+    }
+
+    const focus = this.selectingCharacter
+      ? this.getSelectFocus()
+      : { x: this.worldX, y: this.worldY };
+
+    const z = Math.max(this.zoomTarget, 1e-4);
+    const cam = WorldMap.clampCamera(
+      focus.x,
+      focus.y,
+      this.viewWidth / z,
+      this.viewHeight / z,
+    );
+    this.camTargetX = cam.x;
+    this.camTargetY = cam.y;
+  }
+
+  /**
+   * 平滑推进镜头到目标。
+   * snap=true：立刻对齐（初始化 / 改窗口）。
+   * @returns 镜头是否发生可见位移（用于裁剪树）
+   */
+  private stepCamera(dt: number, snap = false): boolean {
+    this.refreshCameraTargets();
+
+    const prevX = this.camX;
+    const prevY = this.camY;
+    const prevZ = this.zoom;
+
+    if (snap) {
+      this.camX = this.camTargetX;
+      this.camY = this.camTargetY;
+      this.zoom = this.zoomTarget;
+      this.camBoostTime = 0;
+    } else {
+      // 选角中镜头目标固定，无需跟焦；确认后 / 游玩中再平滑跟随
+      let posLambda = this.selectingCharacter ? 0 : CAM_FOLLOW_LAMBDA;
+      if (this.camBoostTime > 0) {
+        posLambda = CAM_CONFIRM_BOOST_LAMBDA;
+        this.camBoostTime = Math.max(0, this.camBoostTime - dt);
+      }
+
+      if (posLambda > 0) {
+        this.camX = LevelScene.expApproach(
+          this.camX,
+          this.camTargetX,
+          posLambda,
+          dt,
+        );
+        this.camY = LevelScene.expApproach(
+          this.camY,
+          this.camTargetY,
+          posLambda,
+          dt,
+        );
+      } else {
+        this.camX = this.camTargetX;
+        this.camY = this.camTargetY;
+      }
+      this.zoom = LevelScene.expApproach(
+        this.zoom,
+        this.zoomTarget,
+        CAM_ZOOM_LAMBDA,
+        dt,
+      );
+
+      // 足够近时吸附，避免浮点残差
+      if (Math.abs(this.camX - this.camTargetX) < 0.05) this.camX = this.camTargetX;
+      if (Math.abs(this.camY - this.camTargetY) < 0.05) this.camY = this.camTargetY;
+      if (Math.abs(this.zoom - this.zoomTarget) < 0.0004) this.zoom = this.zoomTarget;
+    }
+
+    // 用当前缩放钳制，防止过渡中露图外
+    const z = Math.max(this.zoom, 1e-4);
+    const clamped = WorldMap.clampCamera(
+      this.camX,
+      this.camY,
+      this.viewWidth / z,
+      this.viewHeight / z,
+    );
+    this.camX = clamped.x;
+    this.camY = clamped.y;
+
+    this.applyCamera();
+
+    return (
+      Math.abs(this.camX - prevX) > 0.01 ||
+      Math.abs(this.camY - prevY) > 0.01 ||
+      Math.abs(this.zoom - prevZ) > 0.0002
+    );
+  }
+
   /** 角色/蜘蛛/炸弹写到世界坐标，并刷新 zIndex */
   private syncWorldActors(): void {
-    this.archer.position.set(this.worldX, this.worldY - this.knock.height);
-    this.archer.zIndex = this.worldY;
+    if (this.selectingCharacter) {
+      for (const c of this.candidates) {
+        c.pedestal.position.set(c.worldX, c.worldY);
+        c.pedestal.zIndex = c.worldY - 0.5;
+        c.entity.position.set(c.worldX, c.worldY);
+        c.entity.zIndex = c.worldY;
+      }
+    } else if (this.player) {
+      this.player.position.set(this.worldX, this.worldY - this.knock.height);
+      this.player.zIndex = this.worldY;
+      for (const parked of this.parkedCharacters) {
+        parked.entity.position.set(parked.worldX, parked.worldY);
+        parked.entity.zIndex = parked.worldY;
+      }
+    }
     for (const spider of this.spiders) {
       spider.syncToWorld();
     }
     for (const bomb of this.bombs) {
       bomb.syncToWorld();
+    }
+    for (const spear of this.spears) {
+      spear.syncToWorld();
     }
   }
 
@@ -389,58 +757,23 @@ export class LevelScene extends Container implements GameScene {
     this.worldY = solid.y;
   }
 
-  /** 玩家限在地图内，镜头跟随并钳到不露图外（视口随 zoom 折算成世界尺寸） */
-  private updateCameraAndPlayerBounds(): void {
-    // 无位移时也再解析一次，防止击飞/外力后卡在树里
-    const solid = WorldMap.resolveSolid(
-      this.worldX,
-      this.worldY,
-      this.worldX,
-      this.worldY,
-      PLAYER_BODY_R,
-    );
-    this.worldX = solid.x;
-    this.worldY = solid.y;
-
-    const z = Math.max(this.zoom, 1e-4);
-    const cam = WorldMap.clampCamera(
-      this.worldX,
-      this.worldY,
-      this.viewWidth / z,
-      this.viewHeight / z,
-    );
-    this.camX = cam.x;
-    this.camY = cam.y;
-  }
-
   /** 当前窗口下能看全地图的最小缩放 */
   private getMinZoom(): number {
     if (this.viewWidth <= 0 || this.viewHeight <= 0) return 0.15;
     return Math.min(this.viewWidth / MAP_SIZE, this.viewHeight / MAP_SIZE) * 0.92;
   }
 
+  /** 设置缩放目标（由 stepCamera 平滑过渡） */
   private setZoom(next: number): void {
     const min = this.getMinZoom();
     const z = Math.min(ZOOM_MAX, Math.max(min, next));
-    if (Math.abs(z - this.zoom) < 1e-4) return;
-    this.zoom = z;
-    this.updateCameraAndPlayerBounds();
-    this.applyCamera();
-    this.syncWorldActors();
-    this.cullTrees();
-    this.sortDepth();
+    if (Math.abs(z - this.zoomTarget) < 1e-4) return;
+    this.zoomTarget = z;
   }
 
-  /** 缩到刚好看全图，镜头回到地图中心 */
+  /** 缩到刚好看全图：平滑拉远并回中心（目标由 clamp 在 minZoom 下自然居中） */
   private fitOverview(): void {
-    this.zoom = this.getMinZoom();
-    this.camX = 0;
-    this.camY = 0;
-    this.updateCameraAndPlayerBounds();
-    this.applyCamera();
-    this.syncWorldActors();
-    this.cullTrees();
-    this.sortDepth();
+    this.zoomTarget = this.getMinZoom();
   }
 
   private readonly onWheel = (e: WheelEvent): void => {
@@ -458,6 +791,7 @@ export class LevelScene extends Container implements GameScene {
   }
 
   update(deltaMS: number): void {
+    const dt = deltaMS / 1000;
     const escDown = this.keyboard.isDown('Escape');
     if (escDown && !this.escWasDown) {
       this.setPaused(!this.paused);
@@ -465,15 +799,31 @@ export class LevelScene extends Container implements GameScene {
     this.escWasDown = escDown;
 
     // 缩放快捷键在暂停时也可用（方便看全景）
-    this.handleZoomKeys(deltaMS / 1000);
+    this.handleZoomKeys(dt);
 
-    if (this.paused) {
-      // 暂停时角色回正、不处理移动；炸弹也冻结
-      this.archer.update(deltaMS, false);
+    if (this.selectingCharacter) {
+      this.updateCharacterSelect(deltaMS);
+      if (this.stepCamera(dt)) {
+        this.cullTrees();
+      }
       return;
     }
 
-    const dt = deltaMS / 1000;
+    const player = this.player;
+    if (!player) return;
+
+    if (this.paused) {
+      // 暂停时角色回正、不处理移动；炸弹也冻结；镜头仍可平滑缩放
+      player.update(deltaMS, false);
+      for (const parked of this.parkedCharacters) {
+        parked.entity.update(deltaMS, false);
+      }
+      if (this.stepCamera(dt)) {
+        this.cullTrees();
+      }
+      return;
+    }
+
     const { x, y } = this.keyboard.getMoveAxis();
     let moved = false;
     const fromX = this.worldX;
@@ -492,7 +842,7 @@ export class LevelScene extends Container implements GameScene {
     // WASD：空中几乎失控；贴地时强击退会变钝
     const moving = x !== 0 || y !== 0;
     if (moving) {
-      this.archer.setFacingFromMoveX(x);
+      player.setFacingFromMoveX(x);
       let control = 1;
       if (airborne) {
         control = 0.08;
@@ -506,13 +856,18 @@ export class LevelScene extends Container implements GameScene {
 
     if (moved) {
       this.applyPlayerSolid(fromX, fromY);
-      this.updateCameraAndPlayerBounds();
-      this.applyCamera();
+    }
+
+    const camMoved = this.stepCamera(dt);
+    if (moved || camMoved) {
       this.cullTrees();
     }
 
     this.syncWorldActors();
-    this.archer.update(deltaMS, moving && !airborne && knockSpeed < 80);
+    player.update(deltaMS, moving && !airborne && knockSpeed < 80);
+    for (const parked of this.parkedCharacters) {
+      parked.entity.update(deltaMS, false);
+    }
     this.healthBar.update(deltaMS);
 
     for (const spider of this.spiders) {
@@ -537,6 +892,30 @@ export class LevelScene extends Container implements GameScene {
     }
 
     this.updateBombs(deltaMS);
+    this.updateSpears(deltaMS);
+    this.sortDepth();
+  }
+
+  /** 选角阶段：仅呼吸光环 / 待机晃动，冻结战斗与移动 */
+  private updateCharacterSelect(deltaMS: number): void {
+    if (this.paused) {
+      for (const c of this.candidates) {
+        c.entity.update(deltaMS, false);
+      }
+      return;
+    }
+
+    this.selectPulse = (this.selectPulse + (deltaMS / 1000) * 2.2) % (Math.PI * 2);
+    const pulse = 0.5 + 0.5 * Math.sin(this.selectPulse);
+
+    for (const c of this.candidates) {
+      this.paintPedestal(c.pedestal, c.hovered, pulse);
+      // 轻微待机晃动，悬停时更明显
+      c.entity.update(deltaMS, c.hovered);
+      c.entity.alpha = c.hovered ? 1 : 0.92 + pulse * 0.08;
+    }
+
+    this.syncWorldActors();
     this.sortDepth();
   }
 
@@ -547,6 +926,7 @@ export class LevelScene extends Container implements GameScene {
     dirY: number;
     knockImpulse: number;
   }): void {
+    if (!this.player) return;
     this.healthBar.applyDelta(-Math.abs(hit.damage));
     applyKnockImpulse(
       this.knock,
@@ -554,9 +934,8 @@ export class LevelScene extends Container implements GameScene {
       hit.dirY * hit.knockImpulse,
     );
     // 轻伤姿态（不转圈）
-    this.archer.playBlastKnock(0.45, hit.dirX, 0);
-    this.updateCameraAndPlayerBounds();
-    this.applyCamera();
+    this.player.playBlastKnock(0.45, hit.dirX, 0);
+    this.refreshCameraTargets();
     this.syncWorldActors();
     this.sortDepth();
   }
@@ -565,9 +944,12 @@ export class LevelScene extends Container implements GameScene {
     this.viewWidth = width;
     this.viewHeight = height;
     this.hitArea = new Rectangle(0, 0, width, height);
-    this.zoom = Math.min(ZOOM_MAX, Math.max(this.getMinZoom(), this.zoom));
-    this.updateCameraAndPlayerBounds();
-    this.applyCamera();
+    this.zoomTarget = Math.min(
+      ZOOM_MAX,
+      Math.max(this.getMinZoom(), this.zoomTarget),
+    );
+    // 改窗口尺寸时直接对齐，避免过渡穿帮
+    this.stepCamera(0, true);
     this.syncWorldActors();
     this.cullTrees();
     this.sortDepth();
@@ -600,33 +982,49 @@ export class LevelScene extends Container implements GameScene {
     if (zoomIn === zoomOut) return;
 
     const factor = Math.pow(ZOOM_KEY_RATE, dt);
-    this.setZoom(this.zoom * (zoomIn ? factor : 1 / factor));
+    this.setZoom(this.zoomTarget * (zoomIn ? factor : 1 / factor));
   }
 
   private readonly onPointerTap = (e: {
     global: { x: number; y: number };
   }): void => {
-    if (this.paused) return;
-    this.throwBombAtScreen(e.global.x, e.global.y);
+    if (this.paused || this.selectingCharacter) return;
+    const player = this.player;
+    if (!player) return;
+    if (player instanceof BombGirl) {
+      this.throwBombAtScreen(e.global.x, e.global.y);
+    } else if (player instanceof IceRanger) {
+      this.throwSpearAtScreen(e.global.x, e.global.y);
+    }
   };
+
+  /** 屏幕点击相对玩家的世界方向（未归一化）；过近返回 null */
+  private screenAimWorldDelta(
+    screenX: number,
+    screenY: number,
+  ): { dx: number; dy: number } | null {
+    const z = this.zoom;
+    const playerSx = this.viewWidth / 2 + (this.worldX - this.camX) * z;
+    const playerSy = this.viewHeight / 2 + (this.worldY - this.camY) * z;
+    const screenDx = screenX - playerSx;
+    const screenDy = screenY - playerSy;
+    if (Math.hypot(screenDx, screenDy) < THROW_MIN_DIST) return null;
+    return { dx: screenDx / z, dy: screenDy / z };
+  }
 
   /**
    * 以角色屏幕位置为起点抛物线扔炸弹。
    * 射程内落点 = 点击位置；超出则钳到最远方向。
    */
   private throwBombAtScreen(screenX: number, screenY: number): void {
-    const z = this.zoom;
-    const playerSx = this.viewWidth / 2 + (this.worldX - this.camX) * z;
-    const playerSy = this.viewHeight / 2 + (this.worldY - this.camY) * z;
-    const screenDx = screenX - playerSx;
-    const screenDy = screenY - playerSy;
-    const screenDist = Math.hypot(screenDx, screenDy);
+    const player = this.player;
+    if (!(player instanceof BombGirl)) return;
 
-    if (screenDist < THROW_MIN_DIST) return;
+    const aim = this.screenAimWorldDelta(screenX, screenY);
+    if (!aim) return;
 
-    // 屏幕位移 → 世界位移
-    let landDx = screenDx / z;
-    let landDy = screenDy / z;
+    let landDx = aim.dx;
+    let landDy = aim.dy;
     const worldDist = Math.hypot(landDx, landDy);
     if (worldDist > BOMB_MAX_RANGE) {
       const s = BOMB_MAX_RANGE / worldDist;
@@ -634,21 +1032,51 @@ export class LevelScene extends Container implements GameScene {
       landDy *= s;
     }
 
-    const startX = this.worldX;
-    const startY = this.worldY;
     const endX = this.worldX + landDx;
     const endY = this.worldY + landDy;
 
-    // 朝扔出方向转身，并后仰一下
-    this.archer.setFacingFromMoveX(endX - startX);
-    this.archer.playThrowRecoil();
+    // 先转身再取出手点（持弹手随朝向镜像）
+    player.setFacingFromMoveX(endX - this.worldX);
+    player.playThrowRecoil();
 
-    const bomb = new BombProjectile(startX, startY, endX, endY, {
-      stability: PLAYER_BOMB_STABILITY,
-    });
+    // 起点 = 角色持弹手（地面投影 + 离地高度）
+    const origin = player.getThrowOrigin(this.worldX, this.worldY);
+    const bombOptions: BombProjectileOptions = {
+      originHeight: origin.height,
+    };
+    const bomb = new BombProjectile(
+      origin.x,
+      origin.y,
+      endX,
+      endY,
+      bombOptions,
+    );
     this.sortLayer.addChild(bomb);
     this.bombs.push(bomb);
     bomb.syncToWorld();
+    this.sortDepth();
+  }
+
+  /**
+   * 冰霜游侠：朝点击方向直线投矛，飞到命中敌人或墙体为止。
+   */
+  private throwSpearAtScreen(screenX: number, screenY: number): void {
+    const player = this.player;
+    if (!(player instanceof IceRanger)) return;
+
+    const aim = this.screenAimWorldDelta(screenX, screenY);
+    if (!aim) return;
+
+    player.setFacingFromMoveX(aim.dx);
+    player.playThrowRecoil();
+
+    const origin = player.getThrowOrigin(this.worldX, this.worldY);
+    const spear = new SpearProjectile(origin.x, origin.y, aim.dx, aim.dy, {
+      originHeight: origin.height,
+    });
+    this.sortLayer.addChild(spear);
+    this.spears.push(spear);
+    spear.syncToWorld();
     this.sortDepth();
   }
 
@@ -671,25 +1099,74 @@ export class LevelScene extends Container implements GameScene {
     }
   }
 
+  /** 直线长矛：飞行中检测蜘蛛；撞墙由投射物内部处理 */
+  private updateSpears(deltaMS: number): void {
+    let needSync = false;
+
+    for (let i = this.spears.length - 1; i >= 0; i--) {
+      const spear = this.spears[i]!;
+
+      // 先位移（内部检测树墙），再测敌人，避免同帧漏检
+      let phase = spear.update(deltaMS);
+
+      if (phase === 'flying') {
+        for (let s = this.spiders.length - 1; s >= 0; s--) {
+          const spider = this.spiders[s]!;
+          if (!spider.isAlive) continue;
+          if (!spear.hitsTarget(spider.worldX, spider.worldY, SPIDER_BODY_R)) {
+            continue;
+          }
+
+          const hit = spear.buildHit();
+          const alive = spider.applyBlastHit(hit, SPIDER_KNOCK_SCALE);
+          if (!alive) {
+            this.sortLayer.removeChild(spider);
+            spider.destroy({ children: true });
+            this.spiders.splice(s, 1);
+          }
+          spear.stick();
+          phase = spear.getPhase();
+          needSync = true;
+          break;
+        }
+      }
+
+      spear.syncToWorld();
+
+      if (phase === 'done') {
+        this.sortLayer.removeChild(spear);
+        spear.destroy({ children: true });
+        this.spears.splice(i, 1);
+      }
+    }
+
+    if (needSync) {
+      this.syncWorldActors();
+    }
+  }
+
   /**
    * 场景只负责把炸弹算出的命中结果接到目标上。
    * 半径 / 伤害 / 击飞速度等全部读 bomb.blast。
+   * 玩家自身：保留击飞 / 姿态，不扣血。
    */
   private applyBombBlast(bomb: BombProjectile): void {
-    const face = this.archer.facingDir;
-    const playerHit = bomb.evaluateHit(this.worldX, this.worldY, face);
-    if (playerHit) {
-      this.healthBar.applyDelta(-playerHit.damage);
-      applyKnockImpulse(
-        this.knock,
-        playerHit.knockVelX,
-        playerHit.knockVelY,
-      );
-      this.archer.playBlastKnock(
-        playerHit.poseStrength,
-        playerHit.dirX,
-        playerHit.airSpinTurns,
-      );
+    const player = this.player;
+    if (player) {
+      const face = player.facingDir;
+      const playerHit = bomb.evaluateHit(this.worldX, this.worldY, face);
+      if (playerHit) {
+        applyKnockImpulse(
+          this.knock,
+          playerHit.knockVelX,
+          playerHit.knockVelY,
+        );
+        player.playBlastKnock(
+          playerHit.poseStrength,
+          playerHit.dirX,
+          playerHit.airSpinTurns,
+        );
+      }
     }
 
     let anySpider = false;

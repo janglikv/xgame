@@ -1,13 +1,5 @@
 import { Assets, Container, Sprite } from 'pixi.js';
-
-const PREVIEW_URL = '/assets/frost-archer/preview.png';
-
-/**
- * 贴图默认水平朝向修正。
- * preview.png 已左右翻转，未修正时 scale.x>0 会面朝左；
- * -1 使逻辑朝右（facing=1）时视觉也朝右。
- */
-const TEXTURE_FLIP_X: 1 | -1 = -1;
+import type { CharacterId } from './types';
 
 /** 走路晃动参数（作用在 sprite 局部，不改世界坐标） */
 const BOB = {
@@ -21,18 +13,6 @@ const BOB = {
   ampRot: 0.06,
   /** 停步时回正速度 */
   settle: 12,
-} as const;
-
-/** 扔炸弹后仰（局部空间：负 X / 负旋转 = 朝向反方向仰） */
-const THROW = {
-  /** 后仰角度（弧度） */
-  lean: 0.32,
-  /** 身体向后挪的像素 */
-  push: 22,
-  /** 略蹲一点 */
-  crouch: 6,
-  /** 回正速度 */
-  settle: 9,
 } as const;
 
 /** 被炸飞时的姿态反馈（高度由场景 knock 抛物线负责，这里只留轻微余量） */
@@ -55,12 +35,37 @@ const AIR_SPIN = {
 const ANCHOR_FOOT_Y = 0.92;
 const ANCHOR_CENTER_Y = 0.5;
 
+export type PlayerCharacterOptions = {
+  characterId: CharacterId;
+  label: string;
+  spriteLabel: string;
+  previewUrl: string;
+  /**
+   * 贴图默认水平朝向修正。
+   * -1：贴图默认偏左，使逻辑朝右（facing=1）时视觉也朝右。
+   */
+  textureFlipX: 1 | -1;
+  canThrowBomb?: boolean;
+  /** 冰霜游侠：直线投矛 */
+  canThrowSpear?: boolean;
+};
+
+type PoseDelta = { x: number; y: number; rot: number };
+
 /**
- * 寒冰射手（整图预览）
- * 原点在脚底中心附近。
+ * 玩家角色公共基类：贴图加载、朝向、镜头缩放、走路晃动、受击 / 空中转圈。
+ * 具体角色只填配置；投弹等能力在子类扩展。
  */
-export class FrostArcher extends Container {
-  private sprite: Sprite | null = null;
+export abstract class PlayerCharacterBase extends Container {
+  readonly characterId: CharacterId;
+  readonly canThrowBomb: boolean;
+  readonly canThrowSpear: boolean;
+
+  private readonly previewUrl: string;
+  private readonly spriteLabel: string;
+  private readonly textureFlipX: 1 | -1;
+
+  protected sprite: Sprite | null = null;
   private readonly baseScale: number;
   /** 镜头缩放倍率（与地图 zoom 同步） */
   private viewScale = 1;
@@ -68,15 +73,10 @@ export class FrostArcher extends Container {
   private facing: 1 | -1 = 1;
   /** 走路相位 */
   private bobPhase = 0;
-  /** 不含扔弹后仰的姿态（走路晃 / 回正） */
+  /** 走路晃 / 回正（不含子类附加姿态） */
   private poseX = 0;
   private poseY = 0;
   private poseRot = 0;
-  /**
-   * 扔炸弹后仰强度 0→1；1 为最大后仰，每帧衰减。
-   * 作用在 sprite 局部，翻转后仍相对朝向“向后”。
-   */
-  private throwRecoil = 0;
   /** 被炸飞姿态强度 0→1+ */
   private blastKnock = 0;
   /** 空中旋转进度 0→1；>0 时播放多圈旋转 */
@@ -86,20 +86,31 @@ export class FrostArcher extends Container {
   /** 旋转方向（与击飞水平方向一致） */
   private spinSign: 1 | -1 = 1;
 
-  constructor(scale = 1) {
+  protected constructor(options: PlayerCharacterOptions, scale = 1) {
     super();
-    this.label = 'FrostArcher';
+    this.characterId = options.characterId;
+    this.canThrowBomb = options.canThrowBomb ?? false;
+    this.canThrowSpear = options.canThrowSpear ?? false;
+    this.previewUrl = options.previewUrl;
+    this.spriteLabel = options.spriteLabel;
+    this.textureFlipX = options.textureFlipX;
+    this.label = options.label;
     this.baseScale = scale;
     this.applyContainerScale();
+  }
+
+  /** 是否有点击瞄准的远程攻击（炸弹 / 矛） */
+  get canRangedAttack(): boolean {
+    return this.canThrowBomb || this.canThrowSpear;
   }
 
   async load(): Promise<void> {
     if (this.sprite) return;
 
-    const texture = await Assets.load(PREVIEW_URL);
+    const texture = await Assets.load(this.previewUrl);
     const sprite = new Sprite(texture);
     sprite.anchor.set(0.5, ANCHOR_FOOT_Y);
-    sprite.label = 'FrostArcherSprite';
+    sprite.label = this.spriteLabel;
     this.sprite = sprite;
     this.addChild(sprite);
   }
@@ -115,7 +126,7 @@ export class FrostArcher extends Container {
   private applyContainerScale(): void {
     const s = this.baseScale * this.viewScale;
     // 逻辑朝向 × 贴图修正（scale.x 符号不再等同于 facing）
-    this.scale.x = s * this.facing * TEXTURE_FLIP_X;
+    this.scale.x = s * this.facing * this.textureFlipX;
     this.scale.y = s;
   }
 
@@ -136,11 +147,6 @@ export class FrostArcher extends Container {
     this.applyContainerScale();
   }
 
-  /** 扔炸弹瞬间触发：身体后仰一下再回正 */
-  playThrowRecoil(): void {
-    this.throwRecoil = 1;
-  }
-
   /**
    * 被爆炸崩飞时的姿态：抬起 + 翻仰；大弹可空中转多圈。
    * @param strength 0~1，距爆心越近越大
@@ -148,7 +154,7 @@ export class FrostArcher extends Container {
    * @param airSpinTurns 空中旋转圈数（大弹为 2）
    */
   playBlastKnock(strength: number, dirX = 0, airSpinTurns = 0): void {
-    this.throwRecoil = 0;
+    this.onBlastKnock();
     this.blastKnock = Math.max(this.blastKnock, Math.min(1.25, strength));
     if (dirX !== 0) this.setFacingFromMoveX(dirX);
 
@@ -165,7 +171,7 @@ export class FrostArcher extends Container {
   }
 
   /**
-   * 每帧更新。移动时图片上下晃 + 轻微摇摆，停下回正；可叠加扔弹后仰 / 被炸。
+   * 每帧更新。移动时图片上下晃 + 轻微摇摆，停下回正；可叠加受击 / 子类姿态。
    * @param deltaMS 帧间隔毫秒
    * @param moving 是否在移动
    */
@@ -187,7 +193,7 @@ export class FrostArcher extends Container {
       this.poseX = sway * BOB.ampX;
       this.poseRot = sway * BOB.ampRot;
     } else if (!tumbling) {
-      // 走路姿态指数回正（与后仰分开存，避免叠算）
+      // 走路姿态指数回正
       const k = 1 - Math.exp(-BOB.settle * dt);
       this.poseX += (0 - this.poseX) * k;
       this.poseY += (0 - this.poseY) * k;
@@ -200,37 +206,32 @@ export class FrostArcher extends Container {
       if (
         this.poseX === 0 &&
         this.poseY === 0 &&
-        this.throwRecoil <= 0 &&
         this.blastKnock <= 0 &&
-        !spinning
+        !spinning &&
+        this.canResetBobPhase()
       ) {
         this.bobPhase = 0;
       }
     }
 
-    // 后仰 / 被炸叠在走路姿态上
     let ox = this.poseX;
     let oy = this.poseY;
     let orot = this.poseRot;
 
-    if (this.throwRecoil > 0) {
-      const r = this.throwRecoil;
-      ox += -THROW.push * r;
-      oy += THROW.crouch * r;
-      orot += -THROW.lean * r;
-
-      this.throwRecoil *= Math.exp(-THROW.settle * dt);
-      if (this.throwRecoil < 0.02) this.throwRecoil = 0;
-    }
+    // 子类附加姿态（如扔弹后仰）
+    const extra = this.applyExtraPose(dt);
+    ox += extra.x;
+    oy += extra.y;
+    orot += extra.rot;
 
     if (this.blastKnock > 0) {
       const b = this.blastKnock;
       // 普通被炸：抬起、后仰；大弹转圈时主要用 spin 旋转，这里只保留抬升
       oy += -BLAST.lift * b;
       if (!spinning) {
-        orot += -BLAST.lean * b - BLAST.tumble * b * b;
+        orot += BLAST.lean * b + BLAST.tumble * b * b;
       }
-      ox += -8 * b;
+      ox += 8 * b;
 
       this.blastKnock *= Math.exp(-BLAST.settle * dt);
       if (this.blastKnock < 0.03) this.blastKnock = 0;
@@ -267,5 +268,20 @@ export class FrostArcher extends Container {
       sprite.y = oy;
     }
     sprite.rotation = orot;
+  }
+
+  /** 子类可叠加的局部姿态（默认无） */
+  protected applyExtraPose(_dt: number): PoseDelta {
+    return { x: 0, y: 0, rot: 0 };
+  }
+
+  /** 走路相位是否允许清零（子类有持续姿态时返回 false） */
+  protected canResetBobPhase(): boolean {
+    return true;
+  }
+
+  /** 受击开始时子类清理（如中断扔弹后仰） */
+  protected onBlastKnock(): void {
+    // no-op
   }
 }
