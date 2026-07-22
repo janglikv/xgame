@@ -7,14 +7,17 @@ export const GRID = 3;
 /** 单岛外沿边长（世界像素） */
 export const ISLAND_SIZE = 960;
 
-/** 岛与岛之间的森林走廊宽度 */
-export const FOREST_WIDTH = 280;
-
-/** 整图最外圈松林带宽（围住九宫格） */
-export const OUTER_FOREST_WIDTH = 200;
-
 /** 松树网格间距（越小越密） */
 const PINE_SPACING = 36;
+
+/** 林带厚度：三棵树 */
+const FOREST_TREE_DEPTH = 3;
+
+/** 岛与岛之间的森林走廊宽度（三棵树厚） */
+export const FOREST_WIDTH = FOREST_TREE_DEPTH * PINE_SPACING;
+
+/** 整图最外圈松林带宽（围住九宫格，三棵树厚） */
+export const OUTER_FOREST_WIDTH = FOREST_TREE_DEPTH * PINE_SPACING;
 
 /** 松树整体尺寸倍率（碰撞过道净空用；绘制见 PineTree） */
 const PINE_SCALE = 2.7;
@@ -162,6 +165,12 @@ function collectForestRects(): Rect[] {
 }
 
 /**
+ * 出生岛格子：下中 (1, GRID-1)。
+ * 其左右水平过道封闭，开局只能沿竖直过道往上走。
+ */
+const SPAWN_ISLAND = { ix: 1, iy: GRID - 1 } as const;
+
+/**
  * 林间过道（无树可行走）。
  * 宽度 = 路宽 + 树冠余量，与种树清空区一致。
  */
@@ -172,6 +181,13 @@ function collectPathRects(): Rect[] {
 
   for (let iy = 0; iy < GRID; iy++) {
     for (let ix = 0; ix < GRID - 1; ix++) {
+      // 出生岛左右：封闭 (0↔1) 与 (1↔2) 底排水平过道
+      if (
+        iy === SPAWN_ISLAND.iy &&
+        (ix === SPAWN_ISLAND.ix - 1 || ix === SPAWN_ISLAND.ix)
+      ) {
+        continue;
+      }
       const a = islandCenter(ix, iy);
       const b = islandCenter(ix + 1, iy);
       const x0 = a.x + ISLAND_SIZE / 2;

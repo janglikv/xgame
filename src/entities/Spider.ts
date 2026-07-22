@@ -23,8 +23,16 @@ const HP_BAR_HEIGHT = 5;
 const AI = {
   /** 进入锁定的察觉半径（世界像素） */
   detectRange: 270,
-  /** 近战咬击判定半径 */
+  /**
+   * 近战交战距离（AI 停步 / 开咬用，中心距）。
+   * 与 attackHitR 分离：前者管 AI，后者管实际咬中。
+   */
   attackRange: 40,
+  /**
+   * 扑咬攻击体半径（从蜘蛛中心算，与 solid BODY 无关）。
+   * 实际命中：attackHitR + 目标 hurtbox。
+   */
+  attackHitR: 32,
   /** 追击移速（略慢于玩家 220） */
   chaseSpeed: 148,
   /** 单次咬伤 */
@@ -326,11 +334,13 @@ export class Spider extends Container {
   /**
    * 每帧：AI + 击退 + 姿态 / 空中转圈 + 血条。
    * @param playerWorldX / Y 玩家世界坐标（锁定目标）
+   * @param playerHurtR 玩家受击半径（hurtbox），用于扑咬命中；默认 0 仅中心点
    */
   update(
     deltaMS: number,
     playerWorldX: number,
     playerWorldY: number,
+    playerHurtR = 0,
   ): SpiderUpdateResult {
     const dt = deltaMS / 1000;
     this.healthBar.update(deltaMS);
@@ -353,7 +363,12 @@ export class Spider extends Container {
       (this.spinTarget > 0 && this.spinT < 1);
 
     if (this.isAlive && !stunned) {
-      const aiResult = this.updateAI(dt, playerWorldX, playerWorldY);
+      const aiResult = this.updateAI(
+        dt,
+        playerWorldX,
+        playerWorldY,
+        playerHurtR,
+      );
       if (aiResult.moved) moved = true;
       attackHit = aiResult.attackHit;
     } else if (this.attackCd > 0) {
@@ -422,6 +437,7 @@ export class Spider extends Container {
     dt: number,
     playerX: number,
     playerY: number,
+    playerHurtR = 0,
   ): { moved: boolean; attackHit: SpiderAttackHit | null } {
     let moved = false;
     let attackHit: SpiderAttackHit | null = null;
@@ -436,6 +452,7 @@ export class Spider extends Container {
     const inv = dist > 1e-4 ? 1 / dist : 0;
     const dirX = dx * inv;
     const dirY = dy * inv;
+    const hurt = Math.max(0, playerHurtR);
 
     // 察觉 → 永久锁定
     if (!this.locked && dist <= AI.detectRange) {
@@ -471,8 +488,8 @@ export class Spider extends Container {
         moved = true;
 
         if (!this.attackDealt) {
-          // 扑出瞬间判定；仍在近战范围内则咬中
-          const stillClose = dist <= AI.attackRange * 1.35;
+          // 攻击体 ∩ 玩家 hurtbox
+          const stillClose = dist <= AI.attackHitR + hurt;
           if (stillClose) {
             attackHit = {
               damage: AI.attackDamage,

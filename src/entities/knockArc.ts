@@ -68,6 +68,38 @@ export function applyKnockImpulse(
   state.velZ = Math.min(KNOCK_MAX_UP, Math.max(0, state.velZ) + up);
 }
 
+/**
+ * 武器后坐小跳：沿 dir 方向把水平速度「补到」speed，不叠加超速；
+ * 每次出手把升速刷新到 hopUp（可空中连跳），用 max 而非累加，避免越跳越高。
+ *
+ * @param dirX / dirY 后坐方向（已可为单位向量，内部会归一化）
+ * @param speed 目标水平后坐速度（像素/秒）
+ * @param hopUp 起跳升速（像素/秒）；连射时反复刷新到此值
+ */
+export function applyRecoilHop(
+  state: KnockArcState,
+  dirX: number,
+  dirY: number,
+  speed: number,
+  hopUp = KNOCK_MIN_UP,
+): void {
+  const len = Math.hypot(dirX, dirY);
+  if (len < 1e-6 || speed < 1) return;
+  const rx = dirX / len;
+  const ry = dirY / len;
+
+  // 只补到目标后坐速度，已有更快分量则不再加速
+  const along = state.velX * rx + state.velY * ry;
+  if (along < speed) {
+    const need = speed - along;
+    state.velX += rx * need;
+    state.velY += ry * need;
+  }
+
+  // 连跳：每次出手刷新到 hopUp；已有更高升速（如被炸）则保留
+  state.velZ = Math.max(state.velZ, hopUp);
+}
+
 export type KnockStepResult = {
   /** 本帧地面位移 */
   dx: number;

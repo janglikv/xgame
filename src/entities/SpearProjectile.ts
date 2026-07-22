@@ -5,23 +5,29 @@ const SPEAR_URL = '/assets/ice-ranger/spear.png';
 
 /** 飞行速度（世界像素/秒） */
 export const SPEAR_SPEED = 640;
-/** 与墙体 / 树的碰撞半径 */
+/**
+ * 碰撞体：与墙体 / 树 / 地图边界的 solid 半径。
+ * 只负责穿模与钉墙，不参与伤害判定。
+ */
 export const SPEAR_BODY_R = 10;
-/** 与敌人的命中半径 */
-export const SPEAR_HIT_R = 28;
+/**
+ * 攻击体：对敌人 / 停场角色的命中半径（与 BODY 独立）。
+ * 实际判定 = SPEAR_HIT_R + 目标 hurtbox 半径。
+ */
+export const SPEAR_HIT_R = 12;
 /** 命中伤害 */
 export const SPEAR_DAMAGE = 24;
 /** 命中击飞初速度（像素/秒） */
-export const SPEAR_KNOCK_SPEED = 420;
+export const SPEAR_KNOCK_SPEED = 160;
 /** 姿态反馈强度 */
-export const SPEAR_POSE = 0.55;
+export const SPEAR_POSE = 0.28;
 /** 贴图缩放（相对原生成图缩小约 3 倍） */
-const SPEAR_SCALE = 0.11 / 3;
+export const SPEAR_SCALE = 0.11 / 3;
 /**
  * 贴图默认矛尖朝向（相对 +X，屏幕 Y 向下）。
  * 资源为左下柄 → 右上尖，约 -45°。
  */
-const SPEAR_TEX_ANGLE = -Math.PI / 4;
+export const SPEAR_TEX_ANGLE = -Math.PI / 4;
 /** 穿墙/命中后钉住再消失的时间（秒） */
 const STUCK_LIFE = 0.2;
 /** 每帧最大步进（避免高速穿模） */
@@ -44,6 +50,11 @@ let sharedSpear: Texture | null = null;
 export async function loadSpearTexture(): Promise<void> {
   if (sharedSpear) return;
   sharedSpear = await Assets.load(SPEAR_URL);
+}
+
+/** 已加载的矛贴图（手持特效等复用）；未 load 时为 null */
+export function getSpearTexture(): Texture | null {
+  return sharedSpear;
 }
 
 /**
@@ -112,12 +123,15 @@ export class SpearProjectile extends Container {
     return { x: this.dirX, y: this.dirY };
   }
 
-  /** 对圆目标做一次命中检测（飞行中） */
-  hitsTarget(targetX: number, targetY: number, targetR = SPEAR_HIT_R): boolean {
+  /**
+   * 对圆目标做一次命中检测（飞行中）。
+   * @param targetHurtR 目标受击半径（hurtbox），勿传 solid BODY
+   */
+  hitsTarget(targetX: number, targetY: number, targetHurtR: number): boolean {
     if (this.phase !== 'flying') return false;
     const dx = targetX - this.groundX;
     const dy = targetY - this.groundY;
-    const r = SPEAR_BODY_R + targetR;
+    const r = SPEAR_HIT_R + Math.max(0, targetHurtR);
     return dx * dx + dy * dy <= r * r;
   }
 

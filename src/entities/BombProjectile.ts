@@ -264,20 +264,25 @@ export class BombProjectile extends Container {
   /**
    * 对世界坐标上的目标做一次爆炸命中检测与数值结算。
    * 半径 / 伤害 / 击飞均来自本实例已缩放的 blast。
+   * @param targetHurtR 目标受击半径（hurtbox）；爆炸圆与 hurt 圆相交即命中
    */
   evaluateHit(
     targetX: number,
     targetY: number,
     fallbackFace: 1 | -1 = 1,
+    targetHurtR = 0,
   ): BlastHit | null {
     const dx = targetX - this.groundX;
     const dy = targetY - this.groundY;
     const dist = Math.hypot(dx, dy);
     const { radius } = this.blast;
+    const hurt = Math.max(0, targetHurtR);
+    // 圆心距扣掉 hurt 半径后，再与爆炸半径比（圆-圆相交）
+    const inner = Math.max(0, dist - hurt);
 
-    if (dist > radius) return null;
+    if (inner > radius) return null;
 
-    const falloff = 1 - dist / radius;
+    const falloff = 1 - inner / radius;
     const strength = falloff * falloff;
 
     const {

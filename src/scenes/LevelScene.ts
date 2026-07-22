@@ -6,7 +6,7 @@ import {
   type BombProjectileOptions,
 } from '../entities/BombProjectile';
 import { BombGirl } from '../entities/BombGirl';
-import { IceRanger } from '../entities/IceRanger';
+import { IceRanger, SPEAR_THROW_RECOIL_SPEED } from '../entities/IceRanger';
 import type { PlayerCharacterBase } from '../entities/PlayerCharacterBase';
 import {
   loadSpearTexture,
@@ -15,6 +15,7 @@ import {
 import type { CharacterId } from '../entities/types';
 import {
   applyKnockImpulse,
+  applyRecoilHop,
   createKnockArcState,
   stepKnockArc,
   type KnockArcState,
@@ -22,6 +23,7 @@ import {
 import { loadSpiderTexture, Spider } from '../entities/Spider';
 import { Keyboard } from '../input/Keyboard';
 import { HealthBar } from '../ui/HealthBar';
+import { SpearAmmoHud } from '../ui/SpearAmmoHud';
 import { getThemeBackground, NightOverlay } from '../world/NightOverlay';
 import {
   circlesOverlap,
@@ -50,11 +52,17 @@ const SELECT_HIT = { w: 520, h: 900 } as const;
 
 const MOVE_SPEED = 220;
 /**
- * 脚底圆形 solid 半径（地面占位，圆心 = worldX/Y）。
- * 用于挡树、人怪互挡；武器命中另见矛/炸弹逻辑。
+ * 碰撞体（solid）：脚底圆形占位，圆心 = worldX/Y。
+ * 用于挡树、人怪互挡、推挤——不参与武器伤害判定。
  */
 const PLAYER_BODY_R = 18;
 const SPIDER_BODY_R = 20;
+/**
+ * 受击体（hurtbox）：被矛 / 爆炸 / 扑咬命中用。
+ * 略大于 BODY，手感更宽容，且可与碰撞独立调参。
+ */
+const PLAYER_HURT_R = 22;
+const SPIDER_HURT_R = 24;
 /** 实体圆互推后与树区再解析的次数 */
 const BODY_SOLID_ITERS = 2;
 /** 点太近不扔（屏幕像素） */
@@ -63,6 +71,8 @@ const THROW_MIN_DIST = 12;
 const HUD_HP_WIDTH = 240;
 const HUD_HP_HEIGHT = 14;
 const HUD_HP_MARGIN_BOTTOM = 28;
+/** 飞剑数量相对血条上沿再上移（屏幕像素） */
+const HUD_SPEAR_GAP = 22;
 const PLAYER_MAX_HP = 100;
 /** 击退很强时削弱 WASD 控制（水平速度） */
 const KNOCK_CONTROL_SOFTEN = 220;
@@ -153,6 +163,7 @@ export class LevelScene extends Container implements GameScene {
   /** 未选中的角色，选角结束后仍站在出生岛原地 */
   private readonly parkedCharacters: ParkedCharacter[] = [];
   private readonly healthBar: HealthBar;
+  private readonly spearAmmoHud: SpearAmmoHud;
   private readonly spiders: Spider[] = [];
   private readonly bombs: BombProjectile[] = [];
   private readonly spears: SpearProjectile[] = [];
@@ -255,6 +266,11 @@ export class LevelScene extends Container implements GameScene {
     this.healthBar.setHealth(PLAYER_MAX_HP);
     this.healthBar.visible = false;
     this.addChild(this.healthBar);
+
+    // 飞剑数量：叠在血条之上，仅 IceRanger 显示
+    this.spearAmmoHud = new SpearAmmoHud();
+    this.spearAmmoHud.visible = false;
+    this.addChild(this.spearAmmoHud);
 
     // 暂停层（默认隐藏）
     this.pauseLayer = new Container();
@@ -408,6 +424,10 @@ export class LevelScene extends Container implements GameScene {
     this.selectingCharacter = false;
     this.selectGroundVeil.visible = false;
     this.healthBar.visible = true;
+    this.spearAmmoHud.visible = this.player instanceof IceRanger;
+    if (this.player instanceof IceRanger) {
+      this.spearAmmoHud.setAmmo(this.player.spearAmmo);
+    }
     this.cursor = this.player.canRangedAttack ? 'crosshair' : 'default';
     this.sortLayer.eventMode = 'none';
 
@@ -1121,13 +1141,22 @@ export class LevelScene extends Container implements GameScene {
     this.syncWorldActors();
     player.update(deltaMS, moving && !airborne && knockSpeed < 80);
     this.healthBar.update(deltaMS);
+    if (player instanceof IceRanger) {
+      player.tickSpearAmmo(deltaMS);
+      this.spearAmmoHud.setAmmo(player.spearAmmo);
+    }
 
     for (let si = 0; si < this.spiders.length; si++) {
       const spider = this.spiders[si]!;
       if (!spider.isAlive) continue;
       const sFromX = spider.worldX;
       const sFromY = spider.worldY;
-      const result = spider.update(deltaMS, this.worldX, this.worldY);
+      const result = spider.update(
+        deltaMS,
+        this.worldX,
+        this.worldY,
+        PLAYER_HURT_R,
+      );
       this.applySpiderSolid(spider, sFromX, sFromY, si);
       if (result.attackHit) {
         this.applySpiderAttack(result.attackHit);
@@ -1391,17 +1420,35 @@ export class LevelScene extends Container implements GameScene {
     const aim = this.screenAimWorldDelta(screenX, screenY);
     if (!aim) return;
 
+    const aimLen = Math.hypot(aim.dx, aim.dy);
+    if (aimLen < 1e-4) return;
+    const inv = 1 / aimLen;
+    const dirX = aim.dx * inv;
+    const dirY = aim.dy * inv;
+
+    // 数量限制：无弹不可扔
+    if (!player.tryConsumeSpear()) return;
+
     player.setFacingFromMoveX(aim.dx);
     player.playThrowRecoil();
 
+    // 发射反冲：朝投掷反方向小跳；补速不叠速，避免连扔越跳越快
+    applyRecoilHop(
+      this.knock,
+      -dirX,
+      -dirY,
+      SPEAR_THROW_RECOIL_SPEED,
+    );
+
     const origin = player.getThrowOrigin(this.worldX, this.worldY);
-    const spear = new SpearProjectile(origin.x, origin.y, aim.dx, aim.dy, {
+    const spear = new SpearProjectile(origin.x, origin.y, dirX, dirY, {
       originHeight: origin.height,
     });
     this.sortLayer.addChild(spear);
     this.spears.push(spear);
     spear.syncToWorld();
     this.sortDepth();
+    this.spearAmmoHud.setAmmo(player.spearAmmo);
   }
 
   private updateBombs(deltaMS: number): void {
@@ -1442,7 +1489,7 @@ export class LevelScene extends Container implements GameScene {
         for (let s = this.spiders.length - 1; s >= 0; s--) {
           const spider = this.spiders[s]!;
           if (!spider.isAlive) continue;
-          if (!spear.hitsTarget(spider.worldX, spider.worldY, SPIDER_BODY_R)) {
+          if (!spear.hitsTarget(spider.worldX, spider.worldY, SPIDER_HURT_R)) {
             continue;
           }
 
@@ -1466,7 +1513,7 @@ export class LevelScene extends Container implements GameScene {
               !spear.hitsTarget(
                 parked.worldX,
                 parked.worldY,
-                PLAYER_BODY_R,
+                PLAYER_HURT_R,
               )
             ) {
               continue;
@@ -1504,7 +1551,12 @@ export class LevelScene extends Container implements GameScene {
     const player = this.player;
     if (player) {
       const face = player.facingDir;
-      const playerHit = bomb.evaluateHit(this.worldX, this.worldY, face);
+      const playerHit = bomb.evaluateHit(
+        this.worldX,
+        this.worldY,
+        face,
+        PLAYER_HURT_R,
+      );
       if (playerHit) {
         applyKnockImpulse(
           this.knock,
@@ -1525,6 +1577,7 @@ export class LevelScene extends Container implements GameScene {
         parked.worldX,
         parked.worldY,
         parked.worldX >= bomb.groundX ? 1 : -1,
+        PLAYER_HURT_R,
       );
       if (!hit) continue;
       this.applyParkedHitFx(parked, hit, 1);
@@ -1539,6 +1592,7 @@ export class LevelScene extends Container implements GameScene {
         spider.worldX,
         spider.worldY,
         spider.worldX >= bomb.groundX ? 1 : -1,
+        SPIDER_HURT_R,
       );
       if (!hit) continue;
 
@@ -1563,11 +1617,16 @@ export class LevelScene extends Container implements GameScene {
     this.keyboard.clear();
   }
 
-  /** 玩家血条 HUD：固定在屏幕底部居中 */
+  /** 玩家血条 + 飞剑数量 HUD：底部居中，飞剑在血条之上并与血条左对齐 */
   private layoutHealthHud(): void {
-    this.healthBar.position.set(
-      this.viewWidth / 2,
-      this.viewHeight - HUD_HP_MARGIN_BOTTOM,
+    const cx = this.viewWidth / 2;
+    const hpY = this.viewHeight - HUD_HP_MARGIN_BOTTOM;
+    this.healthBar.position.set(cx, hpY);
+    // 血条以中心为原点 → 左缘 cx - width/2；飞剑 HUD 原点在左缘
+    const hpLeft = cx - HUD_HP_WIDTH / 2;
+    this.spearAmmoHud.position.set(
+      hpLeft,
+      hpY - HUD_HP_HEIGHT / 2 - HUD_SPEAR_GAP,
     );
   }
 
