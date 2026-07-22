@@ -366,15 +366,26 @@ export class BombProjectile extends Container {
     return true;
   }
 
+  /**
+   * 写到世界坐标层；zIndex 用落点 Y，飞行物略抬高排序优先级。
+   */
+  syncToWorld(): void {
+    this.position.set(this.groundX, this.groundY - this.arcHeight);
+    this.zIndex = this.groundY + this.arcHeight * 0.01;
+  }
+
   syncToScreen(
     cameraWorldX: number,
     cameraWorldY: number,
     screenCenterX: number,
     screenCenterY: number,
+    zoom = 1,
   ): void {
     this.position.set(
-      this.groundX - cameraWorldX + screenCenterX,
-      this.groundY - cameraWorldY + screenCenterY - this.arcHeight,
+      screenCenterX + (this.groundX - cameraWorldX) * zoom,
+      screenCenterY +
+        (this.groundY - cameraWorldY) * zoom -
+        this.arcHeight * zoom,
     );
   }
 

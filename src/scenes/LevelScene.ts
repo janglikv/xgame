@@ -15,12 +15,16 @@ import {
 import { loadSpiderTexture, Spider } from '../entities/Spider';
 import { Keyboard } from '../input/Keyboard';
 import { HealthBar } from '../ui/HealthBar';
-import { CartoonGrass } from '../world/CartoonGrass';
 import { getThemeBackground, NightOverlay } from '../world/NightOverlay';
+import { GRID, islandCenter, MAP_SIZE, WorldMap } from '../world/WorldMap';
 import type { GameScene, LevelTheme } from './types';
 
 const MOVE_SPEED = 220;
-/** 点太近不扔 */
+/** 玩家脚底碰撞半径 */
+const PLAYER_BODY_R = 18;
+/** 蜘蛛碰撞半径 */
+const SPIDER_BODY_R = 20;
+/** 点太近不扔（屏幕像素） */
 const THROW_MIN_DIST = 12;
 /** 血条相对脚底向上的偏移（屏幕像素） */
 const HP_BAR_OFFSET_Y = 86;
@@ -35,13 +39,18 @@ const SPIDER_KNOCK_SCALE = 0.85;
  */
 const PLAYER_BOMB_STABILITY = DEFAULT_BOMB_STABILITY;
 
-/**
- * 黑夜关卡场地半宽/半高（世界像素，原点在玩家出生点）。
- * 四角蜘蛛放在 (±halfW, ±halfH)。
- */
-const NIGHT_ARENA_HALF_W = 420;
-const NIGHT_ARENA_HALF_H = 300;
 const SPIDER_SCALE = 0.1;
+
+/** 默认出生：九宫格下方正中岛中心（非地图原点） */
+const PLAYER_SPAWN = islandCenter(1, GRID - 1);
+
+/** 镜头缩放：默认 / 最大；最小随窗口动态算（刚好看全图） */
+const ZOOM_DEFAULT = 1;
+const ZOOM_MAX = 1.75;
+/** 按住 +/- 时的缩放速度（每秒倍率） */
+const ZOOM_KEY_RATE = 1.35;
+/** 滚轮单次倍率 */
+const ZOOM_WHEEL_STEP = 1.12;
 
 export type LevelSceneOptions = {
   theme: LevelTheme;
@@ -59,21 +68,28 @@ type PauseButton = {
 };
 
 /**
- * 可玩关卡：白天 / 黑夜草地，WASD 移动，点击抛物线扔炸弹，Esc 暂停。
- * 黑夜 = 白天草地 + NightOverlay 叠加，不单独换色盘。
+ * 可玩关卡：白天 / 黑夜地图，WASD 移动，点击抛物线扔炸弹，Esc 暂停。
+ * 滚轮 / +/- 缩放，0 复位，F 看全景。
+ * 纵深：worldRoot 镜头变换 + sortLayer 按脚底 Y 排序（树/角色/炸弹互遮）。
+ * 黑夜 = 白天地图 + NightOverlay 叠加，不单独换色盘。
  */
 export class LevelScene extends Container implements GameScene {
-  /** 世界层：草地 + 可选夜景叠加（角色在此层之上） */
-  private readonly worldLayer: Container;
-  private readonly grass: CartoonGrass;
+  /**
+   * 世界根：scale=zoom，position 抵消相机。
+   * 子节点全部使用世界坐标。
+   */
+  private readonly worldRoot: Container;
+  /** 草坪等地面（不参与 Y-sort） */
+  private readonly worldMap: WorldMap;
+  /**
+   * 纵深层：sortableChildren，zIndex = 脚底 worldY。
+   * 含松树、蜘蛛、玩家、炸弹。
+   */
+  private readonly sortLayer: Container;
   private readonly nightOverlay: NightOverlay | null;
   private readonly archer: FrostArcher;
   private readonly healthBar: HealthBar;
-  /** 怪物层（草地/夜色之上，角色之下） */
-  private readonly entityLayer: Container;
   private readonly spiders: Spider[] = [];
-  /** 飞行炸弹 / 爆炸特效层（在角色之上，暂停层之下） */
-  private readonly projectileLayer: Container;
   private readonly bombs: BombProjectile[] = [];
   private readonly keyboard = new Keyboard();
   private readonly pauseLayer: Container;
@@ -81,18 +97,28 @@ export class LevelScene extends Container implements GameScene {
   private readonly pausePanel: Graphics;
   private readonly pauseTitle: Text;
   private readonly pauseButtons: PauseButton[] = [];
+  private readonly zoomHud: Text;
   private readonly theme: LevelTheme;
   private readonly onBack: () => void;
   private readonly onBackground?: (color: number) => void;
 
   private viewWidth: number;
   private viewHeight: number;
-  private worldX = 0;
-  private worldY = 0;
+  /** 玩家世界坐标 */
+  private worldX = PLAYER_SPAWN.x;
+  private worldY = PLAYER_SPAWN.y;
+  /** 镜头对准的世界坐标（边界处可与玩家分离） */
+  private camX = PLAYER_SPAWN.x;
+  private camY = PLAYER_SPAWN.y;
+  /** 镜头缩放（1 = 默认） */
+  private zoom = ZOOM_DEFAULT;
   /** 被炸飞：地面平面速度 + 高度抛物线 */
   private readonly knock: KnockArcState = createKnockArcState();
   private paused = false;
   private escWasDown = false;
+  private fitWasDown = false;
+  private resetZoomWasDown = false;
+  private treesMounted = false;
 
   constructor(width: number, height: number, options: LevelSceneOptions) {
     super();
@@ -109,43 +135,38 @@ export class LevelScene extends Container implements GameScene {
     this.hitArea = new Rectangle(0, 0, width, height);
     this.on('pointertap', this.onPointerTap);
 
-    this.worldLayer = new Container();
-    this.worldLayer.label = 'WorldLayer';
-    this.addChild(this.worldLayer);
+    this.worldRoot = new Container();
+    this.worldRoot.label = 'WorldRoot';
+    this.addChild(this.worldRoot);
 
-    // 两关共用同一套白天草地绘制
-    this.grass = new CartoonGrass(options.theme === 'night' ? 99 : 42);
-    this.worldLayer.addChild(this.grass);
+    this.worldMap = new WorldMap();
+    this.worldRoot.addChild(this.worldMap);
+
+    this.sortLayer = new Container();
+    this.sortLayer.label = 'SortLayer';
+    this.sortLayer.sortableChildren = true;
+    this.sortLayer.eventMode = 'none';
+    this.worldRoot.addChild(this.sortLayer);
 
     this.nightOverlay =
       options.theme === 'night' ? new NightOverlay() : null;
     if (this.nightOverlay) {
-      this.worldLayer.addChild(this.nightOverlay);
+      // 屏幕空间叠在世界之上、UI 之下
+      this.addChild(this.nightOverlay);
       this.nightOverlay.layout(width, height);
     }
-
-    // 实体层：蜘蛛等世界单位（夜景之上、玩家之下）
-    this.entityLayer = new Container();
-    this.entityLayer.label = 'EntityLayer';
-    this.entityLayer.eventMode = 'none';
-    this.addChild(this.entityLayer);
 
     if (options.theme === 'night') {
       this.spawnCornerSpiders();
     }
 
     this.archer = new FrostArcher(0.07);
-    this.addChild(this.archer);
+    this.sortLayer.addChild(this.archer);
 
-    // 血条独立挂载，不随角色左右翻转
+    // 血条在屏幕空间，不进 sortLayer（避免被树/角色遮挡 UI）
     this.healthBar = new HealthBar({ maxHp: PLAYER_MAX_HP, width: 50, height: 5 });
     this.healthBar.setHealth(PLAYER_MAX_HP);
     this.addChild(this.healthBar);
-
-    this.projectileLayer = new Container();
-    this.projectileLayer.label = 'ProjectileLayer';
-    this.projectileLayer.eventMode = 'none';
-    this.addChild(this.projectileLayer);
 
     // 暂停层（默认隐藏）
     this.pauseLayer = new Container();
@@ -177,10 +198,25 @@ export class LevelScene extends Container implements GameScene {
       this.createPauseButton('返回主场景', 0x5a6a8a, 0x7a8ab0, () => this.onBack()),
     );
 
-    this.centerArcher();
+    this.zoomHud = new Text({
+      text: '',
+      style: {
+        fontFamily: 'system-ui, sans-serif',
+        fontSize: 13,
+        fontWeight: '500',
+        fill: 0xffffff,
+      },
+    });
+    this.zoomHud.alpha = 0.75;
+    this.zoomHud.eventMode = 'none';
+    this.addChild(this.zoomHud);
+
+    this.updateCameraAndPlayerBounds();
+    this.applyCamera();
+    this.syncWorldActors();
     this.syncHealthBar();
     this.layoutPauseMenu();
-    this.redrawWorld(true);
+    this.layoutZoomHud();
   }
 
   private createPauseButton(
@@ -244,46 +280,188 @@ export class LevelScene extends Container implements GameScene {
   async init(): Promise<void> {
     this.onBackground?.(getThemeBackground(this.theme));
     this.keyboard.bind();
+    window.addEventListener('wheel', this.onWheel, { passive: false });
 
-    const loads: Promise<void>[] = [this.archer.load(), loadBombTextures()];
+    const loads: Promise<void>[] = [
+      this.worldMap.load(),
+      this.archer.load(),
+      loadBombTextures(),
+    ];
     if (this.spiders.length > 0) {
       loads.push(loadSpiderTexture());
     }
     await Promise.all(loads);
 
+    this.mountTrees();
+    this.applyCamera();
     await Promise.all(this.spiders.map((s) => s.load()));
-    this.syncAllSpidersToScreen();
+    this.syncWorldActors();
+    this.cullTrees();
+    this.sortDepth();
   }
 
-  /** 黑夜关：场地四角各一只蜘蛛，出生时朝向中心 */
+  /** 把地图生成的松树挂到 sortLayer，参与 Y-sort */
+  private mountTrees(): void {
+    if (this.treesMounted) return;
+    this.treesMounted = true;
+    for (const tree of this.worldMap.getTrees()) {
+      this.sortLayer.addChild(tree);
+    }
+  }
+
+  /** 黑夜关：九宫格四角岛各一只蜘蛛，出生时朝向中心 */
   private spawnCornerSpiders(): void {
-    const hw = NIGHT_ARENA_HALF_W;
-    const hh = NIGHT_ARENA_HALF_H;
+    const last = GRID - 1;
     const corners: Array<[number, number]> = [
-      [-hw, -hh],
-      [hw, -hh],
-      [-hw, hh],
-      [hw, hh],
+      [0, 0],
+      [last, 0],
+      [0, last],
+      [last, last],
     ];
 
-    for (const [wx, wy] of corners) {
+    for (const [ix, iy] of corners) {
+      const { x: wx, y: wy } = islandCenter(ix, iy);
       const spider = new Spider(wx, wy, { scale: SPIDER_SCALE });
       spider.faceToward(0, 0);
-      this.entityLayer.addChild(spider);
+      this.sortLayer.addChild(spider);
       this.spiders.push(spider);
     }
   }
 
-  private syncAllSpidersToScreen(): void {
-    const cx = this.viewWidth / 2;
-    const cy = this.viewHeight / 2;
+  /** 镜头：worldRoot 缩放 + 平移，使 cam 落在屏幕中心 */
+  private applyCamera(): void {
+    const z = this.zoom;
+    this.worldRoot.scale.set(z);
+    this.worldRoot.position.set(
+      this.viewWidth / 2 - this.camX * z,
+      this.viewHeight / 2 - this.camY * z,
+    );
+  }
+
+  /** 角色/蜘蛛/炸弹写到世界坐标，并刷新 zIndex */
+  private syncWorldActors(): void {
+    this.archer.position.set(this.worldX, this.worldY - this.knock.height);
+    this.archer.zIndex = this.worldY;
     for (const spider of this.spiders) {
-      spider.syncToScreen(this.worldX, this.worldY, cx, cy);
+      spider.syncToWorld();
     }
+    for (const bomb of this.bombs) {
+      bomb.syncToWorld();
+    }
+  }
+
+  /** 视口外松树不渲染（仍保留在 sortLayer） */
+  private cullTrees(): void {
+    const z = Math.max(this.zoom, 1e-4);
+    const pad = 140;
+    const hw = this.viewWidth / (2 * z) + pad;
+    const hh = this.viewHeight / (2 * z) + pad;
+    const cx = this.camX;
+    const cy = this.camY;
+    for (const tree of this.worldMap.getTrees()) {
+      tree.renderable =
+        Math.abs(tree.worldX - cx) <= hw && Math.abs(tree.worldY - cy) <= hh;
+    }
+  }
+
+  /** 按 zIndex（脚底 Y）重排 sortLayer */
+  private sortDepth(): void {
+    this.sortLayer.sortChildren();
+  }
+
+  /**
+   * 应用本帧位移：树区碰撞（轴分离滑动）+ 地图边界。
+   * from = 移动前；会写回 worldX/Y。
+   */
+  private applyPlayerSolid(fromX: number, fromY: number): void {
+    const solid = WorldMap.resolveSolid(
+      fromX,
+      fromY,
+      this.worldX,
+      this.worldY,
+      PLAYER_BODY_R,
+    );
+    this.worldX = solid.x;
+    this.worldY = solid.y;
+  }
+
+  /** 玩家限在地图内，镜头跟随并钳到不露图外（视口随 zoom 折算成世界尺寸） */
+  private updateCameraAndPlayerBounds(): void {
+    // 无位移时也再解析一次，防止击飞/外力后卡在树里
+    const solid = WorldMap.resolveSolid(
+      this.worldX,
+      this.worldY,
+      this.worldX,
+      this.worldY,
+      PLAYER_BODY_R,
+    );
+    this.worldX = solid.x;
+    this.worldY = solid.y;
+
+    const z = Math.max(this.zoom, 1e-4);
+    const cam = WorldMap.clampCamera(
+      this.worldX,
+      this.worldY,
+      this.viewWidth / z,
+      this.viewHeight / z,
+    );
+    this.camX = cam.x;
+    this.camY = cam.y;
+  }
+
+  /** 当前窗口下能看全地图的最小缩放 */
+  private getMinZoom(): number {
+    if (this.viewWidth <= 0 || this.viewHeight <= 0) return 0.15;
+    return Math.min(this.viewWidth / MAP_SIZE, this.viewHeight / MAP_SIZE) * 0.92;
+  }
+
+  private setZoom(next: number): void {
+    const min = this.getMinZoom();
+    const z = Math.min(ZOOM_MAX, Math.max(min, next));
+    if (Math.abs(z - this.zoom) < 1e-4) {
+      this.layoutZoomHud();
+      return;
+    }
+    this.zoom = z;
+    this.updateCameraAndPlayerBounds();
+    this.applyCamera();
+    this.syncWorldActors();
+    this.cullTrees();
+    this.sortDepth();
+    this.syncHealthBar();
+    this.layoutZoomHud();
+  }
+
+  /** 缩到刚好看全图，镜头回到地图中心 */
+  private fitOverview(): void {
+    this.zoom = this.getMinZoom();
+    this.camX = 0;
+    this.camY = 0;
+    this.updateCameraAndPlayerBounds();
+    this.applyCamera();
+    this.syncWorldActors();
+    this.cullTrees();
+    this.sortDepth();
+    this.syncHealthBar();
+    this.layoutZoomHud();
+  }
+
+  private readonly onWheel = (e: WheelEvent): void => {
+    if (this.paused) return;
+    e.preventDefault();
+    const dir = e.deltaY > 0 ? 1 / ZOOM_WHEEL_STEP : ZOOM_WHEEL_STEP;
+    this.setZoom(this.zoom * dir);
+  };
+
+  private layoutZoomHud(): void {
+    const pct = Math.round(this.zoom * 100);
+    this.zoomHud.text = `缩放 ${pct}%  ·  滚轮/+-  ·  F 全景  ·  0 复位`;
+    this.zoomHud.position.set(12, this.viewHeight - 28);
   }
 
   destroy(options?: Parameters<Container['destroy']>[0]): void {
     this.off('pointertap', this.onPointerTap);
+    window.removeEventListener('wheel', this.onWheel);
     this.keyboard.unbind();
     super.destroy(options);
   }
@@ -295,6 +473,9 @@ export class LevelScene extends Container implements GameScene {
     }
     this.escWasDown = escDown;
 
+    // 缩放快捷键在暂停时也可用（方便看全景）
+    this.handleZoomKeys(deltaMS / 1000);
+
     if (this.paused) {
       // 暂停时角色回正、不处理移动；炸弹也冻结
       this.archer.update(deltaMS, false);
@@ -304,6 +485,8 @@ export class LevelScene extends Container implements GameScene {
     const dt = deltaMS / 1000;
     const { x, y } = this.keyboard.getMoveAxis();
     let moved = false;
+    const fromX = this.worldX;
+    const fromY = this.worldY;
 
     // 被炸飞：抛物线（地面推开 + 高度起落）
     const knockStep = stepKnockArc(this.knock, dt);
@@ -330,30 +513,41 @@ export class LevelScene extends Container implements GameScene {
       moved = true;
     }
 
-    // 玩家固定屏幕中心，高度用竖直抬升表现
-    this.centerArcher();
-
     if (moved) {
-      this.redrawWorld(false);
-      this.syncAllSpidersToScreen();
+      this.applyPlayerSolid(fromX, fromY);
+      this.updateCameraAndPlayerBounds();
+      this.applyCamera();
+      this.cullTrees();
     }
 
+    this.syncWorldActors();
     this.archer.update(deltaMS, moving && !airborne && knockSpeed < 80);
     this.healthBar.update(deltaMS);
     this.syncHealthBar();
 
-    let spidersMoved = false;
     for (const spider of this.spiders) {
       if (!spider.isAlive) continue;
+      const sFromX = spider.worldX;
+      const sFromY = spider.worldY;
       const result = spider.update(deltaMS, this.worldX, this.worldY);
-      if (result.moved) spidersMoved = true;
+      if (result.moved) {
+        const solid = WorldMap.resolveSolid(
+          sFromX,
+          sFromY,
+          spider.worldX,
+          spider.worldY,
+          SPIDER_BODY_R,
+        );
+        spider.worldX = solid.x;
+        spider.worldY = solid.y;
+      }
       if (result.attackHit) {
         this.applySpiderAttack(result.attackHit);
       }
     }
-    if (spidersMoved) this.syncAllSpidersToScreen();
 
     this.updateBombs(deltaMS);
+    this.sortDepth();
   }
 
   /** 蜘蛛扑咬命中：扣血 + 轻击退 + 姿态反馈 */
@@ -371,21 +565,54 @@ export class LevelScene extends Container implements GameScene {
     );
     // 轻伤姿态（不转圈）
     this.archer.playBlastKnock(0.45, hit.dirX, 0);
-    this.centerArcher();
+    this.updateCameraAndPlayerBounds();
+    this.applyCamera();
+    this.syncWorldActors();
     this.syncHealthBar();
+    this.sortDepth();
   }
 
   resize(width: number, height: number): void {
     this.viewWidth = width;
     this.viewHeight = height;
     this.hitArea = new Rectangle(0, 0, width, height);
-    this.centerArcher();
+    this.zoom = Math.min(ZOOM_MAX, Math.max(this.getMinZoom(), this.zoom));
+    this.updateCameraAndPlayerBounds();
+    this.applyCamera();
+    this.syncWorldActors();
+    this.cullTrees();
+    this.sortDepth();
     this.syncHealthBar();
     this.nightOverlay?.layout(width, height);
     this.layoutPauseMenu();
-    this.redrawWorld(true);
-    this.syncAllBombsToScreen();
-    this.syncAllSpidersToScreen();
+    this.layoutZoomHud();
+  }
+
+  private handleZoomKeys(dt: number): void {
+    const fitDown =
+      this.keyboard.isDown('KeyF') || this.keyboard.isDown('KeyM');
+    if (fitDown && !this.fitWasDown) {
+      this.fitOverview();
+    }
+    this.fitWasDown = fitDown;
+
+    const resetDown =
+      this.keyboard.isDown('Digit0') || this.keyboard.isDown('Numpad0');
+    if (resetDown && !this.resetZoomWasDown) {
+      this.setZoom(ZOOM_DEFAULT);
+    }
+    this.resetZoomWasDown = resetDown;
+
+    const zoomIn =
+      this.keyboard.isDown('Equal') ||
+      this.keyboard.isDown('NumpadAdd');
+    const zoomOut =
+      this.keyboard.isDown('Minus') ||
+      this.keyboard.isDown('NumpadSubtract');
+    if (zoomIn === zoomOut) return;
+
+    const factor = Math.pow(ZOOM_KEY_RATE, dt);
+    this.setZoom(this.zoom * (zoomIn ? factor : 1 / factor));
   }
 
   private readonly onPointerTap = (e: {
@@ -396,22 +623,25 @@ export class LevelScene extends Container implements GameScene {
   };
 
   /**
-   * 以角色（屏幕中心 / 世界原点）为起点抛物线扔炸弹。
+   * 以角色屏幕位置为起点抛物线扔炸弹。
    * 射程内落点 = 点击位置；超出则钳到最远方向。
    */
   private throwBombAtScreen(screenX: number, screenY: number): void {
-    const cx = this.viewWidth / 2;
-    const cy = this.viewHeight / 2;
-    const dx = screenX - cx;
-    const dy = screenY - cy;
-    const dist = Math.hypot(dx, dy);
+    const z = this.zoom;
+    const playerSx = this.viewWidth / 2 + (this.worldX - this.camX) * z;
+    const playerSy = this.viewHeight / 2 + (this.worldY - this.camY) * z;
+    const screenDx = screenX - playerSx;
+    const screenDy = screenY - playerSy;
+    const screenDist = Math.hypot(screenDx, screenDy);
 
-    if (dist < THROW_MIN_DIST) return;
+    if (screenDist < THROW_MIN_DIST) return;
 
-    let landDx = dx;
-    let landDy = dy;
-    if (dist > BOMB_MAX_RANGE) {
-      const s = BOMB_MAX_RANGE / dist;
+    // 屏幕位移 → 世界位移
+    let landDx = screenDx / z;
+    let landDy = screenDy / z;
+    const worldDist = Math.hypot(landDx, landDy);
+    if (worldDist > BOMB_MAX_RANGE) {
+      const s = BOMB_MAX_RANGE / worldDist;
       landDx *= s;
       landDy *= s;
     }
@@ -428,19 +658,17 @@ export class LevelScene extends Container implements GameScene {
     const bomb = new BombProjectile(startX, startY, endX, endY, {
       stability: PLAYER_BOMB_STABILITY,
     });
-    this.projectileLayer.addChild(bomb);
+    this.sortLayer.addChild(bomb);
     this.bombs.push(bomb);
-    bomb.syncToScreen(this.worldX, this.worldY, cx, cy);
+    bomb.syncToWorld();
+    this.sortDepth();
   }
 
   private updateBombs(deltaMS: number): void {
-    const cx = this.viewWidth / 2;
-    const cy = this.viewHeight / 2;
-
     for (let i = this.bombs.length - 1; i >= 0; i--) {
       const bomb = this.bombs[i]!;
       const phase = bomb.update(deltaMS);
-      bomb.syncToScreen(this.worldX, this.worldY, cx, cy);
+      bomb.syncToWorld();
 
       // 落地瞬间：用该炸弹自身的 blast 属性结算伤害 / 击飞
       if (bomb.consumeBlastResolve()) {
@@ -448,7 +676,7 @@ export class LevelScene extends Container implements GameScene {
       }
 
       if (phase === 'done') {
-        this.projectileLayer.removeChild(bomb);
+        this.sortLayer.removeChild(bomb);
         bomb.destroy({ children: true });
         this.bombs.splice(i, 1);
       }
@@ -491,19 +719,14 @@ export class LevelScene extends Container implements GameScene {
       anySpider = true;
       const alive = spider.applyBlastHit(hit, SPIDER_KNOCK_SCALE);
       if (!alive) {
-        this.entityLayer.removeChild(spider);
+        this.sortLayer.removeChild(spider);
         spider.destroy({ children: true });
         this.spiders.splice(i, 1);
       }
     }
-    if (anySpider) this.syncAllSpidersToScreen();
-  }
-
-  private syncAllBombsToScreen(): void {
-    const cx = this.viewWidth / 2;
-    const cy = this.viewHeight / 2;
-    for (const bomb of this.bombs) {
-      bomb.syncToScreen(this.worldX, this.worldY, cx, cy);
+    if (anySpider) {
+      this.syncWorldActors();
+      this.sortDepth();
     }
   }
 
@@ -514,20 +737,15 @@ export class LevelScene extends Container implements GameScene {
     this.keyboard.clear();
   }
 
-  private centerArcher(): void {
-    // 击飞高度：屏幕向上抬（世界 Y 是地面平面，高度单独叠）
-    this.archer.position.set(
-      this.viewWidth / 2,
-      this.viewHeight / 2 - this.knock.height,
-    );
-  }
-
-  /** 血条钉在角色头顶（脚底原点向上） */
+  /** 血条：世界坐标 → 屏幕坐标，钉在角色头顶 */
   private syncHealthBar(): void {
-    this.healthBar.position.set(
-      this.archer.x,
-      this.archer.y - HP_BAR_OFFSET_Y,
-    );
+    const z = this.zoom;
+    const sx = this.viewWidth / 2 + (this.worldX - this.camX) * z;
+    const sy =
+      this.viewHeight / 2 +
+      (this.worldY - this.camY) * z -
+      this.knock.height * z;
+    this.healthBar.position.set(sx, sy - HP_BAR_OFFSET_Y * z);
   }
 
   private layoutPauseMenu(): void {
@@ -572,13 +790,4 @@ export class LevelScene extends Container implements GameScene {
     }
   }
 
-  private redrawWorld(force: boolean): void {
-    this.grass.draw(
-      this.viewWidth,
-      this.viewHeight,
-      this.worldX,
-      this.worldY,
-      force,
-    );
-  }
 }

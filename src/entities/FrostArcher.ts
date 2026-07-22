@@ -55,6 +55,8 @@ const ANCHOR_CENTER_Y = 0.5;
 export class FrostArcher extends Container {
   private sprite: Sprite | null = null;
   private readonly baseScale: number;
+  /** 镜头缩放倍率（与地图 zoom 同步） */
+  private viewScale = 1;
   /** 1 = 朝右，-1 = 朝左 */
   private facing: 1 | -1 = 1;
   /** 走路相位 */
@@ -81,7 +83,7 @@ export class FrostArcher extends Container {
     super();
     this.label = 'FrostArcher';
     this.baseScale = scale;
-    this.scale.set(scale);
+    this.applyContainerScale();
   }
 
   async load(): Promise<void> {
@@ -95,6 +97,20 @@ export class FrostArcher extends Container {
     this.addChild(sprite);
   }
 
+  /** 与镜头 zoom 同步，保证缩全景时角色相对地图正确 */
+  setViewScale(zoom: number): void {
+    const z = Math.max(1e-4, zoom);
+    if (Math.abs(z - this.viewScale) < 1e-6) return;
+    this.viewScale = z;
+    this.applyContainerScale();
+  }
+
+  private applyContainerScale(): void {
+    const s = this.baseScale * this.viewScale;
+    this.scale.x = s * this.facing;
+    this.scale.y = s;
+  }
+
   /**
    * 根据水平移动方向左右翻转。
    * @param dirX 负值朝左，正值朝右；0 保持不变
@@ -104,8 +120,7 @@ export class FrostArcher extends Container {
     const next: 1 | -1 = dirX < 0 ? -1 : 1;
     if (next === this.facing) return;
     this.facing = next;
-    this.scale.x = this.baseScale * next;
-    this.scale.y = this.baseScale;
+    this.applyContainerScale();
   }
 
   /** 扔炸弹瞬间触发：身体后仰一下再回正 */

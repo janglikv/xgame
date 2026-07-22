@@ -228,19 +228,30 @@ export class Spider extends Container {
   }
 
   /**
-   * 按摄像机把世界坐标写到屏幕位置。
-   * 玩家固定屏幕中心，摄像机原点 = 玩家世界坐标。
+   * 写到世界坐标层（父级 worldRoot 负责镜头）。
+   * zIndex = 脚底 worldY，参与纵深排序。
+   */
+  syncToWorld(): void {
+    this.position.set(this.worldX, this.worldY - this.knock.height);
+    this.zIndex = this.worldY;
+  }
+
+  /**
+   * 按摄像机把世界坐标写到屏幕位置（旧 API，屏幕空间场景用）。
+   * @param zoom 镜头缩放（与地图一致）
    */
   syncToScreen(
     cameraWorldX: number,
     cameraWorldY: number,
     screenCenterX: number,
     screenCenterY: number,
+    zoom = 1,
   ): void {
-    // 高度抛物线：屏幕向上抬
     this.position.set(
-      this.worldX - cameraWorldX + screenCenterX,
-      this.worldY - cameraWorldY + screenCenterY - this.knock.height,
+      screenCenterX + (this.worldX - cameraWorldX) * zoom,
+      screenCenterY +
+        (this.worldY - cameraWorldY) * zoom -
+        this.knock.height * zoom,
     );
   }
 

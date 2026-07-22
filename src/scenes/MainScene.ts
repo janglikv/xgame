@@ -1,6 +1,8 @@
 import { Container, Graphics, Text } from 'pixi.js';
-import { CartoonGrass } from '../world/CartoonGrass';
 import type { GameScene, LevelTheme } from './types';
+
+/** 主场景纯色背景 */
+const BG_COLOR = 0x2a3a28;
 
 export type MainSceneOptions = {
   onSelectLevel: (theme: LevelTheme) => void;
@@ -21,8 +23,7 @@ type MenuButton = {
  * 主场景：选择进入白天关或黑夜关。
  */
 export class MainScene extends Container implements GameScene {
-  private readonly grass: CartoonGrass;
-  private readonly veil: Graphics;
+  private readonly bg: Graphics;
   private readonly title: Text;
   private readonly subtitle: Text;
   private readonly buttons: MenuButton[] = [];
@@ -30,7 +31,6 @@ export class MainScene extends Container implements GameScene {
   private readonly onBackground?: (color: number) => void;
   private viewWidth: number;
   private viewHeight: number;
-  private driftT = 0;
 
   constructor(width: number, height: number, options: MainSceneOptions) {
     super();
@@ -40,13 +40,10 @@ export class MainScene extends Container implements GameScene {
     this.onSelectLevel = options.onSelectLevel;
     this.onBackground = options.onBackground;
 
-    this.grass = new CartoonGrass(7);
-    this.addChild(this.grass);
-
-    this.veil = new Graphics();
-    this.veil.label = 'Veil';
-    this.veil.rect(0, 0, width, height).fill({ color: 0x0b1520, alpha: 0.28 });
-    this.addChild(this.veil);
+    this.bg = new Graphics();
+    this.bg.label = 'SolidBg';
+    this.addChild(this.bg);
+    this.paintBg(width, height);
 
     this.title = new Text({
       text: 'lu-o-lu',
@@ -56,7 +53,7 @@ export class MainScene extends Container implements GameScene {
         fontWeight: '700',
         fill: 0xffffff,
         dropShadow: {
-          color: 0x1a3a0a,
+          color: 0x0a1208,
           blur: 6,
           distance: 3,
           angle: Math.PI / 4,
@@ -71,7 +68,7 @@ export class MainScene extends Container implements GameScene {
       style: {
         fontFamily: 'system-ui, sans-serif',
         fontSize: 20,
-        fill: 0xf0ffe8,
+        fill: 0xd8e8d0,
       },
     });
     this.subtitle.anchor.set(0.5);
@@ -83,7 +80,10 @@ export class MainScene extends Container implements GameScene {
     );
 
     this.layout();
-    this.grass.draw(width, height, 0, 0, true);
+  }
+
+  private paintBg(width: number, height: number): void {
+    this.bg.clear().rect(0, 0, width, height).fill({ color: BG_COLOR });
   }
 
   private createButton(
@@ -154,24 +154,17 @@ export class MainScene extends Container implements GameScene {
   }
 
   async init(): Promise<void> {
-    this.onBackground?.(0x5a8f3c);
+    this.onBackground?.(BG_COLOR);
   }
 
-  update(deltaMS: number): void {
-    this.driftT += deltaMS * 0.02;
-    const camX = Math.sin(this.driftT * 0.0015) * 40;
-    const camY = Math.cos(this.driftT * 0.0011) * 30;
-    this.grass.draw(this.viewWidth, this.viewHeight, camX, camY, false);
+  update(_deltaMS: number): void {
+    // 主菜单无需逐帧更新
   }
 
   resize(width: number, height: number): void {
     this.viewWidth = width;
     this.viewHeight = height;
-    this.veil
-      .clear()
-      .rect(0, 0, width, height)
-      .fill({ color: 0x0b1520, alpha: 0.28 });
-    this.grass.draw(width, height, 0, 0, true);
+    this.paintBg(width, height);
     this.layout();
   }
 
