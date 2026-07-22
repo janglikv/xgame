@@ -1,11 +1,12 @@
 import { Container, Graphics } from 'pixi.js';
 
 /**
- * 叠在白天场景上的黑夜效果：
+ * 叠在白天场景上的黑夜效果（仅环境地面）：
  * 1) multiply 冷色层 — 草地/花整体压暗并偏蓝
  * 2) 半透明遮罩 — 再压一层环境暗度
  *
- * 只应盖住世界层，角色可放在此层之上保持可读。
+ * 应夹在「草坪」与「角色/怪/特效」之间，或只盖 worldMap。
+ * 松树用 tint 单独压暗，勿用本层盖住 sortLayer。
  */
 export class NightOverlay extends Container {
   private readonly multiply: Graphics;

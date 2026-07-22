@@ -16,8 +16,17 @@ import { loadSpiderTexture, Spider } from '../entities/Spider';
 import { Keyboard } from '../input/Keyboard';
 import { HealthBar } from '../ui/HealthBar';
 import { getThemeBackground, NightOverlay } from '../world/NightOverlay';
-import { GRID, islandCenter, MAP_SIZE, WorldMap } from '../world/WorldMap';
+import {
+  GRID,
+  islandCenter,
+  MAP_SIZE,
+  MAP_WORLD_HALF,
+  WorldMap,
+} from '../world/WorldMap';
 import type { GameScene, LevelTheme } from './types';
+
+/** 黑夜松树冷色 tint（环境变暗，不盖角色） */
+const NIGHT_TREE_TINT = 0x6a7f9e;
 
 const MOVE_SPEED = 220;
 /** 玩家脚底碰撞半径 */
@@ -46,7 +55,7 @@ const PLAYER_SPAWN = islandCenter(1, GRID - 1);
 
 /** 镜头缩放：默认 / 最大；最小随窗口动态算（刚好看全图） */
 const ZOOM_DEFAULT = 1;
-const ZOOM_MAX = 1.75;
+const ZOOM_MAX = 1;
 /** 按住 +/- 时的缩放速度（每秒倍率） */
 const ZOOM_KEY_RATE = 1.35;
 /** 滚轮单次倍率 */
@@ -97,7 +106,6 @@ export class LevelScene extends Container implements GameScene {
   private readonly pausePanel: Graphics;
   private readonly pauseTitle: Text;
   private readonly pauseButtons: PauseButton[] = [];
-  private readonly zoomHud: Text;
   private readonly theme: LevelTheme;
   private readonly onBack: () => void;
   private readonly onBackground?: (color: number) => void;
@@ -142,19 +150,20 @@ export class LevelScene extends Container implements GameScene {
     this.worldMap = new WorldMap();
     this.worldRoot.addChild(this.worldMap);
 
+    // 夜色只压在地面（草坪）上，不进 sortLayer，避免角色/怪/爆炸变黑
+    this.nightOverlay =
+      options.theme === 'night' ? new NightOverlay() : null;
+    if (this.nightOverlay) {
+      this.nightOverlay.position.set(-MAP_WORLD_HALF, -MAP_WORLD_HALF);
+      this.nightOverlay.layout(MAP_SIZE, MAP_SIZE);
+      this.worldRoot.addChild(this.nightOverlay);
+    }
+
     this.sortLayer = new Container();
     this.sortLayer.label = 'SortLayer';
     this.sortLayer.sortableChildren = true;
     this.sortLayer.eventMode = 'none';
     this.worldRoot.addChild(this.sortLayer);
-
-    this.nightOverlay =
-      options.theme === 'night' ? new NightOverlay() : null;
-    if (this.nightOverlay) {
-      // 屏幕空间叠在世界之上、UI 之下
-      this.addChild(this.nightOverlay);
-      this.nightOverlay.layout(width, height);
-    }
 
     if (options.theme === 'night') {
       this.spawnCornerSpiders();
@@ -198,25 +207,11 @@ export class LevelScene extends Container implements GameScene {
       this.createPauseButton('返回主场景', 0x5a6a8a, 0x7a8ab0, () => this.onBack()),
     );
 
-    this.zoomHud = new Text({
-      text: '',
-      style: {
-        fontFamily: 'system-ui, sans-serif',
-        fontSize: 13,
-        fontWeight: '500',
-        fill: 0xffffff,
-      },
-    });
-    this.zoomHud.alpha = 0.75;
-    this.zoomHud.eventMode = 'none';
-    this.addChild(this.zoomHud);
-
     this.updateCameraAndPlayerBounds();
     this.applyCamera();
     this.syncWorldActors();
     this.syncHealthBar();
     this.layoutPauseMenu();
-    this.layoutZoomHud();
   }
 
   private createPauseButton(
@@ -304,7 +299,10 @@ export class LevelScene extends Container implements GameScene {
   private mountTrees(): void {
     if (this.treesMounted) return;
     this.treesMounted = true;
+    const nightTint = this.theme === 'night';
     for (const tree of this.worldMap.getTrees()) {
+      // 环境树单独冷色 tint；角色/怪/爆炸保持原色
+      if (nightTint) tree.tint = NIGHT_TREE_TINT;
       this.sortLayer.addChild(tree);
     }
   }
@@ -418,10 +416,7 @@ export class LevelScene extends Container implements GameScene {
   private setZoom(next: number): void {
     const min = this.getMinZoom();
     const z = Math.min(ZOOM_MAX, Math.max(min, next));
-    if (Math.abs(z - this.zoom) < 1e-4) {
-      this.layoutZoomHud();
-      return;
-    }
+    if (Math.abs(z - this.zoom) < 1e-4) return;
     this.zoom = z;
     this.updateCameraAndPlayerBounds();
     this.applyCamera();
@@ -429,7 +424,6 @@ export class LevelScene extends Container implements GameScene {
     this.cullTrees();
     this.sortDepth();
     this.syncHealthBar();
-    this.layoutZoomHud();
   }
 
   /** 缩到刚好看全图，镜头回到地图中心 */
@@ -443,7 +437,6 @@ export class LevelScene extends Container implements GameScene {
     this.cullTrees();
     this.sortDepth();
     this.syncHealthBar();
-    this.layoutZoomHud();
   }
 
   private readonly onWheel = (e: WheelEvent): void => {
@@ -452,12 +445,6 @@ export class LevelScene extends Container implements GameScene {
     const dir = e.deltaY > 0 ? 1 / ZOOM_WHEEL_STEP : ZOOM_WHEEL_STEP;
     this.setZoom(this.zoom * dir);
   };
-
-  private layoutZoomHud(): void {
-    const pct = Math.round(this.zoom * 100);
-    this.zoomHud.text = `缩放 ${pct}%  ·  滚轮/+-  ·  F 全景  ·  0 复位`;
-    this.zoomHud.position.set(12, this.viewHeight - 28);
-  }
 
   destroy(options?: Parameters<Container['destroy']>[0]): void {
     this.off('pointertap', this.onPointerTap);
@@ -583,9 +570,8 @@ export class LevelScene extends Container implements GameScene {
     this.cullTrees();
     this.sortDepth();
     this.syncHealthBar();
-    this.nightOverlay?.layout(width, height);
+    // 夜色层按地图尺寸铺在地面，不随视口改
     this.layoutPauseMenu();
-    this.layoutZoomHud();
   }
 
   private handleZoomKeys(dt: number): void {

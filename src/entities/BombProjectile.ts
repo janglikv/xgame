@@ -411,5 +411,7 @@ export class BombProjectile extends Container {
     this.explosion.visible = true;
     this.explosion.alpha = 1;
     this.explosion.scale.set(this.explosionScale * 0.55);
+    // 每次爆炸随机旋转，避免特效朝向雷同
+    this.explosion.rotation = Math.random() * Math.PI * 2;
   }
 }
