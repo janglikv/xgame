@@ -24,6 +24,11 @@ import { Keyboard } from '../input/Keyboard';
 import { HealthBar } from '../ui/HealthBar';
 import { getThemeBackground, NightOverlay } from '../world/NightOverlay';
 import {
+  circlesOverlap,
+  pushCircleOut,
+  pushCircleOutMany,
+} from '../world/circleBody';
+import {
   GRID,
   islandCenter,
   MAP_SIZE,
@@ -44,10 +49,14 @@ const SELECT_SPACING = 120;
 const SELECT_HIT = { w: 520, h: 900 } as const;
 
 const MOVE_SPEED = 220;
-/** 玩家脚底碰撞半径 */
+/**
+ * 脚底圆形 solid 半径（地面占位，圆心 = worldX/Y）。
+ * 用于挡树、人怪互挡；武器命中另见矛/炸弹逻辑。
+ */
 const PLAYER_BODY_R = 18;
-/** 蜘蛛碰撞半径 */
 const SPIDER_BODY_R = 20;
+/** 实体圆互推后与树区再解析的次数 */
+const BODY_SOLID_ITERS = 2;
 /** 点太近不扔（屏幕像素） */
 const THROW_MIN_DIST = 12;
 /** 玩家 HUD 血条尺寸 / 底边边距（屏幕像素） */
@@ -104,11 +113,16 @@ type CharacterCandidate = {
   hovered: boolean;
 };
 
-/** 选角后留在原地的未选角色 */
+/** 选角后留在场上的未选角色（可被挤走；可吃武器击飞但不掉血） */
 type ParkedCharacter = {
   entity: PlayerCharacterBase;
   worldX: number;
   worldY: number;
+  /** 本帧逻辑开始时的脚底坐标（用于被挤位移 → 走路动画） */
+  frameStartX: number;
+  frameStartY: number;
+  /** 被炸/被矛的地面击飞抛物线（无 HP） */
+  knock: KnockArcState;
 };
 
 /**
@@ -383,6 +397,9 @@ export class LevelScene extends Container implements GameScene {
           entity: c.entity,
           worldX: c.worldX,
           worldY: c.worldY,
+          frameStartX: c.worldX,
+          frameStartY: c.worldY,
+          knock: createKnockArcState(),
         });
       }
     }
@@ -707,7 +724,10 @@ export class LevelScene extends Container implements GameScene {
       this.player.position.set(this.worldX, this.worldY - this.knock.height);
       this.player.zIndex = this.worldY;
       for (const parked of this.parkedCharacters) {
-        parked.entity.position.set(parked.worldX, parked.worldY);
+        parked.entity.position.set(
+          parked.worldX,
+          parked.worldY - parked.knock.height,
+        );
         parked.entity.zIndex = parked.worldY;
       }
     }
@@ -742,19 +762,249 @@ export class LevelScene extends Container implements GameScene {
   }
 
   /**
-   * 应用本帧位移：树区碰撞（轴分离滑动）+ 地图边界。
-   * from = 移动前；会写回 worldX/Y。
+   * 应用本帧位移：树区 + 挤开停场角色 + 脚底圆 vs 蜘蛛 + 地图边界。
+   * 停场角色可被挤走；蜘蛛仍为硬障碍。from = 移动前，用于轴分离滑墙。
    */
   private applyPlayerSolid(fromX: number, fromY: number): void {
-    const solid = WorldMap.resolveSolid(
-      fromX,
-      fromY,
-      this.worldX,
-      this.worldY,
-      PLAYER_BODY_R,
-    );
-    this.worldX = solid.x;
-    this.worldY = solid.y;
+    let px = this.worldX;
+    let py = this.worldY;
+    let prevX = fromX;
+    let prevY = fromY;
+
+    for (let i = 0; i < BODY_SOLID_ITERS; i++) {
+      const tree = WorldMap.resolveSolid(prevX, prevY, px, py, PLAYER_BODY_R);
+      px = tree.x;
+      py = tree.y;
+
+      // 先把重叠的停场角色挤开（优先动对方）
+      this.shoveParkedFrom(px, py, PLAYER_BODY_R);
+
+      // 蜘蛛：硬墙，推自己
+      const hard = this.collectHardBodyObstacles({
+        includePlayer: false,
+        spiderSkipIndex: -1,
+      });
+      let body = pushCircleOutMany(px, py, PLAYER_BODY_R, hard, 2);
+      // 对方被树卡住时，残留重叠再把自己挤开
+      body = this.pushOutOfParked(body.x, body.y, PLAYER_BODY_R);
+
+      const settled =
+        body.x === px &&
+        body.y === py &&
+        !this.overlapsAnyParked(body.x, body.y, PLAYER_BODY_R);
+      if (settled) {
+        this.worldX = body.x;
+        this.worldY = body.y;
+        return;
+      }
+
+      prevX = px;
+      prevY = py;
+      px = body.x;
+      py = body.y;
+    }
+
+    const finalTree = WorldMap.resolveSolid(prevX, prevY, px, py, PLAYER_BODY_R);
+    this.worldX = finalTree.x;
+    this.worldY = finalTree.y;
+  }
+
+  /**
+   * 蜘蛛本帧落点：树区 + 挤开停场角色 + vs 玩家/其他蜘蛛 + 边界。
+   * 玩家与其它蜘蛛为硬障碍；停场角色可被挤走。
+   */
+  private applySpiderSolid(
+    spider: Spider,
+    fromX: number,
+    fromY: number,
+    spiderIndex: number,
+  ): void {
+    let sx = spider.worldX;
+    let sy = spider.worldY;
+    let prevX = fromX;
+    let prevY = fromY;
+
+    for (let i = 0; i < BODY_SOLID_ITERS; i++) {
+      const tree = WorldMap.resolveSolid(prevX, prevY, sx, sy, SPIDER_BODY_R);
+      sx = tree.x;
+      sy = tree.y;
+
+      this.shoveParkedFrom(sx, sy, SPIDER_BODY_R);
+
+      const hard = this.collectHardBodyObstacles({
+        includePlayer: true,
+        spiderSkipIndex: spiderIndex,
+      });
+      let body = pushCircleOutMany(sx, sy, SPIDER_BODY_R, hard, 2);
+      body = this.pushOutOfParked(body.x, body.y, SPIDER_BODY_R);
+
+      if (
+        body.x === sx &&
+        body.y === sy &&
+        !this.overlapsAnyParked(body.x, body.y, SPIDER_BODY_R)
+      ) {
+        spider.worldX = body.x;
+        spider.worldY = body.y;
+        return;
+      }
+
+      prevX = sx;
+      prevY = sy;
+      sx = body.x;
+      sy = body.y;
+    }
+
+    const finalTree = WorldMap.resolveSolid(prevX, prevY, sx, sy, SPIDER_BODY_R);
+    spider.worldX = finalTree.x;
+    spider.worldY = finalTree.y;
+  }
+
+  /**
+   * 以 pusher 为轴，把所有重叠的停场角色挤开，再解析他们的树/硬障碍。
+   * 优先移动停场角色（可被挤走），而不是挡住推动者。
+   */
+  private shoveParkedFrom(
+    pusherX: number,
+    pusherY: number,
+    pusherR: number,
+  ): void {
+    if (this.parkedCharacters.length === 0) return;
+
+    for (let n = 0; n < BODY_SOLID_ITERS; n++) {
+      let any = false;
+      for (let i = 0; i < this.parkedCharacters.length; i++) {
+        const parked = this.parkedCharacters[i]!;
+        if (
+          !circlesOverlap(
+            pusherX,
+            pusherY,
+            pusherR,
+            parked.worldX,
+            parked.worldY,
+            PLAYER_BODY_R,
+          )
+        ) {
+          continue;
+        }
+
+        const fromX = parked.worldX;
+        const fromY = parked.worldY;
+        // 只动停场角色：从推动者圆心推出
+        const shoved = pushCircleOut(
+          parked.worldX,
+          parked.worldY,
+          PLAYER_BODY_R,
+          pusherX,
+          pusherY,
+          pusherR,
+        );
+        parked.worldX = shoved.x;
+        parked.worldY = shoved.y;
+        this.resolveParkedSolid(parked, fromX, fromY, i);
+        any = true;
+      }
+      if (!any) break;
+    }
+  }
+
+  /**
+   * 停场角色被挤后的落点：树区 + 蜘蛛/其他停场（硬）+ 地图边界。
+   * 不把推动者算进硬障碍，避免立刻把人又推回推动者体内。
+   */
+  private resolveParkedSolid(
+    parked: ParkedCharacter,
+    fromX: number,
+    fromY: number,
+    parkedIndex: number,
+  ): void {
+    let x = parked.worldX;
+    let y = parked.worldY;
+    let prevX = fromX;
+    let prevY = fromY;
+
+    for (let i = 0; i < BODY_SOLID_ITERS; i++) {
+      const tree = WorldMap.resolveSolid(prevX, prevY, x, y, PLAYER_BODY_R);
+      x = tree.x;
+      y = tree.y;
+
+      const hard: Array<{ x: number; y: number; r: number }> = [];
+      // 操作中的玩家：硬挡（被炸飞时不穿进玩家）
+      if (this.player && !this.selectingCharacter) {
+        hard.push({ x: this.worldX, y: this.worldY, r: PLAYER_BODY_R });
+      }
+      for (const s of this.spiders) {
+        if (!s.isAlive) continue;
+        hard.push({ x: s.worldX, y: s.worldY, r: SPIDER_BODY_R });
+      }
+      for (let j = 0; j < this.parkedCharacters.length; j++) {
+        if (j === parkedIndex) continue;
+        const o = this.parkedCharacters[j]!;
+        hard.push({ x: o.worldX, y: o.worldY, r: PLAYER_BODY_R });
+      }
+
+      const body = pushCircleOutMany(x, y, PLAYER_BODY_R, hard, 2);
+      if (body.x === x && body.y === y) {
+        parked.worldX = x;
+        parked.worldY = y;
+        return;
+      }
+      prevX = x;
+      prevY = y;
+      x = body.x;
+      y = body.y;
+    }
+
+    const finalTree = WorldMap.resolveSolid(prevX, prevY, x, y, PLAYER_BODY_R);
+    parked.worldX = finalTree.x;
+    parked.worldY = finalTree.y;
+  }
+
+  /** 推动者仍与某停场角色重叠时，把自己挤开（对方已贴墙推不动） */
+  private pushOutOfParked(
+    x: number,
+    y: number,
+    radius: number,
+  ): { x: number; y: number } {
+    const obstacles = this.parkedCharacters.map((p) => ({
+      x: p.worldX,
+      y: p.worldY,
+      r: PLAYER_BODY_R,
+    }));
+    return pushCircleOutMany(x, y, radius, obstacles, 2);
+  }
+
+  private overlapsAnyParked(x: number, y: number, radius: number): boolean {
+    for (const p of this.parkedCharacters) {
+      if (
+        circlesOverlap(x, y, radius, p.worldX, p.worldY, PLAYER_BODY_R)
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * 硬障碍脚底圆：玩家、蜘蛛（停场角色可被挤，不在此列）。
+   */
+  private collectHardBodyObstacles(options: {
+    includePlayer: boolean;
+    spiderSkipIndex: number;
+  }): Array<{ x: number; y: number; r: number }> {
+    const out: Array<{ x: number; y: number; r: number }> = [];
+
+    if (options.includePlayer && this.player && !this.selectingCharacter) {
+      out.push({ x: this.worldX, y: this.worldY, r: PLAYER_BODY_R });
+    }
+
+    for (let i = 0; i < this.spiders.length; i++) {
+      if (i === options.spiderSkipIndex) continue;
+      const s = this.spiders[i]!;
+      if (!s.isAlive) continue;
+      out.push({ x: s.worldX, y: s.worldY, r: SPIDER_BODY_R });
+    }
+
+    return out;
   }
 
   /** 当前窗口下能看全地图的最小缩放 */
@@ -824,6 +1074,12 @@ export class LevelScene extends Container implements GameScene {
       return;
     }
 
+    // 帧初快照：供停场角色被挤后算位移（须在 solid 之前）
+    for (const parked of this.parkedCharacters) {
+      parked.frameStartX = parked.worldX;
+      parked.frameStartY = parked.worldY;
+    }
+
     const { x, y } = this.keyboard.getMoveAxis();
     let moved = false;
     const fromX = this.worldX;
@@ -854,9 +1110,8 @@ export class LevelScene extends Container implements GameScene {
       moved = true;
     }
 
-    if (moved) {
-      this.applyPlayerSolid(fromX, fromY);
-    }
+    // 树区 + 脚底圆互挡（即使本帧没位移，也可能被怪挤占，统一走 solid）
+    this.applyPlayerSolid(fromX, fromY);
 
     const camMoved = this.stepCamera(dt);
     if (moved || camMoved) {
@@ -865,35 +1120,104 @@ export class LevelScene extends Container implements GameScene {
 
     this.syncWorldActors();
     player.update(deltaMS, moving && !airborne && knockSpeed < 80);
-    for (const parked of this.parkedCharacters) {
-      parked.entity.update(deltaMS, false);
-    }
     this.healthBar.update(deltaMS);
 
-    for (const spider of this.spiders) {
+    for (let si = 0; si < this.spiders.length; si++) {
+      const spider = this.spiders[si]!;
       if (!spider.isAlive) continue;
       const sFromX = spider.worldX;
       const sFromY = spider.worldY;
       const result = spider.update(deltaMS, this.worldX, this.worldY);
-      if (result.moved) {
-        const solid = WorldMap.resolveSolid(
-          sFromX,
-          sFromY,
-          spider.worldX,
-          spider.worldY,
-          SPIDER_BODY_R,
-        );
-        spider.worldX = solid.x;
-        spider.worldY = solid.y;
-      }
+      this.applySpiderSolid(spider, sFromX, sFromY, si);
       if (result.attackHit) {
         this.applySpiderAttack(result.attackHit);
       }
     }
+    // solid 后写回显示位置（sync 在 AI 之前做过，这里补本帧位移）
+    for (const spider of this.spiders) {
+      spider.syncToWorld();
+    }
 
+    // 停场角色：击飞积分（上一帧武器命中）+ 被挤/击飞动画
+    this.stepParkedKnock(dt);
     this.updateBombs(deltaMS);
     this.updateSpears(deltaMS);
+    this.updateParkedCharacters(deltaMS);
     this.sortDepth();
+  }
+
+  /**
+   * 推进停场角色击飞抛物线，并做树区 / 实体 solid。
+   * 须在武器结算前调用（本帧新命中的冲量下帧才积分，避免同帧双跳）。
+   */
+  private stepParkedKnock(dt: number): void {
+    for (let i = 0; i < this.parkedCharacters.length; i++) {
+      const parked = this.parkedCharacters[i]!;
+      const fromX = parked.worldX;
+      const fromY = parked.worldY;
+      const knockStep = stepKnockArc(parked.knock, dt);
+      if (!knockStep.moved) continue;
+      parked.worldX += knockStep.dx;
+      parked.worldY += knockStep.dy;
+      this.resolveParkedSolid(parked, fromX, fromY, i);
+    }
+  }
+
+  /**
+   * 武器命中停场角色：击飞 + 姿态 / 转圈，**不扣血**。
+   * 与玩家自身被炸逻辑一致。
+   */
+  private applyParkedHitFx(
+    parked: ParkedCharacter,
+    hit: {
+      knockVelX: number;
+      knockVelY: number;
+      dirX: number;
+      poseStrength: number;
+      airSpinTurns?: number;
+    },
+    knockScale = 1,
+  ): void {
+    applyKnockImpulse(
+      parked.knock,
+      hit.knockVelX,
+      hit.knockVelY,
+      knockScale,
+    );
+    parked.entity.playBlastKnock(
+      hit.poseStrength,
+      hit.dirX,
+      hit.airSpinTurns ?? 0,
+    );
+  }
+
+  /**
+   * 停场角色动画：本帧 world 相对帧初有位移则视为走路；
+   * 击飞姿态由 playBlastKnock + update 处理。
+   * 须在 solid / 武器结算之后调用。
+   */
+  private updateParkedCharacters(deltaMS: number): void {
+    /** 低于此位移不算走（世界像素²），避免浮点微抖 */
+    const moveEpsSq = 0.35 * 0.35;
+
+    for (const parked of this.parkedCharacters) {
+      const dx = parked.worldX - parked.frameStartX;
+      const dy = parked.worldY - parked.frameStartY;
+      const distSq = dx * dx + dy * dy;
+      const knockSpeed = Math.hypot(parked.knock.velX, parked.knock.velY);
+      const airborne = parked.knock.height > 0.5;
+      // 贴地被挤 / 轻推：走路晃；空中或高速击飞：只播受击姿态
+      const walking = distSq > moveEpsSq && !airborne && knockSpeed < 80;
+      if (distSq > moveEpsSq && !airborne) {
+        parked.entity.setFacingFromMoveX(dx);
+      }
+      parked.entity.update(deltaMS, walking);
+      parked.entity.position.set(
+        parked.worldX,
+        parked.worldY - parked.knock.height,
+      );
+      parked.entity.zIndex = parked.worldY;
+    }
   }
 
   /** 选角阶段：仅呼吸光环 / 待机晃动，冻结战斗与移动 */
@@ -1099,17 +1423,22 @@ export class LevelScene extends Container implements GameScene {
     }
   }
 
-  /** 直线长矛：飞行中检测蜘蛛；撞墙由投射物内部处理 */
+  /**
+   * 直线长矛：飞行中检测蜘蛛 / 停场角色；撞墙由投射物内部处理。
+   * 停场角色：击飞 + 姿态，不扣血。
+   */
   private updateSpears(deltaMS: number): void {
     let needSync = false;
 
     for (let i = this.spears.length - 1; i >= 0; i--) {
       const spear = this.spears[i]!;
 
-      // 先位移（内部检测树墙），再测敌人，避免同帧漏检
+      // 先位移（内部检测树墙），再测目标，避免同帧漏检
       let phase = spear.update(deltaMS);
 
       if (phase === 'flying') {
+        let stuck = false;
+
         for (let s = this.spiders.length - 1; s >= 0; s--) {
           const spider = this.spiders[s]!;
           if (!spider.isAlive) continue;
@@ -1127,7 +1456,28 @@ export class LevelScene extends Container implements GameScene {
           spear.stick();
           phase = spear.getPhase();
           needSync = true;
+          stuck = true;
           break;
+        }
+
+        if (!stuck) {
+          for (const parked of this.parkedCharacters) {
+            if (
+              !spear.hitsTarget(
+                parked.worldX,
+                parked.worldY,
+                PLAYER_BODY_R,
+              )
+            ) {
+              continue;
+            }
+            const hit = spear.buildHit();
+            this.applyParkedHitFx(parked, hit, 1);
+            spear.stick();
+            phase = spear.getPhase();
+            needSync = true;
+            break;
+          }
         }
       }
 
@@ -1148,7 +1498,7 @@ export class LevelScene extends Container implements GameScene {
   /**
    * 场景只负责把炸弹算出的命中结果接到目标上。
    * 半径 / 伤害 / 击飞速度等全部读 bomb.blast。
-   * 玩家自身：保留击飞 / 姿态，不扣血。
+   * 玩家 / 停场角色：保留击飞 / 姿态，不扣血。
    */
   private applyBombBlast(bomb: BombProjectile): void {
     const player = this.player;
@@ -1169,7 +1519,18 @@ export class LevelScene extends Container implements GameScene {
       }
     }
 
-    let anySpider = false;
+    let anyFx = false;
+    for (const parked of this.parkedCharacters) {
+      const hit = bomb.evaluateHit(
+        parked.worldX,
+        parked.worldY,
+        parked.worldX >= bomb.groundX ? 1 : -1,
+      );
+      if (!hit) continue;
+      this.applyParkedHitFx(parked, hit, 1);
+      anyFx = true;
+    }
+
     for (let i = this.spiders.length - 1; i >= 0; i--) {
       const spider = this.spiders[i]!;
       if (!spider.isAlive) continue;
@@ -1181,7 +1542,7 @@ export class LevelScene extends Container implements GameScene {
       );
       if (!hit) continue;
 
-      anySpider = true;
+      anyFx = true;
       const alive = spider.applyBlastHit(hit, SPIDER_KNOCK_SCALE);
       if (!alive) {
         this.sortLayer.removeChild(spider);
@@ -1189,7 +1550,7 @@ export class LevelScene extends Container implements GameScene {
         this.spiders.splice(i, 1);
       }
     }
-    if (anySpider) {
+    if (anyFx) {
       this.syncWorldActors();
       this.sortDepth();
     }
