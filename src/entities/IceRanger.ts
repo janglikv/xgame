@@ -1,4 +1,4 @@
-import { Sprite } from 'pixi.js';
+import { Container, Sprite } from 'pixi.js';
 import { PlayerCharacterBase } from './PlayerCharacterBase';
 import {
   DEFAULT_SPEAR_AMMO,
@@ -41,11 +41,7 @@ const THROW_HAND_TEX = {
 
 /**
  * 出手后下一枚矛在手上旋转出现。
- * 位置与 getThrowOrigin 同一手点（贴图像素，挂在角色 sprite 下）。
- */
-/**
- * 出手后下一枚矛在手上旋转出现。
- * 位置与 getThrowOrigin 同一手点（贴图像素，挂在角色 sprite 下）。
+ * 位置与 getThrowOrigin 同一手点（贴图像素，经 handAttach 对齐角色姿态）。
  * 当弹药用尽等待 CD 恢复时，准备动画与 CD 冷却进度 100% 绑定。
  */
 const HAND_SPEAR = {
@@ -71,7 +67,12 @@ export class IceRanger extends PlayerCharacterBase {
   private readonly characterScale: number;
   private readonly ammo: SpearAmmo;
 
-  /** 手持下一枚矛（子节点挂在角色 sprite 上） */
+  /**
+   * 手持矛挂点：与角色 sprite 同级，每帧同步 sprite 的位移/旋转。
+   * Pixi v8 起 Sprite 不再是 Container，不能把矛直接 addChild 到贴图上。
+   */
+  private handAttach: Container | null = null;
+  /** 手持下一枚矛（子节点挂在 handAttach 上） */
   private handSpear: Sprite | null = null;
   /** 有余弹时快速旋入进度 0→1；≥1 为静止握持 */
   private handSpearT = 1;
@@ -217,6 +218,7 @@ export class IceRanger extends PlayerCharacterBase {
 
   override update(deltaMS: number, moving: boolean): void {
     super.update(deltaMS, moving);
+    this.syncHandAttach();
     this.updateHandSpear(deltaMS / 1000);
   }
 
@@ -250,12 +252,18 @@ export class IceRanger extends PlayerCharacterBase {
     this.throwRecoil = 0;
   }
 
-  /** 创建手持矛 sprite（挂在角色贴图下，随晃动 / 朝向） */
+  /** 创建手持矛 sprite（经 handAttach 跟随角色姿态：晃动 / 后仰 / 朝向） */
   private ensureHandSpear(): void {
     if (this.handSpear) return;
     const tex = getSpearTexture();
-    const body = this.sprite;
-    if (!tex || !body) return;
+    if (!tex || !this.sprite) return;
+
+    if (!this.handAttach) {
+      const attach = new Container();
+      attach.label = 'IceRangerHandAttach';
+      this.addChild(attach);
+      this.handAttach = attach;
+    }
 
     const spear = new Sprite(tex);
     spear.anchor.set(0.5, 0.5);
@@ -266,8 +274,18 @@ export class IceRanger extends PlayerCharacterBase {
     spear.scale.set(local);
     spear.visible = false;
     spear.alpha = 0;
-    body.addChild(spear);
+    this.handAttach.addChild(spear);
     this.handSpear = spear;
+    this.syncHandAttach();
+  }
+
+  /** 把手持挂点对齐到角色贴图当前局部姿态（与旧「挂在 sprite 下」等价） */
+  private syncHandAttach(): void {
+    const attach = this.handAttach;
+    const body = this.sprite;
+    if (!attach || !body) return;
+    attach.position.set(body.x, body.y);
+    attach.rotation = body.rotation;
   }
 
   /** 出手后（且尚有余弹）：下一枚在 0.2s 内快速旋入握持位 */

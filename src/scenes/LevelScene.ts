@@ -156,7 +156,7 @@ export class LevelScene extends Container implements GameScene {
       onSpearAmmoChanged: (snap) => this.spearAmmoHud.setAmmo(snap),
     });
 
-    this.spawnCornerSpiders();
+    this.spawnEnemies();
 
     // HUD 须先于 activateCharacter：后者会同步飞剑条 / 光标
     this.healthBar = new HealthBar({
@@ -310,8 +310,29 @@ export class LevelScene extends Container implements GameScene {
     }
   }
 
-  /** 蜘蛛：出生点两侧，再经 solid 推回可走区 */
-  private spawnCornerSpiders(): void {
+  /**
+   * 按地图数据刷怪。
+   * - 有 `enemies`：按列表放置
+   * - 省略字段：兼容旧关卡，出生点两侧各放一只蜘蛛
+   */
+  private spawnEnemies(): void {
+    const list = this.mapDef.enemies;
+    if (list === undefined) {
+      this.spawnLegacyCornerSpiders();
+      return;
+    }
+    for (const e of list) {
+      if (e.kind !== 'spider') continue;
+      const solid = WorldMap.resolveSolid(e.x, e.y, e.x, e.y, 16);
+      const spider = new Spider(solid.x, solid.y, { scale: SPIDER_SCALE });
+      spider.faceToward(this.spawn.x, this.spawn.y);
+      this.sortLayer.addChild(spider);
+      this.spiders.push(spider);
+    }
+  }
+
+  /** 旧关卡无 enemies 字段时的默认刷怪 */
+  private spawnLegacyCornerSpiders(): void {
     const offsets = [
       { x: -180, y: -160 },
       { x: 180, y: -160 },

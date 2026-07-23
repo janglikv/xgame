@@ -33,6 +33,13 @@ export function formatLevelDefTs(
     );
   }
   lines.push(`  ],`);
+  lines.push(`  enemies: [`);
+  for (const e of def.enemies ?? []) {
+    lines.push(
+      `    { kind: ${JSON.stringify(e.kind)}, x: ${roundN(e.x)}, y: ${roundN(e.y)} },`,
+    );
+  }
+  lines.push(`  ],`);
   lines.push(`};`);
   lines.push('');
   return lines.join('\n');

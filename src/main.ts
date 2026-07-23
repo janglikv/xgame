@@ -1,5 +1,10 @@
 import { Application } from 'pixi.js';
-import { getLevelById, LEVEL_1, type LevelMapDef } from './data/maps';
+import {
+  getActiveMapDef,
+  getLevelById,
+  LEVEL_1,
+  type LevelMapDef,
+} from './data/maps';
 import { LocalSaveStore } from './data/SaveStore';
 import type { SavedScene } from './data/types';
 import type { CharacterId } from './entities/types';
@@ -80,6 +85,8 @@ async function bootstrap(): Promise<void> {
         new MapEditScene(app.screen.width, app.screen.height, {
           onBack: goMain,
           onBackground: setBackground,
+          // 以当前激活关卡为底稿，便于补敌人 / 改洞
+          initialDef: getActiveMapDef(),
         }),
     );
   };

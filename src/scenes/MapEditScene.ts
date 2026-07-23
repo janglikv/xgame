@@ -9,6 +9,7 @@ import {
   gridDims,
   isSpawnValid,
   worldToCell,
+  type EnemySpawn,
   type LevelMapDef,
 } from '../data/maps';
 import { LEVEL_1 } from '../data/maps/level-1';
@@ -20,6 +21,7 @@ const FOREST = 0x243d22;
 const GRID_LINE = 0x1a3018;
 const HOLE = 0x8fe05a;
 const SPAWN = 0xff4d4d;
+const ENEMY = 0xc45cff;
 const BTN = 0x3d5c3d;
 const BTN_HOVER = 0x527a52;
 const BTN_MAIN = 0xf0c040;
@@ -32,13 +34,16 @@ const BRUSH_MIN = 1;
 const BRUSH_MAX = 11;
 /** 撤销步数上限 */
 const UNDO_MAX = 40;
+/** 右键删除敌人时的拾取半径（相对格宽） */
+const ENEMY_PICK_CELLS = 1.25;
 
-type EditTool = 'brush' | 'box';
+type EditTool = 'brush' | 'box' | 'enemy';
 
 /** 可撤销的地图状态快照 */
 type EditSnapshot = {
   cells: number[];
   spawn: { x: number; y: number };
+  enemies: EnemySpawn[];
 };
 
 type HudBtn = Container & {
@@ -57,9 +62,10 @@ export type MapEditSceneOptions = {
 };
 
 /**
- * 地图编辑：树宽格子上涂抹 / 框选可走区。
+ * 地图编辑：树宽格子上涂抹 / 框选可走区；敌人模式放置刷怪点。
  * 涂抹：左键挖、右键擦、[ ] 笔粗
  * 框选：拖矩形挖/擦整块格
+ * 敌人：左键放蜘蛛、右键删最近
  * Shift+点：出生点 · Ctrl/Cmd+Z 撤销
  */
 export class MapEditScene extends Container implements GameScene {
@@ -76,6 +82,7 @@ export class MapEditScene extends Container implements GameScene {
   private readonly rows: number;
   private readonly cells: Set<number>;
   private spawn: { x: number; y: number };
+  private enemies: EnemySpawn[];
   private readonly levelId: string;
   private readonly undoStack: EditSnapshot[] = [];
 
@@ -115,6 +122,7 @@ export class MapEditScene extends Container implements GameScene {
           cellSize: PINE_SPACING,
           spawn: { x: 0, y: 0 },
           walk: [] as LevelMapDef['walk'],
+          enemies: [] as EnemySpawn[],
         };
 
     this.levelId = src.id;
@@ -134,6 +142,7 @@ export class MapEditScene extends Container implements GameScene {
       }
     }
     this.spawn = { ...src.spawn };
+    this.enemies = (src.enemies ?? []).map((e) => ({ ...e }));
 
     this.eventMode = 'static';
     this.cursor = 'cell';
@@ -174,6 +183,7 @@ export class MapEditScene extends Container implements GameScene {
 
     this.addBtn('涂抹', BTN_MODE, 0xffffff, () => this.setTool('brush'), 72, 'mode', 'brush');
     this.addBtn('框选', BTN_MODE, 0xffffff, () => this.setTool('box'), 72, 'mode', 'box');
+    this.addBtn('敌人', BTN_MODE, 0xffffff, () => this.setTool('enemy'), 72, 'mode', 'enemy');
 
     this.addBtn(
       '−',
@@ -195,14 +205,15 @@ export class MapEditScene extends Container implements GameScene {
     this.addBtn('撤销', BTN, 0xffffff, () => this.undo());
     this.addBtn('导出', BTN_MAIN, 0x222222, () => void this.exportCode());
     this.addBtn('清空', BTN, 0xffffff, () => {
-      if (this.cells.size === 0) {
+      if (this.cells.size === 0 && this.enemies.length === 0) {
         this.flash('已经是空的');
         return;
       }
       this.pushUndo();
       this.cells.clear();
+      this.enemies = [];
       this.paint();
-      this.flash('已清空');
+      this.flash('已清空可走区与敌人');
     });
     this.addBtn('返回', BTN, 0xffffff, () => this.onBack());
 
@@ -223,15 +234,19 @@ export class MapEditScene extends Container implements GameScene {
 
   private defaultTip(): string {
     if (this.tool === 'box') {
-      return '框选：左键挖 · 右键擦 · Shift+点出生 · Ctrl+Z 撤销 · B/R 切工具 · 滚轮缩放';
+      return '框选：左键挖 · 右键擦 · Shift+点出生 · Ctrl+Z 撤销 · B/R/E 切工具 · 滚轮缩放';
     }
-    return `涂抹：左键挖 · 右键擦 · 笔 ${this.brushSize} · Ctrl+Z 撤销 · B/R 切工具 · 滚轮缩放`;
+    if (this.tool === 'enemy') {
+      return `敌人：左键放蜘蛛 · 右键删最近 · 已放 ${this.enemies.length} · Shift+点出生 · E 本工具 · 滚轮缩放`;
+    }
+    return `涂抹：左键挖 · 右键擦 · 笔 ${this.brushSize} · Ctrl+Z 撤销 · B/R/E 切工具 · 滚轮缩放`;
   }
 
   private takeSnapshot(): EditSnapshot {
     return {
       cells: Array.from(this.cells),
       spawn: { x: this.spawn.x, y: this.spawn.y },
+      enemies: this.enemies.map((e) => ({ ...e })),
     };
   }
 
@@ -239,6 +254,7 @@ export class MapEditScene extends Container implements GameScene {
     this.cells.clear();
     for (const k of s.cells) this.cells.add(k);
     this.spawn = { x: s.spawn.x, y: s.spawn.y };
+    this.enemies = s.enemies.map((e) => ({ ...e }));
   }
 
   /** 在修改前压栈；同一次笔触只压一次 */
@@ -272,10 +288,13 @@ export class MapEditScene extends Container implements GameScene {
     this.lastCell = null;
     this.boxStart = null;
     this.boxEnd = null;
-    this.cursor = tool === 'box' ? 'crosshair' : 'cell';
+    this.cursor =
+      tool === 'box' ? 'crosshair' : tool === 'enemy' ? 'pointer' : 'cell';
     this.refreshModeButtons();
     this.layout();
-    this.flash(tool === 'box' ? '框选模式' : '涂抹模式');
+    this.flash(
+      tool === 'box' ? '框选模式' : tool === 'enemy' ? '敌人模式' : '涂抹模式',
+    );
     this.paint();
   }
 
@@ -305,9 +324,56 @@ export class MapEditScene extends Container implements GameScene {
         mapSize: this.mapSize,
         cellSize: this.cellSize,
         spawn: this.spawn,
+        enemies: this.enemies.map((e) => ({ ...e })),
       },
       this.cells,
     );
+  }
+
+  /** 找距离世界点最近的敌人索引；超出拾取半径返回 -1 */
+  private nearestEnemyIndex(wx: number, wy: number): number {
+    const maxDist = this.cellSize * ENEMY_PICK_CELLS;
+    let best = -1;
+    let bestD = maxDist;
+    for (let i = 0; i < this.enemies.length; i++) {
+      const e = this.enemies[i]!;
+      const d = Math.hypot(e.x - wx, e.y - wy);
+      if (d <= bestD) {
+        bestD = d;
+        best = i;
+      }
+    }
+    return best;
+  }
+
+  private placeEnemyAtCell(c: number, r: number): void {
+    const pos = cellCenter(c, r, this.mapSize, this.cellSize);
+    const dup = this.enemies.some(
+      (e) => Math.hypot(e.x - pos.x, e.y - pos.y) < this.cellSize * 0.25,
+    );
+    if (dup) {
+      this.flash('这一格已有敌人');
+      return;
+    }
+    this.pushUndo();
+    this.enemies.push({ kind: 'spider', x: pos.x, y: pos.y });
+    const onWalk = this.cells.has(cellKey(c, r, this.cols));
+    this.flash(
+      onWalk
+        ? `已放蜘蛛（共 ${this.enemies.length}）`
+        : `已放蜘蛛（不在洞里，共 ${this.enemies.length}）`,
+    );
+  }
+
+  private removeNearestEnemy(wx: number, wy: number): void {
+    const idx = this.nearestEnemyIndex(wx, wy);
+    if (idx < 0) {
+      this.flash('附近没有敌人');
+      return;
+    }
+    this.pushUndo();
+    this.enemies.splice(idx, 1);
+    this.flash(`已删除（剩余 ${this.enemies.length}）`);
   }
 
   private addBtn(
@@ -501,6 +567,17 @@ export class MapEditScene extends Container implements GameScene {
       return;
     }
 
+    if (this.tool === 'enemy') {
+      if (e.button === 0) {
+        this.placeEnemyAtCell(cell.c, cell.r);
+      } else if (e.button === 2) {
+        const w = this.toWorld(e.global.x, e.global.y);
+        this.removeNearestEnemy(w.x, w.y);
+      }
+      this.paint();
+      return;
+    }
+
     const dig = e.button === 0;
     const erase = e.button === 2;
     if (!dig && !erase) return;
@@ -630,8 +707,12 @@ export class MapEditScene extends Container implements GameScene {
         .rect(o.x, o.y, s * this.cellSize, s * this.cellSize)
         .fill({ color: 0xffffff, alpha: 0.12 })
         .stroke({ width: sw * 2, color: 0xffe14a, alpha: 0.9 });
-    } else if (this.tool === 'box' && this.hoverCell && !this.painting) {
-      // 框选空闲时高亮当前格
+    } else if (
+      (this.tool === 'box' || this.tool === 'enemy') &&
+      this.hoverCell &&
+      !this.painting
+    ) {
+      // 框选 / 敌人空闲时高亮当前格
       const o = cellOrigin(
         this.hoverCell.c,
         this.hoverCell.r,
@@ -640,7 +721,35 @@ export class MapEditScene extends Container implements GameScene {
       );
       this.gfx
         .rect(o.x, o.y, this.cellSize, this.cellSize)
-        .stroke({ width: sw * 2, color: 0xffe14a, alpha: 0.7 });
+        .stroke({
+          width: sw * 2,
+          color: this.tool === 'enemy' ? ENEMY : 0xffe14a,
+          alpha: 0.7,
+        });
+    }
+
+    // 敌人标记（紫点 + 外圈）
+    const enemyR = this.cellSize * 0.5;
+    for (const e of this.enemies) {
+      this.gfx.circle(e.x, e.y, enemyR).fill({
+        color: ENEMY,
+        alpha: 0.9,
+      });
+      this.gfx.circle(e.x, e.y, enemyR).stroke({
+        width: sw * 2.5,
+        color: 0xffffff,
+        alpha: 0.85,
+      });
+      // 简易「X」示意怪物
+      const arm = enemyR * 0.45;
+      this.gfx
+        .moveTo(e.x - arm, e.y - arm)
+        .lineTo(e.x + arm, e.y + arm)
+        .stroke({ width: sw * 2, color: 0xffffff, alpha: 0.95 });
+      this.gfx
+        .moveTo(e.x + arm, e.y - arm)
+        .lineTo(e.x - arm, e.y + arm)
+        .stroke({ width: sw * 2, color: 0xffffff, alpha: 0.95 });
     }
 
     this.gfx.circle(this.spawn.x, this.spawn.y, this.cellSize * 0.7).fill({
@@ -662,11 +771,17 @@ export class MapEditScene extends Container implements GameScene {
       this.flash('请把出生点放到洞里（Shift+点击）');
       return;
     }
-    const { text, copied } = await copyLevelDefTs(def, 'LEVEL_1');
+    const exportName =
+      this.levelId === 'level-2'
+        ? 'LEVEL_2'
+        : this.levelId.replace(/[^a-zA-Z0-9_]/g, '_').toUpperCase() ||
+          'LEVEL_1';
+    const { text, copied } = await copyLevelDefTs(def, exportName);
     console.log('[MapEdit]\n' + text);
+    const nEnemy = def.enemies?.length ?? 0;
     this.flash(
       copied
-        ? `已复制 ${this.cells.size} 格（${def.walk.length} 段）→ level-1.ts`
+        ? `已复制 ${this.cells.size} 格 · 敌人 ${nEnemy} → ${exportName}`
         : '剪贴板失败，请看控制台',
     );
   }
@@ -734,6 +849,11 @@ export class MapEditScene extends Container implements GameScene {
     }
     if (e.key === 'r' || e.key === 'R') {
       this.setTool('box');
+      e.preventDefault();
+      return;
+    }
+    if (e.key === 'e' || e.key === 'E') {
+      this.setTool('enemy');
       e.preventDefault();
       return;
     }

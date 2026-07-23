@@ -9,6 +9,16 @@ export type CellRect = {
   h: number;
 };
 
+/** 当前支持的敌人种类（编辑器放置 / 关卡刷怪） */
+export type EnemyKind = 'spider';
+
+/** 敌人出生点（世界坐标，建议放在可走格内） */
+export type EnemySpawn = {
+  kind: EnemyKind;
+  x: number;
+  y: number;
+};
+
 /**
  * 关卡地图：默认整图密林；walk 格子并集 = 可行动空间。
  * 编辑器按树宽格子涂抹，导出后进代码。
@@ -23,4 +33,11 @@ export type LevelMapDef = {
   spawn: { x: number; y: number };
   /** 可走区域（格子矩形并集） */
   walk: CellRect[];
+  /**
+   * 敌人出生列表。
+   * - 省略：兼容旧关卡，运行时用出生点旁默认蜘蛛
+   * - `[]`：明确无敌人
+   * - 有项：按列表刷怪
+   */
+  enemies?: EnemySpawn[];
 };

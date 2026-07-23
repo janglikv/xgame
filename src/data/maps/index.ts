@@ -1,4 +1,4 @@
-export type { LevelMapDef, CellRect } from './types';
+export type { LevelMapDef, CellRect, EnemyKind, EnemySpawn } from './types';
 export {
   TREE_CLEAR_MARGIN,
   mapHalf,
@@ -32,3 +32,4 @@ export {
   levelDisplayName,
   type LevelId,
 } from './catalog';
+export { getActiveMapDef, setActiveMapDef } from './activeMap';

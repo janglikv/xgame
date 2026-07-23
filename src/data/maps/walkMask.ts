@@ -286,12 +286,14 @@ export function cloneLevelDef(def: LevelMapDef): LevelMapDef {
     cellSize: def.cellSize,
     spawn: { x: def.spawn.x, y: def.spawn.y },
     walk: def.walk.map((r) => ({ ...r })),
+    enemies: (def.enemies ?? []).map((e) => ({ ...e })),
   };
 }
 
 /** 从格子集合生成完整 def.walk */
 export function defFromCells(
-  base: Pick<LevelMapDef, 'id' | 'mapSize' | 'cellSize' | 'spawn'>,
+  base: Pick<LevelMapDef, 'id' | 'mapSize' | 'cellSize' | 'spawn'> &
+    Partial<Pick<LevelMapDef, 'enemies'>>,
   cells: Set<number>,
 ): LevelMapDef {
   const { cols, rows } = gridDims(base.mapSize, base.cellSize);
@@ -301,5 +303,6 @@ export function defFromCells(
     cellSize: base.cellSize,
     spawn: { ...base.spawn },
     walk: mergeCellsToRects(cells, cols, rows),
+    enemies: (base.enemies ?? []).map((e) => ({ ...e })),
   };
 }
