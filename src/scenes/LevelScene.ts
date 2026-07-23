@@ -22,12 +22,12 @@ import { Keyboard } from '../input/Keyboard';
 import { HealthBar } from '../ui/HealthBar';
 import { PauseMenu } from '../ui/PauseMenu';
 import { SpearAmmoHud } from '../ui/SpearAmmoHud';
-import { getThemeBackground, NightOverlay } from '../world/NightOverlay';
 import {
-  circlesOverlap,
-  pushCircleOut,
-  pushCircleOutMany,
-} from '../world/circleBody';
+  PLAYER_BODY_R,
+  SolidResolver,
+  type SolidContext,
+} from '../systems/SolidResolver';
+import { getThemeBackground, NightOverlay } from '../world/NightOverlay';
 import {
   GRID,
   islandCenter,
@@ -51,19 +51,12 @@ const SELECT_HIT = { w: 520, h: 900 } as const;
 
 const MOVE_SPEED = 220;
 /**
- * 碰撞体（solid）：脚底圆形占位，圆心 = worldX/Y。
- * 用于挡树、人怪互挡、推挤——不参与武器伤害判定。
- */
-const PLAYER_BODY_R = 18;
-const SPIDER_BODY_R = 20;
-/**
  * 受击体（hurtbox）：被矛 / 爆炸 / 扑咬命中用。
  * 略大于 BODY，手感更宽容，且可与碰撞独立调参。
+ * solid 半径见 systems/SolidResolver。
  */
 const PLAYER_HURT_R = 22;
 const SPIDER_HURT_R = 24;
-/** 实体圆互推后与树区再解析的次数 */
-const BODY_SOLID_ITERS = 2;
 /** 点太近不扔（屏幕像素） */
 const THROW_MIN_DIST = 12;
 /** 玩家 HUD 血条尺寸 / 底边边距（屏幕像素） */
@@ -148,6 +141,7 @@ export class LevelScene extends Container implements GameScene {
   private readonly bombs: BombProjectile[] = [];
   private readonly spears: SpearProjectile[] = [];
   private readonly keyboard = new Keyboard();
+  private readonly solid = new SolidResolver();
   private readonly pauseMenu: PauseMenu;
   private readonly camera: LevelCamera;
   private readonly theme: LevelTheme;
@@ -584,56 +578,36 @@ export class LevelScene extends Container implements GameScene {
   }
 
   /**
+   * solid 用的世界快照。
+   * parked / spiders 直接引用实体，可被 resolver 原地改坐标。
+   */
+  private solidContext(): SolidContext {
+    return {
+      player:
+        this.player && !this.selectingCharacter
+          ? { worldX: this.worldX, worldY: this.worldY }
+          : null,
+      parked: this.parkedCharacters,
+      spiders: this.spiders,
+    };
+  }
+
+  /**
    * 应用本帧位移：树区 + 挤开停场角色 + 脚底圆 vs 蜘蛛 + 地图边界。
    * 停场角色可被挤走；蜘蛛仍为硬障碍。from = 移动前，用于轴分离滑墙。
    */
   private applyPlayerSolid(fromX: number, fromY: number): void {
-    let px = this.worldX;
-    let py = this.worldY;
-    let prevX = fromX;
-    let prevY = fromY;
-
-    for (let i = 0; i < BODY_SOLID_ITERS; i++) {
-      const tree = WorldMap.resolveSolid(prevX, prevY, px, py, PLAYER_BODY_R);
-      px = tree.x;
-      py = tree.y;
-
-      // 先把重叠的停场角色挤开（优先动对方）
-      this.shoveParkedFrom(px, py, PLAYER_BODY_R);
-
-      // 蜘蛛：硬墙，推自己
-      const hard = this.collectHardBodyObstacles({
-        includePlayer: false,
-        spiderSkipIndex: -1,
-      });
-      let body = pushCircleOutMany(px, py, PLAYER_BODY_R, hard, 2);
-      // 对方被树卡住时，残留重叠再把自己挤开
-      body = this.pushOutOfParked(body.x, body.y, PLAYER_BODY_R);
-
-      const settled =
-        body.x === px &&
-        body.y === py &&
-        !this.overlapsAnyParked(body.x, body.y, PLAYER_BODY_R);
-      if (settled) {
-        this.worldX = body.x;
-        this.worldY = body.y;
-        return;
-      }
-
-      prevX = px;
-      prevY = py;
-      px = body.x;
-      py = body.y;
-    }
-
-    const finalTree = WorldMap.resolveSolid(prevX, prevY, px, py, PLAYER_BODY_R);
-    this.worldX = finalTree.x;
-    this.worldY = finalTree.y;
+    const ctx = this.solidContext();
+    // 玩家坐标在场景字段上：用临时 foot，解析后再写回
+    const foot = { worldX: this.worldX, worldY: this.worldY };
+    ctx.player = foot;
+    this.solid.resolvePlayer(foot, fromX, fromY, ctx);
+    this.worldX = foot.worldX;
+    this.worldY = foot.worldY;
   }
 
   /**
    * 蜘蛛本帧落点：树区 + 挤开停场角色 + vs 玩家/其他蜘蛛 + 边界。
-   * 玩家与其它蜘蛛为硬障碍；停场角色可被挤走。
    */
   private applySpiderSolid(
     spider: Spider,
@@ -641,192 +615,13 @@ export class LevelScene extends Container implements GameScene {
     fromY: number,
     spiderIndex: number,
   ): void {
-    let sx = spider.worldX;
-    let sy = spider.worldY;
-    let prevX = fromX;
-    let prevY = fromY;
-
-    for (let i = 0; i < BODY_SOLID_ITERS; i++) {
-      const tree = WorldMap.resolveSolid(prevX, prevY, sx, sy, SPIDER_BODY_R);
-      sx = tree.x;
-      sy = tree.y;
-
-      this.shoveParkedFrom(sx, sy, SPIDER_BODY_R);
-
-      const hard = this.collectHardBodyObstacles({
-        includePlayer: true,
-        spiderSkipIndex: spiderIndex,
-      });
-      let body = pushCircleOutMany(sx, sy, SPIDER_BODY_R, hard, 2);
-      body = this.pushOutOfParked(body.x, body.y, SPIDER_BODY_R);
-
-      if (
-        body.x === sx &&
-        body.y === sy &&
-        !this.overlapsAnyParked(body.x, body.y, SPIDER_BODY_R)
-      ) {
-        spider.worldX = body.x;
-        spider.worldY = body.y;
-        return;
-      }
-
-      prevX = sx;
-      prevY = sy;
-      sx = body.x;
-      sy = body.y;
-    }
-
-    const finalTree = WorldMap.resolveSolid(prevX, prevY, sx, sy, SPIDER_BODY_R);
-    spider.worldX = finalTree.x;
-    spider.worldY = finalTree.y;
-  }
-
-  /**
-   * 以 pusher 为轴，把所有重叠的停场角色挤开，再解析他们的树/硬障碍。
-   * 优先移动停场角色（可被挤走），而不是挡住推动者。
-   */
-  private shoveParkedFrom(
-    pusherX: number,
-    pusherY: number,
-    pusherR: number,
-  ): void {
-    if (this.parkedCharacters.length === 0) return;
-
-    for (let n = 0; n < BODY_SOLID_ITERS; n++) {
-      let any = false;
-      for (let i = 0; i < this.parkedCharacters.length; i++) {
-        const parked = this.parkedCharacters[i]!;
-        if (
-          !circlesOverlap(
-            pusherX,
-            pusherY,
-            pusherR,
-            parked.worldX,
-            parked.worldY,
-            PLAYER_BODY_R,
-          )
-        ) {
-          continue;
-        }
-
-        const fromX = parked.worldX;
-        const fromY = parked.worldY;
-        // 只动停场角色：从推动者圆心推出
-        const shoved = pushCircleOut(
-          parked.worldX,
-          parked.worldY,
-          PLAYER_BODY_R,
-          pusherX,
-          pusherY,
-          pusherR,
-        );
-        parked.worldX = shoved.x;
-        parked.worldY = shoved.y;
-        this.resolveParkedSolid(parked, fromX, fromY, i);
-        any = true;
-      }
-      if (!any) break;
-    }
-  }
-
-  /**
-   * 停场角色被挤后的落点：树区 + 蜘蛛/其他停场（硬）+ 地图边界。
-   * 不把推动者算进硬障碍，避免立刻把人又推回推动者体内。
-   */
-  private resolveParkedSolid(
-    parked: ParkedCharacter,
-    fromX: number,
-    fromY: number,
-    parkedIndex: number,
-  ): void {
-    let x = parked.worldX;
-    let y = parked.worldY;
-    let prevX = fromX;
-    let prevY = fromY;
-
-    for (let i = 0; i < BODY_SOLID_ITERS; i++) {
-      const tree = WorldMap.resolveSolid(prevX, prevY, x, y, PLAYER_BODY_R);
-      x = tree.x;
-      y = tree.y;
-
-      const hard: Array<{ x: number; y: number; r: number }> = [];
-      // 操作中的玩家：硬挡（被炸飞时不穿进玩家）
-      if (this.player && !this.selectingCharacter) {
-        hard.push({ x: this.worldX, y: this.worldY, r: PLAYER_BODY_R });
-      }
-      for (const s of this.spiders) {
-        if (!s.isAlive) continue;
-        hard.push({ x: s.worldX, y: s.worldY, r: SPIDER_BODY_R });
-      }
-      for (let j = 0; j < this.parkedCharacters.length; j++) {
-        if (j === parkedIndex) continue;
-        const o = this.parkedCharacters[j]!;
-        hard.push({ x: o.worldX, y: o.worldY, r: PLAYER_BODY_R });
-      }
-
-      const body = pushCircleOutMany(x, y, PLAYER_BODY_R, hard, 2);
-      if (body.x === x && body.y === y) {
-        parked.worldX = x;
-        parked.worldY = y;
-        return;
-      }
-      prevX = x;
-      prevY = y;
-      x = body.x;
-      y = body.y;
-    }
-
-    const finalTree = WorldMap.resolveSolid(prevX, prevY, x, y, PLAYER_BODY_R);
-    parked.worldX = finalTree.x;
-    parked.worldY = finalTree.y;
-  }
-
-  /** 推动者仍与某停场角色重叠时，把自己挤开（对方已贴墙推不动） */
-  private pushOutOfParked(
-    x: number,
-    y: number,
-    radius: number,
-  ): { x: number; y: number } {
-    const obstacles = this.parkedCharacters.map((p) => ({
-      x: p.worldX,
-      y: p.worldY,
-      r: PLAYER_BODY_R,
-    }));
-    return pushCircleOutMany(x, y, radius, obstacles, 2);
-  }
-
-  private overlapsAnyParked(x: number, y: number, radius: number): boolean {
-    for (const p of this.parkedCharacters) {
-      if (
-        circlesOverlap(x, y, radius, p.worldX, p.worldY, PLAYER_BODY_R)
-      ) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  /**
-   * 硬障碍脚底圆：玩家、蜘蛛（停场角色可被挤，不在此列）。
-   */
-  private collectHardBodyObstacles(options: {
-    includePlayer: boolean;
-    spiderSkipIndex: number;
-  }): Array<{ x: number; y: number; r: number }> {
-    const out: Array<{ x: number; y: number; r: number }> = [];
-
-    if (options.includePlayer && this.player && !this.selectingCharacter) {
-      out.push({ x: this.worldX, y: this.worldY, r: PLAYER_BODY_R });
-    }
-
-    for (let i = 0; i < this.spiders.length; i++) {
-      if (i === options.spiderSkipIndex) continue;
-      const s = this.spiders[i]!;
-      if (!s.isAlive) continue;
-      out.push({ x: s.worldX, y: s.worldY, r: SPIDER_BODY_R });
-    }
-
-    return out;
+    this.solid.resolveSpider(
+      spider,
+      fromX,
+      fromY,
+      spiderIndex,
+      this.solidContext(),
+    );
   }
 
   private readonly onWheel = (e: WheelEvent): void => {
@@ -970,7 +765,7 @@ export class LevelScene extends Container implements GameScene {
       if (!knockStep.moved) continue;
       parked.worldX += knockStep.dx;
       parked.worldY += knockStep.dy;
-      this.resolveParkedSolid(parked, fromX, fromY, i);
+      this.solid.resolveParked(parked, fromX, fromY, i, this.solidContext());
     }
   }
 
