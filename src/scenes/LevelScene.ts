@@ -1,32 +1,30 @@
 import { Container, Graphics, Rectangle } from 'pixi.js';
 import { preloadLevelAssets } from '../assets/preload';
-import {
-  BombProjectile,
-  BOMB_MAX_RANGE,
-  type BombProjectileOptions,
-} from '../entities/BombProjectile';
 import { BombGirl } from '../entities/BombGirl';
-import { IceRanger, SPEAR_THROW_RECOIL_SPEED } from '../entities/IceRanger';
+import { IceRanger } from '../entities/IceRanger';
 import type { PlayerCharacterBase } from '../entities/PlayerCharacterBase';
-import { SpearProjectile } from '../entities/SpearProjectile';
 import type { CharacterId } from '../entities/types';
 import {
   applyKnockImpulse,
-  applyRecoilHop,
   createKnockArcState,
   stepKnockArc,
   type KnockArcState,
 } from '../entities/knockArc';
 import { Spider } from '../entities/Spider';
 import { Keyboard } from '../input/Keyboard';
-import { HealthBar } from '../ui/HealthBar';
-import { PauseMenu } from '../ui/PauseMenu';
-import { SpearAmmoHud } from '../ui/SpearAmmoHud';
+import {
+  CombatSystem,
+  PLAYER_HURT_R,
+  type CombatWorld,
+} from '../systems/CombatSystem';
 import {
   PLAYER_BODY_R,
   SolidResolver,
   type SolidContext,
 } from '../systems/SolidResolver';
+import { HealthBar } from '../ui/HealthBar';
+import { PauseMenu } from '../ui/PauseMenu';
+import { SpearAmmoHud } from '../ui/SpearAmmoHud';
 import { getThemeBackground, NightOverlay } from '../world/NightOverlay';
 import {
   GRID,
@@ -50,15 +48,6 @@ const SELECT_SPACING = 240;
 const SELECT_HIT = { w: 520, h: 900 } as const;
 
 const MOVE_SPEED = 220;
-/**
- * 受击体（hurtbox）：被矛 / 爆炸 / 扑咬命中用。
- * 略大于 BODY，手感更宽容，且可与碰撞独立调参。
- * solid 半径见 systems/SolidResolver。
- */
-const PLAYER_HURT_R = 22;
-const SPIDER_HURT_R = 24;
-/** 点太近不扔（屏幕像素） */
-const THROW_MIN_DIST = 12;
 /** 玩家 HUD 血条尺寸 / 底边边距（屏幕像素） */
 const HUD_HP_WIDTH = 240;
 const HUD_HP_HEIGHT = 14;
@@ -68,8 +57,6 @@ const HUD_SPEAR_GAP = 22;
 const PLAYER_MAX_HP = 100;
 /** 击退很强时削弱 WASD 控制（水平速度） */
 const KNOCK_CONTROL_SOFTEN = 220;
-/** 蜘蛛对击飞的接收倍率（目标抗性，非炸弹属性） */
-const SPIDER_KNOCK_SCALE = 0.85;
 
 const SPIDER_SCALE = 0.1;
 
@@ -138,10 +125,9 @@ export class LevelScene extends Container implements GameScene {
   private readonly healthBar: HealthBar;
   private readonly spearAmmoHud: SpearAmmoHud;
   private readonly spiders: Spider[] = [];
-  private readonly bombs: BombProjectile[] = [];
-  private readonly spears: SpearProjectile[] = [];
   private readonly keyboard = new Keyboard();
   private readonly solid = new SolidResolver();
+  private readonly combat: CombatSystem;
   private readonly pauseMenu: PauseMenu;
   private readonly camera: LevelCamera;
   private readonly theme: LevelTheme;
@@ -219,6 +205,12 @@ export class LevelScene extends Container implements GameScene {
     // 选角阶段候选角色需要接收点击
     this.sortLayer.eventMode = 'static';
     this.worldRoot.addChild(this.sortLayer);
+
+    this.combat = new CombatSystem(this.sortLayer, {
+      sortDepth: () => this.sortDepth(),
+      syncWorldActors: () => this.syncWorldActors(),
+      onSpearAmmoChanged: (snap) => this.spearAmmoHud.setAmmo(snap),
+    });
 
     if (options.theme === 'night') {
       this.spawnCornerSpiders();
@@ -550,12 +542,24 @@ export class LevelScene extends Container implements GameScene {
     for (const spider of this.spiders) {
       spider.syncToWorld();
     }
-    for (const bomb of this.bombs) {
-      bomb.syncToWorld();
-    }
-    for (const spear of this.spears) {
-      spear.syncToWorld();
-    }
+    this.combat.syncProjectiles();
+  }
+
+  /** 武器结算用的世界快照（与 solid 共用 spiders / parked 引用） */
+  private combatWorld(): CombatWorld {
+    return {
+      player:
+        this.player && !this.selectingCharacter
+          ? {
+              entity: this.player,
+              worldX: this.worldX,
+              worldY: this.worldY,
+              knock: this.knock,
+            }
+          : null,
+      parked: this.parkedCharacters,
+      spiders: this.spiders,
+    };
   }
 
   /** 视口外松树不渲染（仍保留在 sortLayer） */
@@ -746,8 +750,7 @@ export class LevelScene extends Container implements GameScene {
 
     // 停场角色：击飞积分（上一帧武器命中）+ 被挤/击飞动画
     this.stepParkedKnock(dt);
-    this.updateBombs(deltaMS);
-    this.updateSpears(deltaMS);
+    this.combat.update(deltaMS, this.combatWorld());
     this.updateParkedCharacters(deltaMS);
     this.sortDepth();
   }
@@ -767,34 +770,6 @@ export class LevelScene extends Container implements GameScene {
       parked.worldY += knockStep.dy;
       this.solid.resolveParked(parked, fromX, fromY, i, this.solidContext());
     }
-  }
-
-  /**
-   * 武器命中停场角色：击飞 + 姿态 / 转圈，**不扣血**。
-   * 与玩家自身被炸逻辑一致。
-   */
-  private applyParkedHitFx(
-    parked: ParkedCharacter,
-    hit: {
-      knockVelX: number;
-      knockVelY: number;
-      dirX: number;
-      poseStrength: number;
-      airSpinTurns?: number;
-    },
-    knockScale = 1,
-  ): void {
-    applyKnockImpulse(
-      parked.knock,
-      hit.knockVelX,
-      hit.knockVelY,
-      knockScale,
-    );
-    parked.entity.playBlastKnock(
-      hit.poseStrength,
-      hit.dirX,
-      hit.airSpinTurns ?? 0,
-    );
   }
 
   /**
@@ -928,273 +903,21 @@ export class LevelScene extends Container implements GameScene {
     if (this.paused || this.selectingCharacter) return;
     const player = this.player;
     if (!player) return;
-    if (player instanceof BombGirl) {
-      this.throwBombAtScreen(e.global.x, e.global.y);
-    } else if (player instanceof IceRanger) {
-      this.throwSpearAtScreen(e.global.x, e.global.y);
-    }
-  };
-
-  /** 屏幕点击相对玩家的世界方向（未归一化）；过近返回 null */
-  private screenAimWorldDelta(
-    screenX: number,
-    screenY: number,
-  ): { dx: number; dy: number } | null {
-    const z = this.camera.currentZoom;
-    const playerSx =
-      this.camera.width / 2 + (this.worldX - this.camera.x) * z;
-    const playerSy =
-      this.camera.height / 2 + (this.worldY - this.camera.y) * z;
-    const screenDx = screenX - playerSx;
-    const screenDy = screenY - playerSy;
-    if (Math.hypot(screenDx, screenDy) < THROW_MIN_DIST) return null;
-    return { dx: screenDx / z, dy: screenDy / z };
-  }
-
-  /**
-   * 以角色屏幕位置为起点抛物线扔炸弹。
-   * 射程内落点 = 点击位置；超出则钳到最远方向。
-   */
-  private throwBombAtScreen(screenX: number, screenY: number): void {
-    const player = this.player;
-    if (!(player instanceof BombGirl)) return;
-
-    const aim = this.screenAimWorldDelta(screenX, screenY);
-    if (!aim) return;
-
-    let landDx = aim.dx;
-    let landDy = aim.dy;
-    const worldDist = Math.hypot(landDx, landDy);
-    if (worldDist > BOMB_MAX_RANGE) {
-      const s = BOMB_MAX_RANGE / worldDist;
-      landDx *= s;
-      landDy *= s;
-    }
-
-    const endX = this.worldX + landDx;
-    const endY = this.worldY + landDy;
-
-    // 先转身再取出手点（持弹手随朝向镜像）
-    player.setFacingFromMoveX(endX - this.worldX);
-    player.playThrowRecoil();
-
-    // 起点 = 角色持弹手（地面投影 + 离地高度）
-    const origin = player.getThrowOrigin(this.worldX, this.worldY);
-    const bombOptions: BombProjectileOptions = {
-      originHeight: origin.height,
-    };
-    const bomb = new BombProjectile(
-      origin.x,
-      origin.y,
-      endX,
-      endY,
-      bombOptions,
+    this.combat.tryRangedAtScreen(
+      player,
+      () => ({ x: this.worldX, y: this.worldY }),
+      this.knock,
+      e.global.x,
+      e.global.y,
+      {
+        x: this.camera.x,
+        y: this.camera.y,
+        zoom: this.camera.currentZoom,
+        width: this.camera.width,
+        height: this.camera.height,
+      },
     );
-    this.sortLayer.addChild(bomb);
-    this.bombs.push(bomb);
-    bomb.syncToWorld();
-    this.sortDepth();
-  }
-
-  /**
-   * 冰霜游侠：朝点击方向直线投矛，飞到命中敌人或墙体为止。
-   */
-  private throwSpearAtScreen(screenX: number, screenY: number): void {
-    const player = this.player;
-    if (!(player instanceof IceRanger)) return;
-
-    const aim = this.screenAimWorldDelta(screenX, screenY);
-    if (!aim) return;
-
-    const aimLen = Math.hypot(aim.dx, aim.dy);
-    if (aimLen < 1e-4) return;
-    const inv = 1 / aimLen;
-    const dirX = aim.dx * inv;
-    const dirY = aim.dy * inv;
-
-    player.setFacingFromMoveX(aim.dx);
-
-    const launched = player.launchSpear(dirX, dirY, () => {
-      // 脱手瞬间：施加小后跳 + 生成飞行中投射物
-      applyRecoilHop(
-        this.knock,
-        -dirX,
-        -dirY,
-        SPEAR_THROW_RECOIL_SPEED,
-      );
-
-      const origin = player.getThrowOrigin(this.worldX, this.worldY);
-      const spear = new SpearProjectile(origin.x, origin.y, dirX, dirY, {
-        originHeight: origin.height,
-      });
-      this.sortLayer.addChild(spear);
-      this.spears.push(spear);
-      spear.syncToWorld();
-      this.sortDepth();
-      this.spearAmmoHud.setAmmo(player.spearAmmo);
-    });
-
-    if (!launched) return;
-  }
-
-  private updateBombs(deltaMS: number): void {
-    for (let i = this.bombs.length - 1; i >= 0; i--) {
-      const bomb = this.bombs[i]!;
-      const phase = bomb.update(deltaMS);
-      bomb.syncToWorld();
-
-      // 落地瞬间：用该炸弹自身的 blast 属性结算伤害 / 击飞
-      if (bomb.consumeBlastResolve()) {
-        this.applyBombBlast(bomb);
-      }
-
-      if (phase === 'done') {
-        this.sortLayer.removeChild(bomb);
-        bomb.destroy({ children: true });
-        this.bombs.splice(i, 1);
-      }
-    }
-  }
-
-  /**
-   * 直线长矛：飞行中检测蜘蛛 / 停场角色；撞墙由投射物内部处理。
-   * 停场角色：击飞 + 姿态，不扣血。
-   */
-  private updateSpears(deltaMS: number): void {
-    let needSync = false;
-
-    for (let i = this.spears.length - 1; i >= 0; i--) {
-      const spear = this.spears[i]!;
-
-      // 先位移（内部检测树墙），再测目标，避免同帧漏检
-      let phase = spear.update(deltaMS);
-
-      if (phase === 'flying') {
-        let stuck = false;
-
-        for (let s = this.spiders.length - 1; s >= 0; s--) {
-          const spider = this.spiders[s]!;
-          if (!spider.isAlive) continue;
-          if (!spear.hitsTarget(spider.worldX, spider.worldY, SPIDER_HURT_R)) {
-            continue;
-          }
-
-          const hit = spear.buildHit();
-          const alive = spider.applyBlastHit(hit, SPIDER_KNOCK_SCALE);
-          if (!alive) {
-            this.sortLayer.removeChild(spider);
-            spider.destroy({ children: true });
-            this.spiders.splice(s, 1);
-          }
-          spear.stick();
-          phase = spear.getPhase();
-          needSync = true;
-          stuck = true;
-          break;
-        }
-
-        if (!stuck) {
-          for (const parked of this.parkedCharacters) {
-            if (
-              !spear.hitsTarget(
-                parked.worldX,
-                parked.worldY,
-                PLAYER_HURT_R,
-              )
-            ) {
-              continue;
-            }
-            const hit = spear.buildHit();
-            this.applyParkedHitFx(parked, hit, 1);
-            spear.stick();
-            phase = spear.getPhase();
-            needSync = true;
-            break;
-          }
-        }
-      }
-
-      spear.syncToWorld();
-
-      if (phase === 'done') {
-        this.sortLayer.removeChild(spear);
-        spear.destroy({ children: true });
-        this.spears.splice(i, 1);
-      }
-    }
-
-    if (needSync) {
-      this.syncWorldActors();
-    }
-  }
-
-  /**
-   * 场景只负责把炸弹算出的命中结果接到目标上。
-   * 半径 / 伤害 / 击飞速度等全部读 bomb.blast。
-   * 玩家 / 停场角色：保留击飞 / 姿态，不扣血。
-   */
-  private applyBombBlast(bomb: BombProjectile): void {
-    const player = this.player;
-    if (player) {
-      const face = player.facingDir;
-      const playerHit = bomb.evaluateHit(
-        this.worldX,
-        this.worldY,
-        face,
-        PLAYER_HURT_R,
-      );
-      if (playerHit) {
-        applyKnockImpulse(
-          this.knock,
-          playerHit.knockVelX,
-          playerHit.knockVelY,
-        );
-        player.playBlastKnock(
-          playerHit.poseStrength,
-          playerHit.dirX,
-          playerHit.airSpinTurns,
-        );
-      }
-    }
-
-    let anyFx = false;
-    for (const parked of this.parkedCharacters) {
-      const hit = bomb.evaluateHit(
-        parked.worldX,
-        parked.worldY,
-        parked.worldX >= bomb.groundX ? 1 : -1,
-        PLAYER_HURT_R,
-      );
-      if (!hit) continue;
-      this.applyParkedHitFx(parked, hit, 1);
-      anyFx = true;
-    }
-
-    for (let i = this.spiders.length - 1; i >= 0; i--) {
-      const spider = this.spiders[i]!;
-      if (!spider.isAlive) continue;
-
-      const hit = bomb.evaluateHit(
-        spider.worldX,
-        spider.worldY,
-        spider.worldX >= bomb.groundX ? 1 : -1,
-        SPIDER_HURT_R,
-      );
-      if (!hit) continue;
-
-      anyFx = true;
-      const alive = spider.applyBlastHit(hit, SPIDER_KNOCK_SCALE);
-      if (!alive) {
-        this.sortLayer.removeChild(spider);
-        spider.destroy({ children: true });
-        this.spiders.splice(i, 1);
-      }
-    }
-    if (anyFx) {
-      this.syncWorldActors();
-      this.sortDepth();
-    }
-  }
+  };
 
   private setPaused(value: boolean): void {
     this.paused = value;
