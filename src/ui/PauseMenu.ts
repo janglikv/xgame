@@ -1,5 +1,7 @@
 import { Container, Graphics, Text } from 'pixi.js';
 
+import { DebugConfig } from '../utils/DebugConfig';
+
 export type PauseMenuOptions = {
   onResume: () => void;
   onBack: () => void;
@@ -12,6 +14,7 @@ export type PauseMenuOptions = {
 type PauseButton = {
   root: Container;
   bg: Graphics;
+  label: Text;
   width: number;
   height: number;
   baseColor: number;
@@ -26,6 +29,7 @@ export class PauseMenu extends Container {
   private readonly veil: Graphics;
   private readonly panel: Graphics;
   private readonly title: Text;
+  private readonly debugBtnLabel: Text;
   private readonly buttons: PauseButton[] = [];
 
   constructor(options: PauseMenuOptions) {
@@ -55,6 +59,19 @@ export class PauseMenu extends Container {
     this.buttons.push(
       this.createButton('继续', 0x4caf50, 0x66c96a, options.onResume),
     );
+
+    const debugBtn = this.createButton(
+      this.getDebugBtnText(),
+      0x3d5c8a,
+      0x527ab0,
+      () => {
+        DebugConfig.toggleDebug();
+        this.updateDebugBtnText();
+      },
+    );
+    this.debugBtnLabel = debugBtn.label;
+    this.buttons.push(debugBtn);
+
     if (options.onEditMap) {
       this.buttons.push(
         this.createButton('继续编辑', 0x3d8a6a, 0x52b08a, options.onEditMap),
@@ -68,10 +85,27 @@ export class PauseMenu extends Container {
         options.onBack,
       ),
     );
+
+    DebugConfig.onChange(() => {
+      this.updateDebugBtnText();
+    });
+  }
+
+  private getDebugBtnText(): string {
+    return `碰撞&受击框: ${DebugConfig.isDebugEnabled() ? '开启' : '关闭'}`;
+  }
+
+  private updateDebugBtnText(): void {
+    if (this.debugBtnLabel) {
+      this.debugBtnLabel.text = this.getDebugBtnText();
+    }
   }
 
   setOpen(open: boolean): void {
     this.visible = open;
+    if (open) {
+      this.updateDebugBtnText();
+    }
   }
 
   layout(width: number, height: number): void {
@@ -81,8 +115,8 @@ export class PauseMenu extends Container {
       .fill({ color: 0x000000, alpha: 0.5 });
 
     const n = this.buttons.length;
-    const panelW = 300;
-    const panelH = n > 2 ? 300 : 240;
+    const panelW = 320;
+    const panelH = n > 3 ? 360 : 310;
     const px = (width - panelW) / 2;
     const py = (height - panelH) / 2;
 
@@ -154,7 +188,7 @@ export class PauseMenu extends Container {
     });
 
     this.addChild(root);
-    return { root, bg, width, height, baseColor, hoverColor };
+    return { root, bg, label, width, height, baseColor, hoverColor };
   }
 }
 

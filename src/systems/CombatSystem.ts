@@ -65,6 +65,16 @@ export class CombatSystem {
     this.hooks = hooks;
   }
 
+  /** 获取当前运行中的炸弹列表（Debug 用） */
+  getBombs(): ReadonlyArray<BombProjectile> {
+    return this.bombs;
+  }
+
+  /** 获取当前运行中的矛列表（Debug 用） */
+  getSpears(): ReadonlyArray<SpearProjectile> {
+    return this.spears;
+  }
+
   /** 同步投射物世界坐标（由场景 syncWorldActors 调用） */
   syncProjectiles(): void {
     for (const bomb of this.bombs) {

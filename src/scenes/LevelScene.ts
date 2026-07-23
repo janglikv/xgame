@@ -27,6 +27,7 @@ import { getNightBackground, NightOverlay } from '../world/NightOverlay';
 import { MAP_SIZE, MAP_WORLD_HALF, WorldMap } from '../world/WorldMap';
 import { LevelCamera } from './LevelCamera';
 import type { GameScene } from './types';
+import { DebugOverlay } from '../systems/DebugOverlay';
 
 /** 黑夜松树冷色 tint（环境变暗，不盖角色） */
 const NIGHT_TREE_TINT = 0x6a7f9e;
@@ -97,6 +98,7 @@ export class LevelScene extends Container implements GameScene {
   private readonly keyboard = new Keyboard();
   private readonly solid = new SolidResolver();
   private readonly combat: CombatSystem;
+  private readonly debugOverlay: DebugOverlay;
   private readonly pauseMenu: PauseMenu;
   private readonly camera: LevelCamera;
   private readonly mapDef: LevelMapDef;
@@ -163,6 +165,9 @@ export class LevelScene extends Container implements GameScene {
       syncWorldActors: () => this.syncWorldActors(),
       onSpearAmmoChanged: (snap) => this.spearAmmoHud.setAmmo(snap),
     });
+
+    this.debugOverlay = new DebugOverlay();
+    this.worldRoot.addChild(this.debugOverlay);
 
     this.spawnEnemies();
 
@@ -500,6 +505,15 @@ export class LevelScene extends Container implements GameScene {
     this.handleZoomKeys(dt);
 
     const player = this.player;
+
+    // 刷新碰撞体 & 受击体 DebugOverlay 渲染
+    this.debugOverlay.update({
+      player,
+      spiders: this.spiders,
+      bombs: this.combat.getBombs(),
+      spears: this.combat.getSpears(),
+    });
+
     if (!player) return;
 
     if (this.paused) {

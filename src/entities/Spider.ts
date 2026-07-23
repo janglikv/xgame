@@ -229,6 +229,14 @@ export class Spider extends Container implements WorldActor {
     return this.healthBar.currentHp > 0;
   }
 
+  get isAttacking(): boolean {
+    return this.aiState === 'attack';
+  }
+
+  get attackHitR(): number {
+    return AI.attackHitR;
+  }
+
   get ai(): SpiderAIState {
     return this.aiState;
   }
