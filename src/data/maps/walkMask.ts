@@ -286,7 +286,11 @@ export function cloneLevelDef(def: LevelMapDef): LevelMapDef {
     cellSize: def.cellSize,
     spawn: { x: def.spawn.x, y: def.spawn.y },
     walk: def.walk.map((r) => ({ ...r })),
-    enemies: (def.enemies ?? []).map((e) => ({ ...e })),
+    // 保留 undefined（旧关卡默认刷怪）与 []（明确无敌人）的区别
+    enemies:
+      def.enemies === undefined
+        ? undefined
+        : def.enemies.map((e) => ({ ...e })),
   };
 }
 

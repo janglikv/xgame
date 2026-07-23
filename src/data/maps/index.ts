@@ -33,3 +33,13 @@ export {
   type LevelId,
 } from './catalog';
 export { getActiveMapDef, setActiveMapDef } from './activeMap';
+export {
+  loadMapDraftsFromStorage,
+  saveMapDraft,
+  getMapDraft,
+  hasMapDraft,
+  clearMapDraft,
+  getPlayableLevelById,
+  getDefaultEditLevel,
+  getPlayableCatalog,
+} from './mapDrafts';

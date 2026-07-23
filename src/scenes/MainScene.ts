@@ -1,7 +1,9 @@
 import { Container, Graphics, Text } from 'pixi.js';
 import {
-  LEVEL_CATALOG,
+  getPlayableCatalog,
+  hasMapDraft,
   levelDisplayName,
+  getLevelIndex,
   type LevelMapDef,
 } from '../data/maps';
 import type { GameScene } from './types';
@@ -72,7 +74,7 @@ export class MainScene extends Container implements GameScene {
     this.addChild(this.title);
 
     this.subtitle = new Text({
-      text: '选择关卡',
+      text: '选择关卡（含本地草稿）',
       style: {
         fontFamily: 'system-ui, sans-serif',
         fontSize: 20,
@@ -88,12 +90,14 @@ export class MainScene extends Container implements GameScene {
       [0x3a7a6a, 0x5a9a8a],
     ];
 
-    LEVEL_CATALOG.forEach((map, i) => {
-      const [base, hover] = levelColors[i % levelColors.length]!;
+    // 可玩版 = 草稿优先，主菜单进关即是最新编辑结果
+    getPlayableCatalog().forEach((map) => {
+      const i = getLevelIndex(map.id);
+      const [base, hover] = levelColors[(i >= 0 ? i : 0) % levelColors.length]!;
+      const name = i >= 0 ? levelDisplayName(i) : map.id;
+      const label = hasMapDraft(map.id) ? `${name} · 草稿` : name;
       this.buttons.push(
-        this.createButton(levelDisplayName(i), base, hover, () =>
-          this.onSelectLevel(map),
-        ),
+        this.createButton(label, base, hover, () => this.onSelectLevel(map)),
       );
     });
 

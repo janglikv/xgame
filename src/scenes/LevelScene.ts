@@ -59,6 +59,12 @@ export type LevelSceneOptions = {
   getLastCharacter?: () => CharacterId;
   /** 切换角色后写入存档 */
   setLastCharacter?: (id: CharacterId) => void;
+  /**
+   * 地图编辑预览：暂停菜单显示「继续编辑」，
+   * 并可用 backLabel 覆盖返回文案。
+   */
+  onEditMap?: () => void;
+  backLabel?: string;
 };
 
 /**
@@ -97,6 +103,7 @@ export class LevelScene extends Container implements GameScene {
   private readonly spawn: { x: number; y: number };
   private readonly onBack: () => void;
   private readonly onBackground?: (color: number) => void;
+  private readonly onEditMap?: () => void;
   private readonly getLastCharacter: () => CharacterId;
   private readonly setLastCharacter?: (id: CharacterId) => void;
 
@@ -113,6 +120,7 @@ export class LevelScene extends Container implements GameScene {
     this.label = `LevelScene:${this.mapDef.id}`;
     this.onBack = options.onBack;
     this.onBackground = options.onBackground;
+    this.onEditMap = options.onEditMap;
     this.getLastCharacter =
       options.getLastCharacter ?? (() => 'bomb-girl' as CharacterId);
     this.setLastCharacter = options.setLastCharacter;
@@ -179,6 +187,12 @@ export class LevelScene extends Container implements GameScene {
     this.pauseMenu = new PauseMenu({
       onResume: () => this.setPaused(false),
       onBack: () => this.onBack(),
+      onEditMap: this.onEditMap
+        ? () => {
+            this.onEditMap?.();
+          }
+        : undefined,
+      backLabel: options.backLabel,
     });
     this.addChild(this.pauseMenu);
 

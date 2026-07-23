@@ -1,8 +1,10 @@
 import { Application } from 'pixi.js';
 import {
-  getActiveMapDef,
-  getLevelById,
+  getDefaultEditLevel,
+  getPlayableLevelById,
+  loadMapDraftsFromStorage,
   LEVEL_1,
+  setActiveMapDef,
   type LevelMapDef,
 } from './data/maps';
 import { LocalSaveStore } from './data/SaveStore';
@@ -18,6 +20,8 @@ async function bootstrap(): Promise<void> {
   if (!host) {
     throw new Error('#app container not found');
   }
+
+  loadMapDraftsFromStorage();
 
   const app = new Application();
 
@@ -47,12 +51,24 @@ async function bootstrap(): Promise<void> {
     saveStore.saveScene(scene);
   };
 
-  const levelOptions = (mapDef: LevelMapDef) => ({
+  const levelOptions = (
+    mapDef: LevelMapDef,
+    opts?: { fromEditor?: boolean },
+  ) => ({
     mapDef,
     onBack: goMain,
     onBackground: setBackground,
     getLastCharacter: () => saveStore.getLastCharacter(),
     setLastCharacter: (id: CharacterId) => saveStore.saveLastCharacter(id),
+    ...(opts?.fromEditor
+      ? {
+          onEditMap: () => goMapEdit(mapDef.id),
+          backLabel: '返回主场景',
+        }
+      : {
+          // 正式进关也可一键进编辑器改当前关
+          onEditMap: () => goMapEdit(mapDef.id),
+        }),
   });
 
   const goMain = (): void => {
@@ -61,32 +77,42 @@ async function bootstrap(): Promise<void> {
       () =>
         new MainScene(app.screen.width, app.screen.height, {
           onSelectLevel: goLevel,
-          onMapEdit: goMapEdit,
+          onMapEdit: () => goMapEdit(),
           onBackground: setBackground,
         }),
     );
   };
 
-  const goLevel = (mapDef: LevelMapDef): void => {
-    persistScene({ kind: 'level', levelId: mapDef.id });
+  const goLevel = (mapDef: LevelMapDef, fromEditor = false): void => {
+    const playable =
+      getPlayableLevelById(mapDef.id) ?? mapDef;
+    setActiveMapDef(playable);
+    persistScene({ kind: 'level', levelId: playable.id });
     void scenes.setScene(
       () =>
         new LevelScene(
           app.screen.width,
           app.screen.height,
-          levelOptions(mapDef),
+          levelOptions(playable, { fromEditor }),
         ),
     );
   };
 
-  const goMapEdit = (): void => {
+  const goMapEdit = (levelId?: string): void => {
+    const initial =
+      (levelId ? getPlayableLevelById(levelId) : null) ??
+      getDefaultEditLevel();
+    setActiveMapDef(initial);
     void scenes.setScene(
       () =>
         new MapEditScene(app.screen.width, app.screen.height, {
           onBack: goMain,
           onBackground: setBackground,
-          // 以当前激活关卡为底稿，便于补敌人 / 改洞
-          initialDef: getActiveMapDef(),
+          initialDef: initial,
+          onPreview: (def) => {
+            // 草稿已在编辑器内 saveMapDraft
+            goLevel(def, true);
+          },
         }),
     );
   };
@@ -94,7 +120,10 @@ async function bootstrap(): Promise<void> {
   /** 按存档恢复上次场景；损坏 / 无档则进主菜单 */
   const bootScene = saveStore.load().progress.scene;
   if (bootScene.kind === 'level') {
-    const map = getLevelById(bootScene.levelId) ?? LEVEL_1;
+    const map =
+      getPlayableLevelById(bootScene.levelId) ??
+      getPlayableLevelById(LEVEL_1.id) ??
+      LEVEL_1;
     await scenes.setScene(
       () =>
         new LevelScene(
@@ -108,7 +137,7 @@ async function bootstrap(): Promise<void> {
       () =>
         new MainScene(app.screen.width, app.screen.height, {
           onSelectLevel: goLevel,
-          onMapEdit: goMapEdit,
+          onMapEdit: () => goMapEdit(),
           onBackground: setBackground,
         }),
     );

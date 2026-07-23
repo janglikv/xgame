@@ -6,8 +6,14 @@ import {
   cloneLevelDef,
   copyLevelDefTs,
   defFromCells,
+  getPlayableCatalog,
+  getPlayableLevelById,
   gridDims,
+  hasMapDraft,
   isSpawnValid,
+  levelDisplayName,
+  getLevelIndex,
+  saveMapDraft,
   worldToCell,
   type EnemySpawn,
   type LevelMapDef,
@@ -28,6 +34,9 @@ const BTN_MAIN = 0xf0c040;
 const BTN_BRUSH = 0x4a6a8a;
 const BTN_MODE = 0x3d4a5c;
 const BTN_MODE_ON = 0xf0c040;
+const BTN_PREVIEW = 0x3d8a6a;
+const BTN_LEVEL = 0x4a5a7a;
+const BTN_LEVEL_ON = 0xf0c040;
 
 /** 画笔边长（格），1 = 单格，最大 11 */
 const BRUSH_MIN = 1;
@@ -48,7 +57,7 @@ type EditSnapshot = {
 
 type HudBtn = Container & {
   __w: number;
-  __group: 'action' | 'brush' | 'mode';
+  __group: 'action' | 'brush' | 'mode' | 'level';
   __id?: string;
   __baseColor: number;
   __bg: Graphics;
@@ -57,33 +66,38 @@ type HudBtn = Container & {
 
 export type MapEditSceneOptions = {
   onBack: () => void;
+  /** 校验通过后进入关卡试玩 */
+  onPreview: (def: LevelMapDef) => void;
   onBackground?: (color: number) => void;
+  /** 打开时编辑的关卡（应已是草稿优先的可玩版） */
   initialDef?: LevelMapDef;
 };
 
 /**
  * 地图编辑：树宽格子上涂抹 / 框选可走区；敌人模式放置刷怪点。
+ * 可切换目录关卡，改动写入草稿；预览直接进关试玩。
  * 涂抹：左键挖、右键擦、[ ] 笔粗
  * 框选：拖矩形挖/擦整块格
  * 敌人：左键放蜘蛛、右键删最近
- * Shift+点：出生点 · Ctrl/Cmd+Z 撤销
+ * Shift+点：出生点 · Ctrl/Cmd+Z 撤销 · P 预览
  */
 export class MapEditScene extends Container implements GameScene {
   private readonly world: Container;
   private readonly gfx: Graphics;
   private readonly hud: Container;
   private readonly tip: Text;
+  private readonly levelTitle: Text;
   private readonly brushLabel: Text;
   private readonly actionBtns: HudBtn[] = [];
 
-  private readonly mapSize: number;
-  private readonly cellSize: number;
-  private readonly cols: number;
-  private readonly rows: number;
+  private mapSize: number;
+  private cellSize: number;
+  private cols: number;
+  private rows: number;
   private readonly cells: Set<number>;
   private spawn: { x: number; y: number };
   private enemies: EnemySpawn[];
-  private readonly levelId: string;
+  private levelId: string;
   private readonly undoStack: EditSnapshot[] = [];
 
   private viewW: number;
@@ -104,6 +118,7 @@ export class MapEditScene extends Container implements GameScene {
   private tipTimer = 0;
 
   private readonly onBack: () => void;
+  private readonly onPreview: (def: LevelMapDef) => void;
   private readonly onBackground?: (color: number) => void;
 
   constructor(width: number, height: number, options: MapEditSceneOptions) {
@@ -112,6 +127,7 @@ export class MapEditScene extends Container implements GameScene {
     this.viewW = width;
     this.viewH = height;
     this.onBack = options.onBack;
+    this.onPreview = options.onPreview;
     this.onBackground = options.onBackground;
 
     const src = options.initialDef
@@ -132,17 +148,9 @@ export class MapEditScene extends Container implements GameScene {
     this.cols = dim.cols;
     this.rows = dim.rows;
     this.cells = new Set<number>();
-    for (const rect of src.walk) {
-      for (let r = rect.r; r < rect.r + rect.h; r++) {
-        for (let c = rect.c; c < rect.c + rect.w; c++) {
-          if (c >= 0 && r >= 0 && c < this.cols && r < this.rows) {
-            this.cells.add(cellKey(c, r, this.cols));
-          }
-        }
-      }
-    }
-    this.spawn = { ...src.spawn };
-    this.enemies = (src.enemies ?? []).map((e) => ({ ...e }));
+    this.spawn = { x: 0, y: 0 };
+    this.enemies = [];
+    this.applyDefData(src);
 
     this.eventMode = 'static';
     this.cursor = 'cell';
@@ -168,6 +176,17 @@ export class MapEditScene extends Container implements GameScene {
       },
     });
     this.hud.addChild(this.tip);
+
+    this.levelTitle = new Text({
+      text: '',
+      style: {
+        fontFamily: 'system-ui, sans-serif',
+        fontSize: 14,
+        fontWeight: '700',
+        fill: 0xc8e0ff,
+      },
+    });
+    this.hud.addChild(this.levelTitle);
 
     this.brushLabel = new Text({
       text: this.brushText(),
@@ -202,7 +221,23 @@ export class MapEditScene extends Container implements GameScene {
       'brush',
     );
 
+    // 关卡切换（目录）
+    for (const map of getPlayableCatalog()) {
+      const idx = getLevelIndex(map.id);
+      const label = idx >= 0 ? levelDisplayName(idx) : map.id;
+      this.addBtn(
+        label,
+        BTN_LEVEL,
+        0xffffff,
+        () => this.switchLevel(map.id),
+        88,
+        'level',
+        map.id,
+      );
+    }
+
     this.addBtn('撤销', BTN, 0xffffff, () => this.undo());
+    this.addBtn('预览', BTN_PREVIEW, 0xffffff, () => this.preview());
     this.addBtn('导出', BTN_MAIN, 0x222222, () => void this.exportCode());
     this.addBtn('清空', BTN, 0xffffff, () => {
       if (this.cells.size === 0 && this.enemies.length === 0) {
@@ -215,7 +250,10 @@ export class MapEditScene extends Container implements GameScene {
       this.paint();
       this.flash('已清空可走区与敌人');
     });
-    this.addBtn('返回', BTN, 0xffffff, () => this.onBack());
+    this.addBtn('返回', BTN, 0xffffff, () => {
+      this.persistCurrentDraft();
+      this.onBack();
+    });
 
     this.on('pointerdown', this.onDown);
     this.on('pointermove', this.onMove);
@@ -223,9 +261,116 @@ export class MapEditScene extends Container implements GameScene {
     this.on('pointerupoutside', this.onUp);
 
     this.refreshModeButtons();
+    this.refreshLevelButtons();
+    this.refreshLevelTitle();
     this.fit();
     this.paint();
     this.layout();
+  }
+
+  /** 把 LevelMapDef 写入编辑缓冲（不改 mapSize 时复用网格） */
+  private applyDefData(src: LevelMapDef): void {
+    this.levelId = src.id;
+    this.mapSize = src.mapSize;
+    this.cellSize = src.cellSize || PINE_SPACING;
+    const dim = gridDims(this.mapSize, this.cellSize);
+    this.cols = dim.cols;
+    this.rows = dim.rows;
+    this.cells.clear();
+    for (const rect of src.walk) {
+      for (let r = rect.r; r < rect.r + rect.h; r++) {
+        for (let c = rect.c; c < rect.c + rect.w; c++) {
+          if (c >= 0 && r >= 0 && c < this.cols && r < this.rows) {
+            this.cells.add(cellKey(c, r, this.cols));
+          }
+        }
+      }
+    }
+    this.spawn = { ...src.spawn };
+    // 旧关卡无 enemies 字段时，用出生点两侧默认蜘蛛，与 LevelScene 兼容逻辑一致
+    if (src.enemies === undefined) {
+      this.enemies = [
+        {
+          kind: 'spider',
+          x: src.spawn.x - 180,
+          y: src.spawn.y - 160,
+        },
+        {
+          kind: 'spider',
+          x: src.spawn.x + 180,
+          y: src.spawn.y - 160,
+        },
+      ];
+    } else {
+      this.enemies = src.enemies.map((e) => ({ ...e }));
+    }
+  }
+
+  private persistCurrentDraft(): LevelMapDef {
+    const def = this.toDef();
+    return saveMapDraft(def);
+  }
+
+  private switchLevel(id: string): void {
+    if (id === this.levelId) return;
+    // 先存当前关草稿，再加载目标关（草稿优先）
+    this.persistCurrentDraft();
+    const next = getPlayableLevelById(id);
+    if (!next) {
+      this.flash(`找不到关卡 ${id}`);
+      return;
+    }
+    this.painting = null;
+    this.lastCell = null;
+    this.boxStart = null;
+    this.boxEnd = null;
+    this.undoStack.length = 0;
+    this.applyDefData(next);
+    this.refreshLevelButtons();
+    this.refreshLevelTitle();
+    this.fit();
+    this.paint();
+    this.layout();
+    this.flash(
+      hasMapDraft(id)
+        ? `已切换 ${this.levelLabel()}（有草稿）`
+        : `已切换 ${this.levelLabel()}`,
+    );
+  }
+
+  private levelLabel(): string {
+    const idx = getLevelIndex(this.levelId);
+    return idx >= 0 ? levelDisplayName(idx) : this.levelId;
+  }
+
+  private refreshLevelTitle(): void {
+    const draft = hasMapDraft(this.levelId) ? ' · 草稿' : '';
+    this.levelTitle.text = `编辑：${this.levelLabel()}${draft}`;
+  }
+
+  private refreshLevelButtons(): void {
+    for (const b of this.actionBtns) {
+      if (b.__group !== 'level') continue;
+      const on = b.__id === this.levelId;
+      const color = on ? BTN_LEVEL_ON : b.__baseColor;
+      b.__bg.clear().roundRect(0, 0, b.__w, 40, 10).fill({ color });
+      b.__label.style.fill = on ? 0x1a1200 : 0xffffff;
+    }
+  }
+
+  private preview(): void {
+    const def = this.toDef();
+    if (def.walk.length === 0) {
+      this.flash('先挖出可走格子再预览');
+      return;
+    }
+    if (!isSpawnValid(def)) {
+      this.flash('请把出生点放到洞里（Shift+点击）');
+      return;
+    }
+    const saved = saveMapDraft(def);
+    this.refreshLevelTitle();
+    this.onPreview(saved);
   }
 
   private brushText(): string {
@@ -234,12 +379,12 @@ export class MapEditScene extends Container implements GameScene {
 
   private defaultTip(): string {
     if (this.tool === 'box') {
-      return '框选：左键挖 · 右键擦 · Shift+点出生 · Ctrl+Z 撤销 · B/R/E 切工具 · 滚轮缩放';
+      return '框选：左键挖 · 右键擦 · Shift+点出生 · P 预览 · B/R/E 工具 · 滚轮缩放';
     }
     if (this.tool === 'enemy') {
-      return `敌人：左键放蜘蛛 · 右键删最近 · 已放 ${this.enemies.length} · Shift+点出生 · E 本工具 · 滚轮缩放`;
+      return `敌人：左键放 · 右键删 · ${this.enemies.length} 只 · P 预览 · E 本工具 · 滚轮缩放`;
     }
-    return `涂抹：左键挖 · 右键擦 · 笔 ${this.brushSize} · Ctrl+Z 撤销 · B/R/E 切工具 · 滚轮缩放`;
+    return `涂抹：左键挖 · 右键擦 · 笔 ${this.brushSize} · P 预览 · B/R/E 工具 · 滚轮缩放`;
   }
 
   private takeSnapshot(): EditSnapshot {
@@ -382,7 +527,7 @@ export class MapEditScene extends Container implements GameScene {
     textColor: number,
     onClick: () => void,
     width = 88,
-    group: 'action' | 'brush' | 'mode' = 'action',
+    group: 'action' | 'brush' | 'mode' | 'level' = 'action',
     id?: string,
   ): void {
     const w = width;
@@ -414,19 +559,28 @@ export class MapEditScene extends Container implements GameScene {
     root.on('pointerdown', (e) => e.stopPropagation());
     root.on('pointerover', () => {
       if (group === 'mode' && root.__id === this.tool) return;
+      if (group === 'level' && root.__id === this.levelId) return;
       const hover =
         color === BTN_MAIN
           ? 0xffd86a
-          : color === BTN_BRUSH
-            ? 0x6a8aaa
-            : color === BTN_MODE
-              ? 0x5a6a7c
-              : BTN_HOVER;
+          : color === BTN_PREVIEW
+            ? 0x52b08a
+            : color === BTN_BRUSH
+              ? 0x6a8aaa
+              : color === BTN_MODE
+                ? 0x5a6a7c
+                : color === BTN_LEVEL
+                  ? 0x6a7a9a
+                  : BTN_HOVER;
       bg.clear().roundRect(0, 0, w, h, 10).fill({ color: hover });
     });
     root.on('pointerout', () => {
       if (group === 'mode') {
         this.refreshModeButtons();
+        return;
+      }
+      if (group === 'level') {
+        this.refreshLevelButtons();
         return;
       }
       bg.clear().roundRect(0, 0, w, h, 10).fill({ color });
@@ -792,7 +946,7 @@ export class MapEditScene extends Container implements GameScene {
   }
 
   private layout(): void {
-    // 右上：导出 / 清空 / 返回
+    // 右上：预览 / 导出 / 清空 / 返回 …
     let x = this.viewW - 12;
     for (let i = this.actionBtns.length - 1; i >= 0; i--) {
       const b = this.actionBtns[i]!;
@@ -802,9 +956,13 @@ export class MapEditScene extends Container implements GameScene {
       x -= 10;
     }
 
-    // 左上第二行：工具 + 笔粗
+    // 左上：提示 + 关卡标题
+    this.tip.position.set(14, 14);
+    this.levelTitle.position.set(14, 36);
+
+    // 第二行：工具 + 笔粗
     let bx = 14;
-    const by = 52;
+    const by = 62;
     for (const b of this.actionBtns) {
       if (b.__group !== 'mode') continue;
       b.position.set(bx, by);
@@ -829,7 +987,14 @@ export class MapEditScene extends Container implements GameScene {
       }
     }
 
-    this.tip.position.set(14, 18);
+    // 第三行：关卡切换
+    let lx = 14;
+    const ly = 112;
+    for (const b of this.actionBtns) {
+      if (b.__group !== 'level') continue;
+      b.position.set(lx, ly);
+      lx += b.__w + 8;
+    }
   }
 
   private readonly onKeyDown = (e: KeyboardEvent): void => {
@@ -854,6 +1019,11 @@ export class MapEditScene extends Container implements GameScene {
     }
     if (e.key === 'e' || e.key === 'E') {
       this.setTool('enemy');
+      e.preventDefault();
+      return;
+    }
+    if (e.key === 'p' || e.key === 'P') {
+      this.preview();
       e.preventDefault();
       return;
     }

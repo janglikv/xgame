@@ -3,6 +3,10 @@ import { Container, Graphics, Text } from 'pixi.js';
 export type PauseMenuOptions = {
   onResume: () => void;
   onBack: () => void;
+  /** 预览模式：返回地图编辑 */
+  onEditMap?: () => void;
+  /** 自定义「返回」文案，如「返回编辑」 */
+  backLabel?: string;
 };
 
 type PauseButton = {
@@ -50,7 +54,19 @@ export class PauseMenu extends Container {
 
     this.buttons.push(
       this.createButton('继续', 0x4caf50, 0x66c96a, options.onResume),
-      this.createButton('返回主场景', 0x5a6a8a, 0x7a8ab0, options.onBack),
+    );
+    if (options.onEditMap) {
+      this.buttons.push(
+        this.createButton('继续编辑', 0x3d8a6a, 0x52b08a, options.onEditMap),
+      );
+    }
+    this.buttons.push(
+      this.createButton(
+        options.backLabel ?? '返回主场景',
+        0x5a6a8a,
+        0x7a8ab0,
+        options.onBack,
+      ),
     );
   }
 
@@ -64,8 +80,9 @@ export class PauseMenu extends Container {
       .rect(0, 0, width, height)
       .fill({ color: 0x000000, alpha: 0.5 });
 
+    const n = this.buttons.length;
     const panelW = 300;
-    const panelH = 240;
+    const panelH = n > 2 ? 300 : 240;
     const px = (width - panelW) / 2;
     const py = (height - panelH) / 2;
 
