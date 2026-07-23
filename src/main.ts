@@ -1,6 +1,7 @@
 import { Application } from 'pixi.js';
 import { LocalSaveStore } from './data/SaveStore';
 import type { SavedScene } from './data/types';
+import type { CharacterId } from './entities/types';
 import { LevelScene } from './scenes/LevelScene';
 import { MainScene } from './scenes/MainScene';
 import { SceneManager } from './scenes/SceneManager';
@@ -51,15 +52,23 @@ async function bootstrap(): Promise<void> {
     );
   };
 
+  const levelOptions = (theme: LevelTheme) => ({
+    theme,
+    onBack: goMain,
+    onBackground: setBackground,
+    getLastCharacter: () => saveStore.getLastCharacter(),
+    setLastCharacter: (id: CharacterId) => saveStore.saveLastCharacter(id),
+  });
+
   const goLevel = (theme: LevelTheme): void => {
     persistScene({ kind: 'level', theme });
     void scenes.setScene(
       () =>
-        new LevelScene(app.screen.width, app.screen.height, {
-          theme,
-          onBack: goMain,
-          onBackground: setBackground,
-        }),
+        new LevelScene(
+          app.screen.width,
+          app.screen.height,
+          levelOptions(theme),
+        ),
     );
   };
 
@@ -68,11 +77,11 @@ async function bootstrap(): Promise<void> {
   if (bootScene.kind === 'level') {
     await scenes.setScene(
       () =>
-        new LevelScene(app.screen.width, app.screen.height, {
-          theme: bootScene.theme,
-          onBack: goMain,
-          onBackground: setBackground,
-        }),
+        new LevelScene(
+          app.screen.width,
+          app.screen.height,
+          levelOptions(bootScene.theme),
+        ),
     );
   } else {
     await scenes.setScene(

@@ -1,4 +1,5 @@
 import { Container, Graphics } from 'pixi.js';
+import type { Vec2 } from '../utils/math';
 import { PineTree } from './PineTree';
 
 /** 九宫格边长（3×3 岛） */
@@ -61,7 +62,7 @@ const COLORS = {
   flowerCenter: 0xff9f43,
 } as const;
 
-export type Vec2 = { x: number; y: number };
+export type { Vec2 };
 
 function createRng(seed: number): () => number {
   let t = seed >>> 0;

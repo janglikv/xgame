@@ -1,3 +1,4 @@
+import type { CharacterId } from '../entities/types';
 import type { LevelTheme } from '../scenes/types';
 
 /** 可持久化的场景位置 */
@@ -10,5 +11,7 @@ export type SaveData = {
   version: 1;
   progress: {
     scene: SavedScene;
+    /** 上次选中的角色（选角默认高亮） */
+    lastCharacter: CharacterId;
   };
 };

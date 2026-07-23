@@ -3,7 +3,9 @@
  * 圆心 = 世界坐标脚底；半径为地面占位，不含立绘上半身。
  */
 
-export type Vec2 = { x: number; y: number };
+import type { Vec2 } from '../utils/math';
+
+export type { Vec2 };
 
 /** 两圆是否重叠（含贴边：中心距 < rA+rB） */
 export function circlesOverlap(

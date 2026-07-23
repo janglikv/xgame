@@ -6,6 +6,7 @@ export function createDefaultSave(): SaveData {
     version: 1,
     progress: {
       scene: { kind: 'main' },
+      lastCharacter: 'bomb-girl',
     },
   };
 }

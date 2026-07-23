@@ -1,17 +1,14 @@
-import { Container, Graphics, Rectangle, Text } from 'pixi.js';
+import { Container, Graphics, Rectangle } from 'pixi.js';
+import { preloadLevelAssets } from '../assets/preload';
 import {
   BombProjectile,
   BOMB_MAX_RANGE,
-  loadBombTextures,
   type BombProjectileOptions,
 } from '../entities/BombProjectile';
 import { BombGirl } from '../entities/BombGirl';
 import { IceRanger, SPEAR_THROW_RECOIL_SPEED } from '../entities/IceRanger';
 import type { PlayerCharacterBase } from '../entities/PlayerCharacterBase';
-import {
-  loadSpearTexture,
-  SpearProjectile,
-} from '../entities/SpearProjectile';
+import { SpearProjectile } from '../entities/SpearProjectile';
 import type { CharacterId } from '../entities/types';
 import {
   applyKnockImpulse,
@@ -20,9 +17,10 @@ import {
   stepKnockArc,
   type KnockArcState,
 } from '../entities/knockArc';
-import { loadSpiderTexture, Spider } from '../entities/Spider';
+import { Spider } from '../entities/Spider';
 import { Keyboard } from '../input/Keyboard';
 import { HealthBar } from '../ui/HealthBar';
+import { PauseMenu } from '../ui/PauseMenu';
 import { SpearAmmoHud } from '../ui/SpearAmmoHud';
 import { getThemeBackground, NightOverlay } from '../world/NightOverlay';
 import {
@@ -37,6 +35,7 @@ import {
   MAP_WORLD_HALF,
   WorldMap,
 } from '../world/WorldMap';
+import { LevelCamera } from './LevelCamera';
 import type { GameScene, LevelTheme } from './types';
 
 /** 黑夜松树冷色 tint（环境变暗，不盖角色） */
@@ -84,37 +83,15 @@ const SPIDER_SCALE = 0.1;
 /** 默认出生：九宫格下方正中岛中心（非地图原点） */
 const PLAYER_SPAWN = islandCenter(1, GRID - 1);
 
-/** 镜头缩放：默认 / 最大；最小随窗口动态算（刚好看全图） */
-const ZOOM_DEFAULT = 1;
-const ZOOM_MAX = 1;
-/** 按住 +/- 时的缩放速度（每秒倍率） */
-const ZOOM_KEY_RATE = 1.35;
-/** 滚轮单次倍率 */
-const ZOOM_WHEEL_STEP = 1.12;
-/** 镜头位置跟随（指数趋近，越大越贴） */
-const CAM_FOLLOW_LAMBDA = 12;
-/** 缩放过渡 */
-const CAM_ZOOM_LAMBDA = 9;
-/** 选角确认后短暂加快镜头收束 */
-const CAM_CONFIRM_BOOST_LAMBDA = 16;
-const CAM_CONFIRM_BOOST_TIME = 0.55;
-
 export type LevelSceneOptions = {
   theme: LevelTheme;
   onBack: () => void;
   onBackground?: (color: number) => void;
+  /** 上次选角（默认高亮）；缺省 bomb-girl */
+  getLastCharacter?: () => CharacterId;
+  /** 确认选角后写入存档 */
+  setLastCharacter?: (id: CharacterId) => void;
 };
-
-type PauseButton = {
-  root: Container;
-  bg: Graphics;
-  width: number;
-  height: number;
-  baseColor: number;
-  hoverColor: number;
-};
-
-const LAST_CHARACTER_KEY = 'lu_o_lu_last_character';
 
 type CharacterCandidate = {
   id: CharacterId;
@@ -171,32 +148,17 @@ export class LevelScene extends Container implements GameScene {
   private readonly bombs: BombProjectile[] = [];
   private readonly spears: SpearProjectile[] = [];
   private readonly keyboard = new Keyboard();
-  private readonly pauseLayer: Container;
-  private readonly pauseVeil: Graphics;
-  private readonly pausePanel: Graphics;
-  private readonly pauseTitle: Text;
-  private readonly pauseButtons: PauseButton[] = [];
+  private readonly pauseMenu: PauseMenu;
+  private readonly camera: LevelCamera;
   private readonly theme: LevelTheme;
   private readonly onBack: () => void;
   private readonly onBackground?: (color: number) => void;
+  private readonly getLastCharacter: () => CharacterId;
+  private readonly setLastCharacter?: (id: CharacterId) => void;
 
-  private viewWidth: number;
-  private viewHeight: number;
   /** 玩家世界坐标 */
   private worldX = PLAYER_SPAWN.x;
   private worldY = PLAYER_SPAWN.y;
-  /** 镜头对准的世界坐标（边界处可与玩家分离）— 实际渲染值 */
-  private camX = PLAYER_SPAWN.x;
-  private camY = PLAYER_SPAWN.y;
-  /** 镜头目标（平滑趋近） */
-  private camTargetX = PLAYER_SPAWN.x;
-  private camTargetY = PLAYER_SPAWN.y;
-  /** 镜头缩放（1 = 默认）— 实际渲染值 */
-  private zoom = ZOOM_DEFAULT;
-  /** 缩放目标（平滑趋近） */
-  private zoomTarget = ZOOM_DEFAULT;
-  /** 选角确认后的加速跟随剩余时间（秒） */
-  private camBoostTime = 0;
   /** 被炸飞：地面平面速度 + 高度抛物线 */
   private readonly knock: KnockArcState = createKnockArcState();
   private paused = false;
@@ -209,24 +171,15 @@ export class LevelScene extends Container implements GameScene {
   private confirmWasDown = false;
   private treesMounted = false;
 
-  private static getLastSelectedCharacter(): CharacterId {
-    try {
-      const saved = localStorage.getItem(LAST_CHARACTER_KEY);
-      if (saved === 'bomb-girl' || saved === 'ice-ranger') {
-        return saved as CharacterId;
-      }
-    } catch {}
-    return 'bomb-girl';
-  }
-
   constructor(width: number, height: number, options: LevelSceneOptions) {
     super();
     this.label = `LevelScene:${options.theme}`;
     this.theme = options.theme;
     this.onBack = options.onBack;
     this.onBackground = options.onBackground;
-    this.viewWidth = width;
-    this.viewHeight = height;
+    this.getLastCharacter =
+      options.getLastCharacter ?? (() => 'bomb-girl' as CharacterId);
+    this.setLastCharacter = options.setLastCharacter;
 
     // 全屏可点：选角后点击落点扔炸弹
     this.eventMode = 'static';
@@ -237,6 +190,14 @@ export class LevelScene extends Container implements GameScene {
     this.worldRoot = new Container();
     this.worldRoot.label = 'WorldRoot';
     this.addChild(this.worldRoot);
+
+    this.camera = new LevelCamera({
+      worldRoot: this.worldRoot,
+      spawnX: PLAYER_SPAWN.x,
+      spawnY: PLAYER_SPAWN.y,
+      viewWidth: width,
+      viewHeight: height,
+    });
 
     this.worldMap = new WorldMap();
     this.worldRoot.addChild(this.worldMap);
@@ -286,46 +247,22 @@ export class LevelScene extends Container implements GameScene {
     this.spearAmmoHud.visible = false;
     this.addChild(this.spearAmmoHud);
 
-    // 暂停层（默认隐藏）
-    this.pauseLayer = new Container();
-    this.pauseLayer.label = 'PauseLayer';
-    this.pauseLayer.visible = false;
-    this.pauseLayer.eventMode = 'static';
-    this.addChild(this.pauseLayer);
-
-    this.pauseVeil = new Graphics();
-    this.pauseLayer.addChild(this.pauseVeil);
-
-    this.pausePanel = new Graphics();
-    this.pauseLayer.addChild(this.pausePanel);
-
-    this.pauseTitle = new Text({
-      text: '暂停',
-      style: {
-        fontFamily: 'system-ui, sans-serif',
-        fontSize: 32,
-        fontWeight: '700',
-        fill: 0xffffff,
-      },
+    this.pauseMenu = new PauseMenu({
+      onResume: () => this.setPaused(false),
+      onBack: () => this.onBack(),
     });
-    this.pauseTitle.anchor.set(0.5);
-    this.pauseLayer.addChild(this.pauseTitle);
-
-    this.pauseButtons.push(
-      this.createPauseButton('继续', 0x4caf50, 0x66c96a, () => this.setPaused(false)),
-      this.createPauseButton('返回主场景', 0x5a6a8a, 0x7a8ab0, () => this.onBack()),
-    );
+    this.addChild(this.pauseMenu);
 
     this.applySelectAtmosphere(true);
     this.stepCamera(0, true);
     this.syncWorldActors();
     this.layoutHealthHud();
-    this.layoutPauseMenu();
+    this.pauseMenu.layout(width, height);
   }
 
   /** 出发岛左右摆放可选角色 + 脚底光环 */
   private mountCharacterCandidates(): void {
-    const defaultCharId = LevelScene.getLastSelectedCharacter();
+    const defaultCharId = this.getLastCharacter();
     const roster: Array<{ id: CharacterId; entity: PlayerCharacterBase; offsetX: number }> = [
       { id: 'bomb-girl', entity: new BombGirl(0.07), offsetX: -SELECT_SPACING },
       { id: 'ice-ranger', entity: new IceRanger(0.066), offsetX: SELECT_SPACING },
@@ -413,9 +350,7 @@ export class LevelScene extends Container implements GameScene {
     const chosen = this.candidates.find((c) => c.id === id);
     if (!chosen) return;
 
-    try {
-      localStorage.setItem(LAST_CHARACTER_KEY, id);
-    } catch {}
+    this.setLastCharacter?.(id);
 
     this.player = chosen.entity;
     this.worldX = chosen.worldX;
@@ -459,8 +394,9 @@ export class LevelScene extends Container implements GameScene {
 
     this.applySelectAtmosphere(false);
     // 镜头从选角构图平滑收束到所选角色，不瞬切
-    this.camBoostTime = CAM_CONFIRM_BOOST_TIME;
-    this.refreshCameraTargets();
+    this.camera.setSelecting(false);
+    this.camera.boostFollow();
+    this.stepCamera(0, false);
     this.syncWorldActors();
     this.sortDepth();
   }
@@ -489,79 +425,16 @@ export class LevelScene extends Container implements GameScene {
     }
   }
 
-  private createPauseButton(
-    text: string,
-    baseColor: number,
-    hoverColor: number,
-    onClick: () => void,
-  ): PauseButton {
-    const width = 220;
-    const height = 52;
-    const root = new Container();
-    root.eventMode = 'static';
-    root.cursor = 'pointer';
-
-    const bg = new Graphics();
-    this.paintButton(bg, width, height, baseColor);
-    root.addChild(bg);
-
-    const label = new Text({
-      text,
-      style: {
-        fontFamily: 'system-ui, sans-serif',
-        fontSize: 20,
-        fontWeight: '600',
-        fill: 0xffffff,
-      },
-    });
-    label.anchor.set(0.5);
-    label.position.set(width / 2, height / 2);
-    root.addChild(label);
-
-    root.on('pointerover', () => {
-      this.paintButton(bg, width, height, hoverColor);
-      root.scale.set(1.04);
-    });
-    root.on('pointerout', () => {
-      this.paintButton(bg, width, height, baseColor);
-      root.scale.set(1);
-    });
-    root.on('pointertap', (e) => {
-      e.stopPropagation();
-      onClick();
-    });
-
-    this.pauseLayer.addChild(root);
-    return { root, bg, width, height, baseColor, hoverColor };
-  }
-
-  private paintButton(
-    g: Graphics,
-    w: number,
-    h: number,
-    color: number,
-  ): void {
-    g.clear();
-    g.roundRect(3, 4, w, h, 14).fill({ color: 0x000000, alpha: 0.25 });
-    g.roundRect(0, 0, w, h, 14).fill({ color });
-    g.roundRect(8, 6, w - 16, 10, 6).fill({ color: 0xffffff, alpha: 0.15 });
-  }
-
   async init(): Promise<void> {
     this.onBackground?.(getThemeBackground(this.theme));
     this.keyboard.bind();
     window.addEventListener('wheel', this.onWheel, { passive: false });
 
-    const loads: Promise<void>[] = [
-      this.worldMap.load(),
-      ...this.candidates.map((c) => c.entity.load()),
-      loadBombTextures(),
-      loadSpearTexture(),
-    ];
-    if (this.spiders.length > 0) {
-      loads.push(loadSpiderTexture());
-    }
-    await Promise.all(loads);
+    await preloadLevelAssets({
+      loadMap: () => this.worldMap.load(),
+      loadCharacters: this.candidates.map((c) => () => c.entity.load()),
+      spiders: this.spiders.length > 0,
+    });
 
     this.mountTrees();
     // 树挂载后再刷一遍选角压暗（mountTrees 时 treesMounted 才为 true）
@@ -612,27 +485,6 @@ export class LevelScene extends Container implements GameScene {
     }
   }
 
-  /** 镜头：worldRoot 缩放 + 平移，使 cam 落在屏幕中心 */
-  private applyCamera(): void {
-    const z = this.zoom;
-    this.worldRoot.scale.set(z);
-    this.worldRoot.position.set(
-      this.viewWidth / 2 - this.camX * z,
-      this.viewHeight / 2 - this.camY * z,
-    );
-  }
-
-  /** 指数趋近（帧率无关） */
-  private static expApproach(
-    current: number,
-    target: number,
-    lambda: number,
-    dt: number,
-  ): number {
-    if (dt <= 0 || lambda <= 0) return target;
-    return current + (target - current) * (1 - Math.exp(-lambda * dt));
-  }
-
   /**
    * 选角时镜头焦点固定在候选中点。
    * 不跟悬停角色走：镜头一动会把角色移出指针下，pointerover/out 来回触发导致闪烁。
@@ -651,8 +503,11 @@ export class LevelScene extends Container implements GameScene {
     return { x: sx / n, y: sy / n };
   }
 
-  /** 根据焦点刷新 camTarget（用 zoomTarget 算视口，避免缩放动画中目标抖动） */
-  private refreshCameraTargets(): void {
+  /**
+   * 镜头焦点：游玩时顺带把玩家脚底钉在合法 solid 上；
+   * 选角时用候选中点。
+   */
+  private getCameraFocus(): { x: number; y: number } {
     if (!this.selectingCharacter) {
       const solid = WorldMap.resolveSolid(
         this.worldX,
@@ -663,96 +518,19 @@ export class LevelScene extends Container implements GameScene {
       );
       this.worldX = solid.x;
       this.worldY = solid.y;
+      return { x: this.worldX, y: this.worldY };
     }
-
-    const focus = this.selectingCharacter
-      ? this.getSelectFocus()
-      : { x: this.worldX, y: this.worldY };
-
-    const z = Math.max(this.zoomTarget, 1e-4);
-    const cam = WorldMap.clampCamera(
-      focus.x,
-      focus.y,
-      this.viewWidth / z,
-      this.viewHeight / z,
-    );
-    this.camTargetX = cam.x;
-    this.camTargetY = cam.y;
+    return this.getSelectFocus();
   }
 
   /**
-   * 平滑推进镜头到目标。
+   * 平滑推进镜头到焦点。
    * snap=true：立刻对齐（初始化 / 改窗口）。
    * @returns 镜头是否发生可见位移（用于裁剪树）
    */
   private stepCamera(dt: number, snap = false): boolean {
-    this.refreshCameraTargets();
-
-    const prevX = this.camX;
-    const prevY = this.camY;
-    const prevZ = this.zoom;
-
-    if (snap) {
-      this.camX = this.camTargetX;
-      this.camY = this.camTargetY;
-      this.zoom = this.zoomTarget;
-      this.camBoostTime = 0;
-    } else {
-      // 选角中镜头目标固定，无需跟焦；确认后 / 游玩中再平滑跟随
-      let posLambda = this.selectingCharacter ? 0 : CAM_FOLLOW_LAMBDA;
-      if (this.camBoostTime > 0) {
-        posLambda = CAM_CONFIRM_BOOST_LAMBDA;
-        this.camBoostTime = Math.max(0, this.camBoostTime - dt);
-      }
-
-      if (posLambda > 0) {
-        this.camX = LevelScene.expApproach(
-          this.camX,
-          this.camTargetX,
-          posLambda,
-          dt,
-        );
-        this.camY = LevelScene.expApproach(
-          this.camY,
-          this.camTargetY,
-          posLambda,
-          dt,
-        );
-      } else {
-        this.camX = this.camTargetX;
-        this.camY = this.camTargetY;
-      }
-      this.zoom = LevelScene.expApproach(
-        this.zoom,
-        this.zoomTarget,
-        CAM_ZOOM_LAMBDA,
-        dt,
-      );
-
-      // 足够近时吸附，避免浮点残差
-      if (Math.abs(this.camX - this.camTargetX) < 0.05) this.camX = this.camTargetX;
-      if (Math.abs(this.camY - this.camTargetY) < 0.05) this.camY = this.camTargetY;
-      if (Math.abs(this.zoom - this.zoomTarget) < 0.0004) this.zoom = this.zoomTarget;
-    }
-
-    // 用当前缩放钳制，防止过渡中露图外
-    const z = Math.max(this.zoom, 1e-4);
-    const clamped = WorldMap.clampCamera(
-      this.camX,
-      this.camY,
-      this.viewWidth / z,
-      this.viewHeight / z,
-    );
-    this.camX = clamped.x;
-    this.camY = clamped.y;
-
-    this.applyCamera();
-
-    return (
-      Math.abs(this.camX - prevX) > 0.01 ||
-      Math.abs(this.camY - prevY) > 0.01 ||
-      Math.abs(this.zoom - prevZ) > 0.0002
-    );
+    const focus = this.getCameraFocus();
+    return this.camera.step(dt, focus.x, focus.y, snap);
   }
 
   /** 角色/蜘蛛/炸弹写到世界坐标，并刷新 zIndex */
@@ -788,12 +566,12 @@ export class LevelScene extends Container implements GameScene {
 
   /** 视口外松树不渲染（仍保留在 sortLayer） */
   private cullTrees(): void {
-    const z = Math.max(this.zoom, 1e-4);
+    const z = Math.max(this.camera.currentZoom, 1e-4);
     const pad = 140;
-    const hw = this.viewWidth / (2 * z) + pad;
-    const hh = this.viewHeight / (2 * z) + pad;
-    const cx = this.camX;
-    const cy = this.camY;
+    const hw = this.camera.width / (2 * z) + pad;
+    const hh = this.camera.height / (2 * z) + pad;
+    const cx = this.camera.x;
+    const cy = this.camera.y;
     for (const tree of this.worldMap.getTrees()) {
       tree.renderable =
         Math.abs(tree.worldX - cx) <= hw && Math.abs(tree.worldY - cy) <= hh;
@@ -1051,30 +829,10 @@ export class LevelScene extends Container implements GameScene {
     return out;
   }
 
-  /** 当前窗口下能看全地图的最小缩放 */
-  private getMinZoom(): number {
-    if (this.viewWidth <= 0 || this.viewHeight <= 0) return 0.15;
-    return Math.min(this.viewWidth / MAP_SIZE, this.viewHeight / MAP_SIZE) * 0.92;
-  }
-
-  /** 设置缩放目标（由 stepCamera 平滑过渡） */
-  private setZoom(next: number): void {
-    const min = this.getMinZoom();
-    const z = Math.min(ZOOM_MAX, Math.max(min, next));
-    if (Math.abs(z - this.zoomTarget) < 1e-4) return;
-    this.zoomTarget = z;
-  }
-
-  /** 缩到刚好看全图：平滑拉远并回中心（目标由 clamp 在 minZoom 下自然居中） */
-  private fitOverview(): void {
-    this.zoomTarget = this.getMinZoom();
-  }
-
   private readonly onWheel = (e: WheelEvent): void => {
     if (this.paused) return;
     e.preventDefault();
-    const dir = e.deltaY > 0 ? 1 / ZOOM_WHEEL_STEP : ZOOM_WHEEL_STEP;
-    this.setZoom(this.zoom * dir);
+    this.camera.applyWheel(e.deltaY);
   };
 
   destroy(options?: Parameters<Container['destroy']>[0]): void {
@@ -1327,19 +1085,14 @@ export class LevelScene extends Container implements GameScene {
     );
     // 轻伤姿态（不转圈）
     this.player.playBlastKnock(0.45, hit.dirX, 0);
-    this.refreshCameraTargets();
+    this.stepCamera(0, false);
     this.syncWorldActors();
     this.sortDepth();
   }
 
   resize(width: number, height: number): void {
-    this.viewWidth = width;
-    this.viewHeight = height;
     this.hitArea = new Rectangle(0, 0, width, height);
-    this.zoomTarget = Math.min(
-      ZOOM_MAX,
-      Math.max(this.getMinZoom(), this.zoomTarget),
-    );
+    this.camera.resize(width, height);
     // 改窗口尺寸时直接对齐，避免过渡穿帮
     this.stepCamera(0, true);
     this.syncWorldActors();
@@ -1347,21 +1100,21 @@ export class LevelScene extends Container implements GameScene {
     this.sortDepth();
     this.layoutHealthHud();
     // 夜色层按地图尺寸铺在地面，不随视口改
-    this.layoutPauseMenu();
+    this.pauseMenu.layout(width, height);
   }
 
   private handleZoomKeys(dt: number): void {
     const fitDown =
       this.keyboard.isDown('KeyF') || this.keyboard.isDown('KeyM');
     if (fitDown && !this.fitWasDown) {
-      this.fitOverview();
+      this.camera.fitOverview();
     }
     this.fitWasDown = fitDown;
 
     const resetDown =
       this.keyboard.isDown('Digit0') || this.keyboard.isDown('Numpad0');
     if (resetDown && !this.resetZoomWasDown) {
-      this.setZoom(ZOOM_DEFAULT);
+      this.camera.resetZoom();
     }
     this.resetZoomWasDown = resetDown;
 
@@ -1371,10 +1124,7 @@ export class LevelScene extends Container implements GameScene {
     const zoomOut =
       this.keyboard.isDown('Minus') ||
       this.keyboard.isDown('NumpadSubtract');
-    if (zoomIn === zoomOut) return;
-
-    const factor = Math.pow(ZOOM_KEY_RATE, dt);
-    this.setZoom(this.zoomTarget * (zoomIn ? factor : 1 / factor));
+    this.camera.applyZoomKeyHold(zoomIn, zoomOut, dt);
   }
 
   private readonly onPointerTap = (e: {
@@ -1395,9 +1145,11 @@ export class LevelScene extends Container implements GameScene {
     screenX: number,
     screenY: number,
   ): { dx: number; dy: number } | null {
-    const z = this.zoom;
-    const playerSx = this.viewWidth / 2 + (this.worldX - this.camX) * z;
-    const playerSy = this.viewHeight / 2 + (this.worldY - this.camY) * z;
+    const z = this.camera.currentZoom;
+    const playerSx =
+      this.camera.width / 2 + (this.worldX - this.camera.x) * z;
+    const playerSy =
+      this.camera.height / 2 + (this.worldY - this.camera.y) * z;
     const screenDx = screenX - playerSx;
     const screenDy = screenY - playerSy;
     if (Math.hypot(screenDx, screenDy) < THROW_MIN_DIST) return null;
@@ -1651,15 +1403,15 @@ export class LevelScene extends Container implements GameScene {
 
   private setPaused(value: boolean): void {
     this.paused = value;
-    this.pauseLayer.visible = value;
+    this.pauseMenu.setOpen(value);
     // 清掉按键，避免继续后突然冲刺
     this.keyboard.clear();
   }
 
   /** 玩家血条 + 飞剑数量 HUD：底部居中，飞剑在血条之上并与血条左对齐 */
   private layoutHealthHud(): void {
-    const cx = this.viewWidth / 2;
-    const hpY = this.viewHeight - HUD_HP_MARGIN_BOTTOM;
+    const cx = this.camera.width / 2;
+    const hpY = this.camera.height - HUD_HP_MARGIN_BOTTOM;
     this.healthBar.position.set(cx, hpY);
     // 血条以中心为原点 → 左缘 cx - width/2；飞剑 HUD 原点在左缘
     const hpLeft = cx - HUD_HP_WIDTH / 2;
@@ -1668,47 +1420,4 @@ export class LevelScene extends Container implements GameScene {
       hpY - HUD_HP_HEIGHT / 2 - HUD_SPEAR_GAP,
     );
   }
-
-  private layoutPauseMenu(): void {
-    const w = this.viewWidth;
-    const h = this.viewHeight;
-
-    this.pauseVeil
-      .clear()
-      .rect(0, 0, w, h)
-      .fill({ color: 0x000000, alpha: 0.5 });
-
-    const panelW = 300;
-    const panelH = 240;
-    const px = (w - panelW) / 2;
-    const py = (h - panelH) / 2;
-
-    this.pausePanel
-      .clear()
-      .roundRect(px + 4, py + 6, panelW, panelH, 20)
-      .fill({ color: 0x000000, alpha: 0.3 })
-      .roundRect(px, py, panelW, panelH, 20)
-      .fill({ color: 0x1e2838, alpha: 0.95 })
-      .roundRect(px + 2, py + 2, panelW - 4, panelH - 4, 18)
-      .stroke({ width: 2, color: 0xffffff, alpha: 0.12 });
-
-    this.pauseTitle.position.set(w / 2, py + 40);
-
-    const gap = 14;
-    const totalBtnH =
-      this.pauseButtons.reduce((s, b) => s + b.height, 0) +
-      gap * (this.pauseButtons.length - 1);
-    let y = py + 90;
-
-    // 垂直居中按钮组
-    const startY = py + (panelH - 50 - totalBtnH) / 2 + 50;
-    y = startY;
-
-    for (const btn of this.pauseButtons) {
-      btn.root.pivot.set(btn.width / 2, btn.height / 2);
-      btn.root.position.set(w / 2, y + btn.height / 2);
-      y += btn.height + gap;
-    }
-  }
-
 }
