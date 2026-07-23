@@ -1,5 +1,10 @@
-import { Assets, Container, Sprite } from 'pixi.js';
+import { Container, Sprite } from 'pixi.js';
 import type { CharacterId } from './types';
+import {
+  loadOutlinedTexture,
+  OUTLINE_PX_CHARACTER,
+  paddedFootAnchorY,
+} from '../utils/outlineTexture';
 
 /** 走路晃动参数（作用在 sprite 局部，不改世界坐标） */
 const BOB = {
@@ -67,6 +72,11 @@ export abstract class PlayerCharacterBase extends Container {
 
   protected sprite: Sprite | null = null;
   private readonly baseScale: number;
+  /**
+   * 脚底锚点 Y（贴图 fraction）。
+   * 描边外扩后会相对 ANCHOR_FOOT_Y 重算，保证脚底世界位置不变。
+   */
+  private footAnchorY = ANCHOR_FOOT_Y;
   /** 镜头缩放倍率（与地图 zoom 同步） */
   private viewScale = 1;
   /** 1 = 朝右，-1 = 朝左 */
@@ -107,9 +117,17 @@ export abstract class PlayerCharacterBase extends Container {
   async load(): Promise<void> {
     if (this.sprite) return;
 
-    const texture = await Assets.load(this.previewUrl);
-    const sprite = new Sprite(texture);
-    sprite.anchor.set(0.5, ANCHOR_FOOT_Y);
+    const outlined = await loadOutlinedTexture(
+      this.previewUrl,
+      OUTLINE_PX_CHARACTER,
+    );
+    this.footAnchorY = paddedFootAnchorY(
+      ANCHOR_FOOT_Y,
+      outlined.contentHeight,
+      outlined.pad,
+    );
+    const sprite = new Sprite(outlined.texture);
+    sprite.anchor.set(0.5, this.footAnchorY);
     sprite.label = this.spriteLabel;
     this.sprite = sprite;
     this.addChild(sprite);
@@ -258,12 +276,12 @@ export abstract class PlayerCharacterBase extends Container {
     if (spinning || (this.spinTarget > 0 && this.spinT > 0)) {
       const h = sprite.texture.height;
       // 脚底 → 中心的本地偏移（贴图像素；父级 scale 统一缩放）
-      const toCenterY = (ANCHOR_CENTER_Y - ANCHOR_FOOT_Y) * h;
+      const toCenterY = (ANCHOR_CENTER_Y - this.footAnchorY) * h;
       sprite.anchor.set(0.5, ANCHOR_CENTER_Y);
       sprite.x = ox;
       sprite.y = oy + toCenterY;
     } else {
-      sprite.anchor.set(0.5, ANCHOR_FOOT_Y);
+      sprite.anchor.set(0.5, this.footAnchorY);
       sprite.x = ox;
       sprite.y = oy;
     }

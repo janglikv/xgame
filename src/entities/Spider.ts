@@ -1,4 +1,4 @@
-import { Assets, Container, Sprite, Texture } from 'pixi.js';
+import { Container, Sprite, Texture } from 'pixi.js';
 import {
   applyKnockImpulse,
   createKnockArcState,
@@ -7,6 +7,11 @@ import {
   type KnockArcState,
 } from './knockArc';
 import { HealthBar } from '../ui/HealthBar';
+import {
+  loadOutlinedTexture,
+  OUTLINE_PX_CHARACTER,
+  paddedFootAnchorY,
+} from '../utils/outlineTexture';
 
 const SPIDER_URL = '/assets/spider/spider.png';
 
@@ -87,10 +92,18 @@ const ANCHOR_FOOT_Y = 0.88;
 const ANCHOR_CENTER_Y = 0.5;
 
 let sharedTexture: Texture | null = null;
+/** 描边外扩后的脚底锚点 Y */
+let sharedFootAnchorY = ANCHOR_FOOT_Y;
 
 export async function loadSpiderTexture(): Promise<void> {
   if (sharedTexture) return;
-  sharedTexture = await Assets.load(SPIDER_URL);
+  const outlined = await loadOutlinedTexture(SPIDER_URL, OUTLINE_PX_CHARACTER);
+  sharedTexture = outlined.texture;
+  sharedFootAnchorY = paddedFootAnchorY(
+    ANCHOR_FOOT_Y,
+    outlined.contentHeight,
+    outlined.pad,
+  );
 }
 
 export type SpiderOptions = {
@@ -226,8 +239,8 @@ export class Spider extends Container {
     }
 
     const sprite = new Sprite(sharedTexture);
-    // 脚底略偏下：蜘蛛图主体在中部，腿向下伸
-    sprite.anchor.set(0.5, ANCHOR_FOOT_Y);
+    // 脚底略偏下：蜘蛛图主体在中部，腿向下伸（描边后用 sharedFootAnchorY）
+    sprite.anchor.set(0.5, sharedFootAnchorY);
     sprite.label = 'SpiderSprite';
     this.sprite = sprite;
     this.applyFacingToSprite();
@@ -604,12 +617,12 @@ export class Spider extends Container {
     if (spinning) {
       const sy = Math.abs(sprite.scale.y) || 1;
       const toCenterY =
-        (ANCHOR_CENTER_Y - ANCHOR_FOOT_Y) * sprite.texture.height * sy;
+        (ANCHOR_CENTER_Y - sharedFootAnchorY) * sprite.texture.height * sy;
       sprite.anchor.set(0.5, ANCHOR_CENTER_Y);
       sprite.x = ox;
       sprite.y = oy + toCenterY;
     } else {
-      sprite.anchor.set(0.5, ANCHOR_FOOT_Y);
+      sprite.anchor.set(0.5, sharedFootAnchorY);
       sprite.x = ox;
       sprite.y = oy;
     }

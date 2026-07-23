@@ -43,15 +43,21 @@ const THROW_HAND_TEX = {
  * 出手后下一枚矛在手上旋转出现。
  * 位置与 getThrowOrigin 同一手点（贴图像素，挂在角色 sprite 下）。
  */
+/**
+ * 出手后下一枚矛在手上旋转出现。
+ * 位置与 getThrowOrigin 同一手点（贴图像素，挂在角色 sprite 下）。
+ * 当弹药用尽等待 CD 恢复时，准备动画与 CD 冷却进度 100% 绑定。
+ */
 const HAND_SPEAR = {
-  duration: 0.34,
-  /** 旋入圈数 */
-  spins: 1.2,
+  /** 有余弹时快速抽剑旋入时长（0.2 秒，保证连发爽快感） */
+  fastSpinDuration: 0.2,
+  /** 旋入圈数（多转一圈由 1.2 调至 2.2） */
+  spins: 2.2,
   /**
-   * 握持静止角（sprite 局部，相对贴图默认朝向已扣 SPEAR_TEX_ANGLE）。
+   * 握持静止角（sprite 局部，相对贴图默认朝向已扣 SPEAR_TEX_ANGLE，目标角度 -30°）。
    * 尖大致朝前上，随角色 scale.x 翻转。
    */
-  restRot: -Math.PI * 0.62 - SPEAR_TEX_ANGLE,
+  restRot: -Math.PI * 0.62 - SPEAR_TEX_ANGLE - (30 * Math.PI) / 180,
   /** 出现时从小到大的起始比例 */
   startScale: 0.15,
 } as const;
@@ -67,10 +73,18 @@ export class IceRanger extends PlayerCharacterBase {
 
   /** 手持下一枚矛（子节点挂在角色 sprite 上） */
   private handSpear: Sprite | null = null;
-  /** 旋入进度 0→1；≥1 为静止握持 */
+  /** 有余弹时快速旋入进度 0→1；≥1 为静止握持 */
   private handSpearT = 1;
+  /** 是否处于 CD 召唤凝结模式（当无余弹在等 CD 恢复时） */
+  private isCdSummoning = false;
   /** 是否显示手持矛 */
   private handSpearVisible = false;
+  /** 是否处于手持飞剑发射甩动前摇中 */
+  private isLaunching = false;
+  private launchTime = 0;
+  private launchStartRot = 0;
+  private launchTargetRot = 0;
+  private launchOnRelease: (() => void) | null = null;
 
   constructor(scale = 1, ammoStats: SpearAmmoStats = DEFAULT_SPEAR_AMMO) {
     super(
@@ -116,15 +130,51 @@ export class IceRanger extends PlayerCharacterBase {
   }
 
   /**
+   * 触发手上飞剑后拉蓄力 + 划弧斩出前摇，并在脱手瞬间回调生成飞行投射物
+   */
+  launchSpear(dirX: number, dirY: number, onRelease: () => void): boolean {
+    if (!this.ammo.hasAmmo || this.isLaunching) return false;
+
+    this.ensureHandSpear();
+    if (!this.handSpear) return false;
+
+    const worldAngle = Math.atan2(dirY, dirX);
+    const facingLeft = this.scale.x < 0;
+    const localTargetRot = facingLeft
+      ? Math.PI - worldAngle - SPEAR_TEX_ANGLE
+      : worldAngle - SPEAR_TEX_ANGLE;
+
+    this.isLaunching = true;
+    this.launchTime = 0;
+    this.launchStartRot = this.handSpear.rotation;
+    this.launchTargetRot = localTargetRot;
+    this.launchOnRelease = onRelease;
+
+    this.handSpearVisible = true;
+    this.handSpear.visible = true;
+
+    this.playThrowRecoil();
+    return true;
+  }
+
+  /**
    * 尝试消耗一把飞剑。
-   * 成功后：有余弹则手上旋入下一枚，否则收起手持矛。
+   * 成功后：有余弹则快速换枪旋入下一枚；
+   * 否则开启 CD 召唤模式，准备动画跟随 CD 恢复进度同步凝结。
    */
   tryConsumeSpear(): boolean {
     if (!this.ammo.tryConsume(1)) return false;
     if (this.ammo.hasAmmo) {
+      this.isCdSummoning = false;
       this.playHandSpearSpinIn();
     } else {
-      this.hideHandSpear();
+      // 弹药耗尽：进入 CD 凝结召唤，飞剑动画随 CD 恢复进度（0->1）平滑播放
+      this.isCdSummoning = true;
+      this.handSpearVisible = true;
+      if (this.handSpear) {
+        this.handSpear.visible = true;
+      }
+      this.applyHandSpearVisual(0);
     }
     return true;
   }
@@ -156,11 +206,11 @@ export class IceRanger extends PlayerCharacterBase {
   /**
    * 飞剑自动恢复（由场景在非暂停时调用）。
    * 与 update 分离，避免暂停 / 选角阶段偷回弹。
-   * 恢复不播手上动画：弹回到账后直接握持。
    */
   tickSpearAmmo(deltaMS: number): void {
     const { restoredFromEmpty } = this.ammo.update(deltaMS / 1000);
     if (restoredFromEmpty) {
+      this.isCdSummoning = false;
       this.showHandSpearReady();
     }
   }
@@ -220,7 +270,7 @@ export class IceRanger extends PlayerCharacterBase {
     this.handSpear = spear;
   }
 
-  /** 出手后：下一枚立即从缩小+旋转旋入握持位 */
+  /** 出手后（且尚有余弹）：下一枚在 0.2s 内快速旋入握持位 */
   private playHandSpearSpinIn(): void {
     this.ensureHandSpear();
     if (!this.handSpear) return;
@@ -230,31 +280,75 @@ export class IceRanger extends PlayerCharacterBase {
     this.applyHandSpearVisual(0);
   }
 
-  /** 静止握持（满仓开局 / 解锁补弹） */
+  /** 静止握持（满仓开局 / 解锁补弹 / CD 恢复完成） */
   private showHandSpearReady(): void {
     this.ensureHandSpear();
     if (!this.handSpear) return;
     this.handSpearVisible = true;
     this.handSpearT = 1;
+    this.isCdSummoning = false;
     this.applyHandSpearVisual(1);
-  }
-
-  private hideHandSpear(): void {
-    this.handSpearVisible = false;
-    this.handSpearT = 1;
-    if (this.handSpear) {
-      this.handSpear.visible = false;
-      this.handSpear.alpha = 0;
-    }
   }
 
   private updateHandSpear(dt: number): void {
     if (!this.handSpear || !this.handSpearVisible) return;
 
-    if (this.handSpearT < 1) {
-      this.handSpearT = Math.min(1, this.handSpearT + dt / HAND_SPEAR.duration);
+    if (this.isLaunching) {
+      this.launchTime += dt;
+      const duration = 0.11; // 110ms 强打击感划弧甩出前摇
+      const progress = Math.min(1, this.launchTime / duration);
+      const facingLeft = this.scale.x < 0;
+
+      let currentRot = this.launchStartRot;
+      if (progress < 0.25) {
+        // 0~25% 时间：往后拉剑蓄力
+        const u = progress / 0.25;
+        const pullBack = Math.sin(u * Math.PI * 0.5) * 0.35;
+        currentRot =
+          this.launchStartRot - (facingLeft ? -pullBack : pullBack);
+      } else {
+        // 25%~100% 时间：弧形斩出，尖端直指目标
+        const u = (progress - 0.25) / 0.75;
+        const eased = u * u * (3 - 2 * u);
+        const startRot =
+          this.launchStartRot - (facingLeft ? -0.35 : 0.35);
+        currentRot = startRot + (this.launchTargetRot - startRot) * eased;
+      }
+
+      this.handSpear.rotation = currentRot;
+      this.handSpear.alpha = 1;
+      this.handSpear.visible = true;
+
+      if (progress >= 1) {
+        this.isLaunching = false;
+        const cb = this.launchOnRelease;
+        this.launchOnRelease = null;
+        this.tryConsumeSpear();
+        if (cb) cb();
+      }
+      return;
     }
-    this.applyHandSpearVisual(this.handSpearT);
+
+    if (this.isCdSummoning) {
+      // 处于 CD 恢复期（库存为 0）：手持飞剑准备动画 1:1 绑定 CD 恢复进度 (0->1)
+      const snapshot = this.ammo.snapshot;
+      if (snapshot.current > 0) {
+        this.isCdSummoning = false;
+        this.showHandSpearReady();
+      } else {
+        const progress = snapshot.regenProgress;
+        this.applyHandSpearVisual(progress);
+      }
+    } else {
+      // 连发换弹（尚有余弹）：0.2s 内快速旋入
+      if (this.handSpearT < 1) {
+        this.handSpearT = Math.min(
+          1,
+          this.handSpearT + dt / HAND_SPEAR.fastSpinDuration,
+        );
+      }
+      this.applyHandSpearVisual(this.handSpearT);
+    }
   }
 
   /**
@@ -273,7 +367,7 @@ export class IceRanger extends PlayerCharacterBase {
       local *
       (HAND_SPEAR.startScale + (1 - HAND_SPEAR.startScale) * eased);
     spear.scale.set(s);
-    spear.alpha = eased;
+    spear.alpha = Math.max(0.08, eased);
     // 从 rest - spins*2π 旋到 rest
     spear.rotation =
       HAND_SPEAR.restRot - (1 - eased) * HAND_SPEAR.spins * Math.PI * 2;

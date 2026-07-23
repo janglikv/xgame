@@ -1,5 +1,9 @@
-import { Assets, Container, Sprite, Texture } from 'pixi.js';
+import { Container, Sprite, Texture } from 'pixi.js';
 import { bodyHitsTrees, MAP_WORLD_HALF } from '../world/WorldMap';
+import {
+  loadOutlinedTexture,
+  OUTLINE_PX_SPEAR,
+} from '../utils/outlineTexture';
 
 const SPEAR_URL = '/assets/ice-ranger/spear.png';
 
@@ -49,7 +53,8 @@ let sharedSpear: Texture | null = null;
 
 export async function loadSpearTexture(): Promise<void> {
   if (sharedSpear) return;
-  sharedSpear = await Assets.load(SPEAR_URL);
+  const outlined = await loadOutlinedTexture(SPEAR_URL, OUTLINE_PX_SPEAR);
+  sharedSpear = outlined.texture;
 }
 
 /** 已加载的矛贴图（手持特效等复用）；未 load 时为 null */

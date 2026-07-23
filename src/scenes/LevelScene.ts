@@ -1465,29 +1465,29 @@ export class LevelScene extends Container implements GameScene {
     const dirX = aim.dx * inv;
     const dirY = aim.dy * inv;
 
-    // 数量限制：无弹不可扔
-    if (!player.tryConsumeSpear()) return;
-
     player.setFacingFromMoveX(aim.dx);
-    player.playThrowRecoil();
 
-    // 发射反冲：朝投掷反方向小跳；补速不叠速，避免连扔越跳越快
-    applyRecoilHop(
-      this.knock,
-      -dirX,
-      -dirY,
-      SPEAR_THROW_RECOIL_SPEED,
-    );
+    const launched = player.launchSpear(dirX, dirY, () => {
+      // 脱手瞬间：施加小后跳 + 生成飞行中投射物
+      applyRecoilHop(
+        this.knock,
+        -dirX,
+        -dirY,
+        SPEAR_THROW_RECOIL_SPEED,
+      );
 
-    const origin = player.getThrowOrigin(this.worldX, this.worldY);
-    const spear = new SpearProjectile(origin.x, origin.y, dirX, dirY, {
-      originHeight: origin.height,
+      const origin = player.getThrowOrigin(this.worldX, this.worldY);
+      const spear = new SpearProjectile(origin.x, origin.y, dirX, dirY, {
+        originHeight: origin.height,
+      });
+      this.sortLayer.addChild(spear);
+      this.spears.push(spear);
+      spear.syncToWorld();
+      this.sortDepth();
+      this.spearAmmoHud.setAmmo(player.spearAmmo);
     });
-    this.sortLayer.addChild(spear);
-    this.spears.push(spear);
-    spear.syncToWorld();
-    this.sortDepth();
-    this.spearAmmoHud.setAmmo(player.spearAmmo);
+
+    if (!launched) return;
   }
 
   private updateBombs(deltaMS: number): void {
