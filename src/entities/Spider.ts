@@ -6,6 +6,11 @@ import {
   stepKnockArc,
   type KnockArcState,
 } from './knockArc';
+import {
+  SPIDER_BODY_R,
+  SPIDER_HURT_R,
+  type WorldActor,
+} from './WorldActor';
 import { HealthBar } from '../ui/HealthBar';
 import {
   loadOutlinedTexture,
@@ -135,18 +140,21 @@ export type SpiderUpdateResult = {
  * 蜘蛛怪物：世界坐标定位，由外部按摄像机同步到屏幕。
  * 原点在身体底部中心；血条为 sibling 子节点，不随朝向翻转。
  * AI：未锁定时巡视出生点领地；靠近或被打后锁定追击，贴近则扑咬。
+ * 实现 WorldActor：与玩家同一套 worldX/Y + knock。
  */
-export class Spider extends Container {
+export class Spider extends Container implements WorldActor {
   private sprite: Sprite | null = null;
   private readonly baseScale: number;
   private readonly healthBar: HealthBar;
   private readonly maxHp: number;
+  readonly bodyR = SPIDER_BODY_R;
+  readonly hurtR = SPIDER_HURT_R;
   /** 1 = 朝右，-1 = 朝左 */
   private facing: 1 | -1 = 1;
   /** 被炸飞姿态强度 */
   private blastKnock = 0;
   /** 击飞抛物线（地面速度 + 高度） */
-  private readonly knock: KnockArcState = createKnockArcState();
+  readonly knock: KnockArcState = createKnockArcState();
   /** 空中旋转进度 0→1 */
   private spinT = 0;
   private spinTarget = 0;

@@ -1,5 +1,11 @@
 import { Container, Sprite } from 'pixi.js';
 import type { CharacterId } from './types';
+import { createKnockArcState, type KnockArcState } from './knockArc';
+import {
+  PLAYER_BODY_R,
+  PLAYER_HURT_R,
+  type WorldActor,
+} from './WorldActor';
 import {
   loadOutlinedTexture,
   OUTLINE_PX_CHARACTER,
@@ -58,13 +64,25 @@ export type PlayerCharacterOptions = {
 type PoseDelta = { x: number; y: number; rot: number };
 
 /**
- * 玩家角色公共基类：贴图加载、朝向、镜头缩放、走路晃动、受击 / 空中转圈。
+ * 玩家角色公共基类：世界坐标、贴图加载、朝向、镜头缩放、走路晃动、受击 / 空中转圈。
  * 具体角色只填配置；投弹等能力在子类扩展。
+ * 脚底 worldX/Y 与 knock 由实体持有（WorldActor），场景不再另存一份。
  */
-export abstract class PlayerCharacterBase extends Container {
+export abstract class PlayerCharacterBase
+  extends Container
+  implements WorldActor
+{
   readonly characterId: CharacterId;
   readonly canThrowBomb: boolean;
   readonly canThrowSpear: boolean;
+  readonly bodyR = PLAYER_BODY_R;
+  readonly hurtR = PLAYER_HURT_R;
+
+  /** 脚底世界坐标（与蜘蛛同一空间） */
+  worldX = 0;
+  worldY = 0;
+  /** 被炸飞 / 击退：地面速度 + 高度抛物线 */
+  readonly knock: KnockArcState = createKnockArcState();
 
   private readonly previewUrl: string;
   private readonly spriteLabel: string;
@@ -107,6 +125,12 @@ export abstract class PlayerCharacterBase extends Container {
     this.label = options.label;
     this.baseScale = scale;
     this.applyContainerScale();
+  }
+
+  /** 把脚底世界坐标写到显示位置（含 knock 高度） */
+  syncToWorld(): void {
+    this.position.set(this.worldX, this.worldY - this.knock.height);
+    this.zIndex = this.worldY;
   }
 
   /** 是否有点击瞄准的远程攻击（炸弹 / 矛） */

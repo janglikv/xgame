@@ -9,16 +9,16 @@ import { IceRanger, SPEAR_THROW_RECOIL_SPEED } from '../entities/IceRanger';
 import type { PlayerCharacterBase } from '../entities/PlayerCharacterBase';
 import { SpearProjectile } from '../entities/SpearProjectile';
 import type { SpearAmmoSnapshot } from '../entities/SpearAmmo';
-import {
-  applyKnockImpulse,
-  applyRecoilHop,
-  type KnockArcState,
-} from '../entities/knockArc';
+import { applyKnockImpulse, applyRecoilHop } from '../entities/knockArc';
 import type { Spider } from '../entities/Spider';
+import {
+  PLAYER_HURT_R,
+  SPIDER_HURT_R,
+} from '../entities/WorldActor';
 
-/** 受击体：武器命中用（可与 solid 独立调参） */
-export const PLAYER_HURT_R = 22;
-export const SPIDER_HURT_R = 24;
+/** 再导出，方便场景引用 */
+export { PLAYER_HURT_R, SPIDER_HURT_R };
+
 /** 蜘蛛对击飞的接收倍率（目标抗性，非炸弹属性） */
 export const SPIDER_KNOCK_SCALE = 0.85;
 /** 点太近不扔（屏幕像素） */
@@ -33,32 +33,13 @@ export type CombatCameraView = {
   height: number;
 };
 
-/** 操作中的玩家（武器可打到自己爆炸） */
-export type CombatPlayerTarget = {
-  entity: PlayerCharacterBase;
-  worldX: number;
-  worldY: number;
-  knock: KnockArcState;
-};
-
-/** 停场角色：可被武器击飞，不扣血 */
-export type CombatParkedTarget = {
-  worldX: number;
-  worldY: number;
-  knock: KnockArcState;
-  entity: {
-    playBlastKnock: (
-      strength: number,
-      dirX?: number,
-      airSpinTurns?: number,
-    ) => void;
-  };
-};
-
-/** 一帧武器结算所需世界 */
+/**
+ * 一帧武器结算所需世界。
+ * 玩家 / 停场均为 WorldActor（实体自持 worldX/Y + knock）。
+ */
 export type CombatWorld = {
-  player: CombatPlayerTarget | null;
-  parked: CombatParkedTarget[];
+  player: PlayerCharacterBase | null;
+  parked: PlayerCharacterBase[];
   /** 可变数组：死亡蜘蛛会从中 splice */
   spiders: Spider[];
 };
@@ -97,23 +78,20 @@ export class CombatSystem {
 
   /**
    * 屏幕点击远程攻击（炸弹妹 / 冰霜游侠）。
-   * `getPlayerWorld` 在出手瞬间再读，避免投矛前摇期间位移错位。
+   * 脚底从 `player.worldX/Y` 读取；投矛脱手瞬间再读，避免前摇位移错位。
    * 非对应角色或瞄准过近则 no-op。
    */
   tryRangedAtScreen(
     player: PlayerCharacterBase,
-    getPlayerWorld: () => { x: number; y: number },
-    playerKnock: KnockArcState,
     screenX: number,
     screenY: number,
     camera: CombatCameraView,
   ): void {
-    const pos = getPlayerWorld();
     if (player instanceof BombGirl) {
       this.throwBombAtScreen(
         player,
-        pos.x,
-        pos.y,
+        player.worldX,
+        player.worldY,
         screenX,
         screenY,
         camera,
@@ -121,14 +99,7 @@ export class CombatSystem {
       return;
     }
     if (player instanceof IceRanger) {
-      this.throwSpearAtScreen(
-        player,
-        getPlayerWorld,
-        playerKnock,
-        screenX,
-        screenY,
-        camera,
-      );
+      this.throwSpearAtScreen(player, screenX, screenY, camera);
     }
   }
 
@@ -207,16 +178,13 @@ export class CombatSystem {
 
   private throwSpearAtScreen(
     player: IceRanger,
-    getPlayerWorld: () => { x: number; y: number },
-    playerKnock: KnockArcState,
     screenX: number,
     screenY: number,
     camera: CombatCameraView,
   ): void {
-    const pos = getPlayerWorld();
     const aim = this.screenAimWorldDelta(
-      pos.x,
-      pos.y,
+      player.worldX,
+      player.worldY,
       screenX,
       screenY,
       camera,
@@ -233,15 +201,14 @@ export class CombatSystem {
 
     const launched = player.launchSpear(dirX, dirY, () => {
       applyRecoilHop(
-        playerKnock,
+        player.knock,
         -dirX,
         -dirY,
         SPEAR_THROW_RECOIL_SPEED,
       );
 
       // 脱手瞬间再取脚底，与前摇期间位移一致
-      const release = getPlayerWorld();
-      const origin = player.getThrowOrigin(release.x, release.y);
+      const origin = player.getThrowOrigin(player.worldX, player.worldY);
       const spear = new SpearProjectile(origin.x, origin.y, dirX, dirY, {
         originHeight: origin.height,
       });
@@ -290,7 +257,7 @@ export class CombatSystem {
         for (let s = world.spiders.length - 1; s >= 0; s--) {
           const spider = world.spiders[s]!;
           if (!spider.isAlive) continue;
-          if (!spear.hitsTarget(spider.worldX, spider.worldY, SPIDER_HURT_R)) {
+          if (!spear.hitsTarget(spider.worldX, spider.worldY, spider.hurtR)) {
             continue;
           }
 
@@ -312,7 +279,7 @@ export class CombatSystem {
               !spear.hitsTarget(
                 parked.worldX,
                 parked.worldY,
-                PLAYER_HURT_R,
+                parked.hurtR,
               )
             ) {
               continue;
@@ -348,12 +315,11 @@ export class CombatSystem {
   private applyBombBlast(bomb: BombProjectile, world: CombatWorld): void {
     const player = world.player;
     if (player) {
-      const face = player.entity.facingDir;
       const playerHit = bomb.evaluateHit(
         player.worldX,
         player.worldY,
-        face,
-        PLAYER_HURT_R,
+        player.facingDir,
+        player.hurtR,
       );
       if (playerHit) {
         applyKnockImpulse(
@@ -361,7 +327,7 @@ export class CombatSystem {
           playerHit.knockVelX,
           playerHit.knockVelY,
         );
-        player.entity.playBlastKnock(
+        player.playBlastKnock(
           playerHit.poseStrength,
           playerHit.dirX,
           playerHit.airSpinTurns,
@@ -375,7 +341,7 @@ export class CombatSystem {
         parked.worldX,
         parked.worldY,
         parked.worldX >= bomb.groundX ? 1 : -1,
-        PLAYER_HURT_R,
+        parked.hurtR,
       );
       if (!hit) continue;
       this.applyParkedHitFx(parked, hit, 1);
@@ -390,7 +356,7 @@ export class CombatSystem {
         spider.worldX,
         spider.worldY,
         spider.worldX >= bomb.groundX ? 1 : -1,
-        SPIDER_HURT_R,
+        spider.hurtR,
       );
       if (!hit) continue;
 
@@ -408,7 +374,7 @@ export class CombatSystem {
   }
 
   private applyParkedHitFx(
-    parked: CombatParkedTarget,
+    parked: PlayerCharacterBase,
     hit: {
       knockVelX: number;
       knockVelY: number;
@@ -424,7 +390,7 @@ export class CombatSystem {
       hit.knockVelY,
       knockScale,
     );
-    parked.entity.playBlastKnock(
+    parked.playBlastKnock(
       hit.poseStrength,
       hit.dirX,
       hit.airSpinTurns ?? 0,

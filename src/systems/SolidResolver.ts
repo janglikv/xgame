@@ -1,16 +1,16 @@
 import {
+  PLAYER_BODY_R,
+  SPIDER_BODY_R,
+} from '../entities/WorldActor';
+import {
   circlesOverlap,
   pushCircleOut,
   pushCircleOutMany,
 } from '../world/circleBody';
 import { WorldMap } from '../world/WorldMap';
 
-/**
- * 碰撞体（solid）：脚底圆形占位，圆心 = worldX/Y。
- * 用于挡树、人怪互挡、推挤——不参与武器伤害判定。
- */
-export const PLAYER_BODY_R = 18;
-export const SPIDER_BODY_R = 20;
+/** 再导出，方便场景 / 旧引用 */
+export { PLAYER_BODY_R, SPIDER_BODY_R };
 
 /** 实体圆互推后与树区再解析的次数 */
 const BODY_SOLID_ITERS = 2;

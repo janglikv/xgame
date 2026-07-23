@@ -6,19 +6,15 @@ import type { PlayerCharacterBase } from '../entities/PlayerCharacterBase';
 import type { CharacterId } from '../entities/types';
 import {
   applyKnockImpulse,
-  createKnockArcState,
   stepKnockArc,
-  type KnockArcState,
 } from '../entities/knockArc';
 import { Spider } from '../entities/Spider';
 import { Keyboard } from '../input/Keyboard';
 import {
   CombatSystem,
-  PLAYER_HURT_R,
   type CombatWorld,
 } from '../systems/CombatSystem';
 import {
-  PLAYER_BODY_R,
   SolidResolver,
   type SolidContext,
 } from '../systems/SolidResolver';
@@ -76,23 +72,19 @@ export type LevelSceneOptions = {
 type CharacterCandidate = {
   id: CharacterId;
   entity: PlayerCharacterBase;
-  worldX: number;
-  worldY: number;
   pedestal: Graphics;
   hovered: boolean;
   isDefault: boolean;
 };
 
-/** 选角后留在场上的未选角色（可被挤走；可吃武器击飞但不掉血） */
+/**
+ * 选角后留在场上的未选角色（可被挤走；可吃武器击飞但不掉血）。
+ * 世界坐标 / knock 在 entity 上（WorldActor）；此处只记帧初脚底供走路判定。
+ */
 type ParkedCharacter = {
   entity: PlayerCharacterBase;
-  worldX: number;
-  worldY: number;
-  /** 本帧逻辑开始时的脚底坐标（用于被挤位移 → 走路动画） */
   frameStartX: number;
   frameStartY: number;
-  /** 被炸/被矛的地面击飞抛物线（无 HP） */
-  knock: KnockArcState;
 };
 
 /**
@@ -136,11 +128,6 @@ export class LevelScene extends Container implements GameScene {
   private readonly getLastCharacter: () => CharacterId;
   private readonly setLastCharacter?: (id: CharacterId) => void;
 
-  /** 玩家世界坐标 */
-  private worldX = PLAYER_SPAWN.x;
-  private worldY = PLAYER_SPAWN.y;
-  /** 被炸飞：地面平面速度 + 高度抛物线 */
-  private readonly knock: KnockArcState = createKnockArcState();
   private paused = false;
   /** true = 尚未选角，禁止移动 / 攻击 */
   private selectingCharacter = true;
@@ -255,8 +242,6 @@ export class LevelScene extends Container implements GameScene {
     ];
 
     for (const entry of roster) {
-      const worldX = PLAYER_SPAWN.x + entry.offsetX;
-      const worldY = PLAYER_SPAWN.y;
       const isDefault = entry.id === defaultCharId;
 
       const pedestal = new Graphics();
@@ -265,6 +250,8 @@ export class LevelScene extends Container implements GameScene {
       this.paintPedestal(pedestal, false, isDefault, 0);
 
       const entity = entry.entity;
+      entity.worldX = PLAYER_SPAWN.x + entry.offsetX;
+      entity.worldY = PLAYER_SPAWN.y;
       entity.eventMode = 'static';
       entity.cursor = 'pointer';
       entity.hitArea = new Rectangle(
@@ -277,8 +264,6 @@ export class LevelScene extends Container implements GameScene {
       const candidate: CharacterCandidate = {
         id: entry.id,
         entity,
-        worldX,
-        worldY,
         pedestal,
         hovered: false,
         isDefault,
@@ -339,8 +324,6 @@ export class LevelScene extends Container implements GameScene {
     this.setLastCharacter?.(id);
 
     this.player = chosen.entity;
-    this.worldX = chosen.worldX;
-    this.worldY = chosen.worldY;
 
     for (const c of this.candidates) {
       c.entity.off('pointerover');
@@ -355,14 +338,11 @@ export class LevelScene extends Container implements GameScene {
       c.pedestal.destroy();
 
       if (c.id !== id) {
-        // 未选中角色仍站在出生位，不销毁
+        // 未选中角色仍站在出生位，不销毁（world 已在 entity 上）
         this.parkedCharacters.push({
           entity: c.entity,
-          worldX: c.worldX,
-          worldY: c.worldY,
-          frameStartX: c.worldX,
-          frameStartY: c.worldY,
-          knock: createKnockArcState(),
+          frameStartX: c.entity.worldX,
+          frameStartY: c.entity.worldY,
         });
       }
     }
@@ -477,13 +457,13 @@ export class LevelScene extends Container implements GameScene {
    */
   private getSelectFocus(): { x: number; y: number } {
     if (this.candidates.length === 0) {
-      return { x: this.worldX, y: this.worldY };
+      return { x: PLAYER_SPAWN.x, y: PLAYER_SPAWN.y };
     }
     let sx = 0;
     let sy = 0;
     for (const c of this.candidates) {
-      sx += c.worldX;
-      sy += c.worldY;
+      sx += c.entity.worldX;
+      sy += c.entity.worldY;
     }
     const n = this.candidates.length;
     return { x: sx / n, y: sy / n };
@@ -494,17 +474,18 @@ export class LevelScene extends Container implements GameScene {
    * 选角时用候选中点。
    */
   private getCameraFocus(): { x: number; y: number } {
-    if (!this.selectingCharacter) {
+    const player = this.player;
+    if (!this.selectingCharacter && player) {
       const solid = WorldMap.resolveSolid(
-        this.worldX,
-        this.worldY,
-        this.worldX,
-        this.worldY,
-        PLAYER_BODY_R,
+        player.worldX,
+        player.worldY,
+        player.worldX,
+        player.worldY,
+        player.bodyR,
       );
-      this.worldX = solid.x;
-      this.worldY = solid.y;
-      return { x: this.worldX, y: this.worldY };
+      player.worldX = solid.x;
+      player.worldY = solid.y;
+      return { x: player.worldX, y: player.worldY };
     }
     return this.getSelectFocus();
   }
@@ -523,20 +504,14 @@ export class LevelScene extends Container implements GameScene {
   private syncWorldActors(): void {
     if (this.selectingCharacter) {
       for (const c of this.candidates) {
-        c.pedestal.position.set(c.worldX, c.worldY);
-        c.pedestal.zIndex = c.worldY - 0.5;
-        c.entity.position.set(c.worldX, c.worldY);
-        c.entity.zIndex = c.worldY;
+        c.pedestal.position.set(c.entity.worldX, c.entity.worldY);
+        c.pedestal.zIndex = c.entity.worldY - 0.5;
+        c.entity.syncToWorld();
       }
     } else if (this.player) {
-      this.player.position.set(this.worldX, this.worldY - this.knock.height);
-      this.player.zIndex = this.worldY;
+      this.player.syncToWorld();
       for (const parked of this.parkedCharacters) {
-        parked.entity.position.set(
-          parked.worldX,
-          parked.worldY - parked.knock.height,
-        );
-        parked.entity.zIndex = parked.worldY;
+        parked.entity.syncToWorld();
       }
     }
     for (const spider of this.spiders) {
@@ -548,16 +523,8 @@ export class LevelScene extends Container implements GameScene {
   /** 武器结算用的世界快照（与 solid 共用 spiders / parked 引用） */
   private combatWorld(): CombatWorld {
     return {
-      player:
-        this.player && !this.selectingCharacter
-          ? {
-              entity: this.player,
-              worldX: this.worldX,
-              worldY: this.worldY,
-              knock: this.knock,
-            }
-          : null,
-      parked: this.parkedCharacters,
+      player: this.player && !this.selectingCharacter ? this.player : null,
+      parked: this.parkedCharacters.map((p) => p.entity),
       spiders: this.spiders,
     };
   }
@@ -583,15 +550,12 @@ export class LevelScene extends Container implements GameScene {
 
   /**
    * solid 用的世界快照。
-   * parked / spiders 直接引用实体，可被 resolver 原地改坐标。
+   * player / parked / spiders 直接引用实体，可被 resolver 原地改坐标。
    */
   private solidContext(): SolidContext {
     return {
-      player:
-        this.player && !this.selectingCharacter
-          ? { worldX: this.worldX, worldY: this.worldY }
-          : null,
-      parked: this.parkedCharacters,
+      player: this.player && !this.selectingCharacter ? this.player : null,
+      parked: this.parkedCharacters.map((p) => p.entity),
       spiders: this.spiders,
     };
   }
@@ -601,13 +565,9 @@ export class LevelScene extends Container implements GameScene {
    * 停场角色可被挤走；蜘蛛仍为硬障碍。from = 移动前，用于轴分离滑墙。
    */
   private applyPlayerSolid(fromX: number, fromY: number): void {
-    const ctx = this.solidContext();
-    // 玩家坐标在场景字段上：用临时 foot，解析后再写回
-    const foot = { worldX: this.worldX, worldY: this.worldY };
-    ctx.player = foot;
-    this.solid.resolvePlayer(foot, fromX, fromY, ctx);
-    this.worldX = foot.worldX;
-    this.worldY = foot.worldY;
+    const player = this.player;
+    if (!player) return;
+    this.solid.resolvePlayer(player, fromX, fromY, this.solidContext());
   }
 
   /**
@@ -677,23 +637,23 @@ export class LevelScene extends Container implements GameScene {
 
     // 帧初快照：供停场角色被挤后算位移（须在 solid 之前）
     for (const parked of this.parkedCharacters) {
-      parked.frameStartX = parked.worldX;
-      parked.frameStartY = parked.worldY;
+      parked.frameStartX = parked.entity.worldX;
+      parked.frameStartY = parked.entity.worldY;
     }
 
     const { x, y } = this.keyboard.getMoveAxis();
     let moved = false;
-    const fromX = this.worldX;
-    const fromY = this.worldY;
+    const fromX = player.worldX;
+    const fromY = player.worldY;
 
     // 被炸飞：抛物线（地面推开 + 高度起落）
-    const knockStep = stepKnockArc(this.knock, dt);
+    const knockStep = stepKnockArc(player.knock, dt);
     if (knockStep.moved) {
-      this.worldX += knockStep.dx;
-      this.worldY += knockStep.dy;
+      player.worldX += knockStep.dx;
+      player.worldY += knockStep.dy;
       moved = true;
     }
-    const knockSpeed = Math.hypot(this.knock.velX, this.knock.velY);
+    const knockSpeed = Math.hypot(player.knock.velX, player.knock.velY);
     const airborne = knockStep.airborne;
 
     // WASD：空中几乎失控；贴地时强击退会变钝
@@ -706,8 +666,8 @@ export class LevelScene extends Container implements GameScene {
       } else if (knockSpeed > KNOCK_CONTROL_SOFTEN) {
         control = Math.max(0.2, 1 - knockSpeed / (KNOCK_CONTROL_SOFTEN * 3));
       }
-      this.worldX += x * MOVE_SPEED * control * dt;
-      this.worldY += y * MOVE_SPEED * control * dt;
+      player.worldX += x * MOVE_SPEED * control * dt;
+      player.worldY += y * MOVE_SPEED * control * dt;
       moved = true;
     }
 
@@ -734,9 +694,9 @@ export class LevelScene extends Container implements GameScene {
       const sFromY = spider.worldY;
       const result = spider.update(
         deltaMS,
-        this.worldX,
-        this.worldY,
-        PLAYER_HURT_R,
+        player.worldX,
+        player.worldY,
+        player.hurtR,
       );
       this.applySpiderSolid(spider, sFromX, sFromY, si);
       if (result.attackHit) {
@@ -762,13 +722,14 @@ export class LevelScene extends Container implements GameScene {
   private stepParkedKnock(dt: number): void {
     for (let i = 0; i < this.parkedCharacters.length; i++) {
       const parked = this.parkedCharacters[i]!;
-      const fromX = parked.worldX;
-      const fromY = parked.worldY;
-      const knockStep = stepKnockArc(parked.knock, dt);
+      const entity = parked.entity;
+      const fromX = entity.worldX;
+      const fromY = entity.worldY;
+      const knockStep = stepKnockArc(entity.knock, dt);
       if (!knockStep.moved) continue;
-      parked.worldX += knockStep.dx;
-      parked.worldY += knockStep.dy;
-      this.solid.resolveParked(parked, fromX, fromY, i, this.solidContext());
+      entity.worldX += knockStep.dx;
+      entity.worldY += knockStep.dy;
+      this.solid.resolveParked(entity, fromX, fromY, i, this.solidContext());
     }
   }
 
@@ -782,22 +743,19 @@ export class LevelScene extends Container implements GameScene {
     const moveEpsSq = 0.35 * 0.35;
 
     for (const parked of this.parkedCharacters) {
-      const dx = parked.worldX - parked.frameStartX;
-      const dy = parked.worldY - parked.frameStartY;
+      const entity = parked.entity;
+      const dx = entity.worldX - parked.frameStartX;
+      const dy = entity.worldY - parked.frameStartY;
       const distSq = dx * dx + dy * dy;
-      const knockSpeed = Math.hypot(parked.knock.velX, parked.knock.velY);
-      const airborne = parked.knock.height > 0.5;
+      const knockSpeed = Math.hypot(entity.knock.velX, entity.knock.velY);
+      const airborne = entity.knock.height > 0.5;
       // 贴地被挤 / 轻推：走路晃；空中或高速击飞：只播受击姿态
       const walking = distSq > moveEpsSq && !airborne && knockSpeed < 80;
       if (distSq > moveEpsSq && !airborne) {
-        parked.entity.setFacingFromMoveX(dx);
+        entity.setFacingFromMoveX(dx);
       }
-      parked.entity.update(deltaMS, walking);
-      parked.entity.position.set(
-        parked.worldX,
-        parked.worldY - parked.knock.height,
-      );
-      parked.entity.zIndex = parked.worldY;
+      entity.update(deltaMS, walking);
+      entity.syncToWorld();
     }
   }
 
@@ -846,15 +804,16 @@ export class LevelScene extends Container implements GameScene {
     dirY: number;
     knockImpulse: number;
   }): void {
-    if (!this.player) return;
+    const player = this.player;
+    if (!player) return;
     this.healthBar.applyDelta(-Math.abs(hit.damage));
     applyKnockImpulse(
-      this.knock,
+      player.knock,
       hit.dirX * hit.knockImpulse,
       hit.dirY * hit.knockImpulse,
     );
     // 轻伤姿态（不转圈）
-    this.player.playBlastKnock(0.45, hit.dirX, 0);
+    player.playBlastKnock(0.45, hit.dirX, 0);
     this.stepCamera(0, false);
     this.syncWorldActors();
     this.sortDepth();
@@ -903,20 +862,13 @@ export class LevelScene extends Container implements GameScene {
     if (this.paused || this.selectingCharacter) return;
     const player = this.player;
     if (!player) return;
-    this.combat.tryRangedAtScreen(
-      player,
-      () => ({ x: this.worldX, y: this.worldY }),
-      this.knock,
-      e.global.x,
-      e.global.y,
-      {
-        x: this.camera.x,
-        y: this.camera.y,
-        zoom: this.camera.currentZoom,
-        width: this.camera.width,
-        height: this.camera.height,
-      },
-    );
+    this.combat.tryRangedAtScreen(player, e.global.x, e.global.y, {
+      x: this.camera.x,
+      y: this.camera.y,
+      zoom: this.camera.currentZoom,
+      width: this.camera.width,
+      height: this.camera.height,
+    });
   };
 
   private setPaused(value: boolean): void {
