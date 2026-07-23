@@ -4,6 +4,16 @@ import { Container, Graphics } from 'pixi.js';
 const PINE_SCALE = 2.7;
 const PINE_TRUNK_H = 3.2;
 
+/**
+ * 单棵松树本地包围（脚底 = 0,0），含描边与阴影余量。
+ * 用于行 chunk 裁剪 pad / AABB。
+ */
+export const PINE_LOCAL_HALF_W = 15 * PINE_SCALE + 6;
+/** 树冠顶点在脚底上方的大致高度 */
+export const PINE_LOCAL_TOP = PINE_TRUNK_H * PINE_SCALE * 0.35 + 28 * PINE_SCALE + 4 * PINE_SCALE + 6;
+/** 阴影落到脚底下方 */
+export const PINE_LOCAL_SHADOW = 2 + 3.6 * PINE_SCALE + 4;
+
 const COLORS = {
   canopyDeep: 0x1f5a1a,
   canopy: 0x2d7a28,
@@ -15,7 +25,7 @@ const COLORS = {
 } as const;
 
 /**
- * 单棵松树显示对象。
+ * 单棵松树显示对象（调试 / 兼容；运行时森林走 TreeRowChunk）。
  * 原点 = 脚底（世界坐标）；zIndex = worldY 参与纵深排序。
  */
 export class PineTree extends Container {
@@ -38,13 +48,22 @@ export class PineTree extends Container {
   }
 }
 
-/** 在本地坐标 (0,0)=脚底 绘制一棵松树 */
-export function drawPineLocal(g: Graphics, shade: number): void {
+/**
+ * 在 Graphics 上画一棵松树。
+ * @param ox 脚底本地 X（默认 0）
+ * @param oy 脚底本地 Y（默认 0；行 chunk 内通常为 0）
+ */
+export function drawPineLocal(
+  g: Graphics,
+  shade: number,
+  ox = 0,
+  oy = 0,
+): void {
   const scale = PINE_SCALE;
   const trunkH = PINE_TRUNK_H * scale;
   const trunkW = 3.2 * scale;
-  const x = 0;
-  const y = 0;
+  const x = ox;
+  const y = oy;
 
   const deep =
     shade === 0 ? COLORS.canopyDeep : shade === 1 ? 0x1a5016 : 0x245c1f;

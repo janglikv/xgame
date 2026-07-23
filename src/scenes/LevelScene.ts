@@ -319,13 +319,16 @@ export class LevelScene extends Container implements GameScene {
     this.sortDepth();
   }
 
-  /** 把地图生成的松树挂到 sortLayer，参与 Y-sort */
+  /**
+   * 挂载行 chunk 松树到 sortLayer（Y-sort）。
+   * 每个 chunk = 同 worldY 上一段合并 Graphics，节点数远小于逐棵树。
+   */
   private mountTrees(): void {
     if (this.treesMounted) return;
     this.treesMounted = true;
-    for (const tree of this.worldMap.getTrees()) {
-      tree.tint = NIGHT_TREE_TINT;
-      this.sortLayer.addChild(tree);
+    for (const chunk of this.worldMap.getTreeChunks()) {
+      chunk.tint = NIGHT_TREE_TINT;
+      this.sortLayer.addChild(chunk);
     }
   }
 
@@ -422,17 +425,22 @@ export class LevelScene extends Container implements GameScene {
     };
   }
 
-  /** 视口外松树不渲染（仍保留在 sortLayer） */
+  /** 视口外树 chunk 不渲染（仍保留在 sortLayer，节点数已是 O(行×块)） */
   private cullTrees(): void {
     const z = Math.max(this.camera.currentZoom, 1e-4);
     const pad = 140;
     const hw = this.camera.width / (2 * z) + pad;
     const hh = this.camera.height / (2 * z) + pad;
-    const cx = this.camera.x;
-    const cy = this.camera.y;
-    for (const tree of this.worldMap.getTrees()) {
-      tree.renderable =
-        Math.abs(tree.worldX - cx) <= hw && Math.abs(tree.worldY - cy) <= hh;
+    const left = this.camera.x - hw;
+    const right = this.camera.x + hw;
+    const top = this.camera.y - hh;
+    const bottom = this.camera.y + hh;
+    for (const chunk of this.worldMap.getTreeChunks()) {
+      chunk.renderable =
+        chunk.maxX >= left &&
+        chunk.minX <= right &&
+        chunk.maxY >= top &&
+        chunk.minY <= bottom;
     }
   }
 

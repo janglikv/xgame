@@ -8,7 +8,11 @@ import {
 } from '../data/maps/walkMask';
 import type { Vec2 } from '../utils/math';
 import { ISLAND_SIZE, PINE_SPACING } from './mapLayout';
-import { PineTree } from './PineTree';
+import {
+  TREE_CHUNK_CELLS,
+  TreeRowChunk,
+  type TreePlant,
+} from './TreeRowChunk';
 
 // 布局常量 re-export，保持旧 import 路径可用
 export {
@@ -154,7 +158,8 @@ function tryEscapeTrees(
  */
 export class WorldMap extends Container {
   private readonly root: Container;
-  private readonly trees: PineTree[] = [];
+  /** 行×水平分块的松树显示对象（进 sortLayer，不挂在 MapRoot） */
+  private readonly treeChunks: TreeRowChunk[] = [];
   private readonly def: LevelMapDef;
   private built = false;
 
@@ -175,9 +180,9 @@ export class WorldMap extends Container {
     return this.def;
   }
 
-  /** 松树实例（脚底世界坐标，参与 Y-sort） */
-  getTrees(): readonly PineTree[] {
-    return this.trees;
+  /** 松树行 chunk（脚底 worldY = zIndex，参与 Y-sort） */
+  getTreeChunks(): readonly TreeRowChunk[] {
+    return this.treeChunks;
   }
 
   async load(): Promise<void> {
@@ -235,7 +240,7 @@ export class WorldMap extends Container {
 
   private build(): void {
     this.root.removeChildren();
-    this.trees.length = 0;
+    this.treeChunks.length = 0;
 
     const grass = new Graphics();
     grass.label = 'Grass';
@@ -244,7 +249,7 @@ export class WorldMap extends Container {
 
     this.drawGrassBase(grass);
     this.drawWalkableDecor(decor);
-    this.spawnForestTrees();
+    this.spawnForestTreeChunks();
 
     this.root.addChild(grass, decor);
   }
@@ -383,22 +388,30 @@ export class WorldMap extends Container {
   }
 
   /**
-   * 全图网格密植松树；walkable（含树冠净空）内不种。
+   * 全图网格密植松树，按「行 + 水平 chunk」合并为少量 DisplayObject。
+   * walkable（含树冠净空）内不种；碰撞仍走 walk mask，与显示解耦。
    */
-  private spawnForestTrees(): void {
+  private spawnForestTreeChunks(): void {
     const def = this.def;
     const half = def.mapSize / 2;
-    const origin = -half + PINE_SPACING * 0.5;
-    const cols = Math.floor(def.mapSize / PINE_SPACING);
-    const rows = Math.floor(def.mapSize / PINE_SPACING);
+    const spacing = PINE_SPACING;
+    const origin = -half + spacing * 0.5;
+    const cols = Math.floor(def.mapSize / spacing);
+    const rows = Math.floor(def.mapSize / spacing);
+    const chunkCells = TREE_CHUNK_CELLS;
 
     for (let row = 0; row < rows; row++) {
-      for (let col = 0; col < cols; col++) {
-        const x = origin + col * PINE_SPACING;
-        const y = origin + row * PINE_SPACING;
-        if (!shouldPlantTree(x, y, def)) continue;
-        const shade = (col + row) % 3;
-        this.trees.push(new PineTree(x, y, shade));
+      const y = origin + row * spacing;
+      for (let col0 = 0; col0 < cols; col0 += chunkCells) {
+        const plants: TreePlant[] = [];
+        const col1 = Math.min(cols, col0 + chunkCells);
+        for (let col = col0; col < col1; col++) {
+          const x = origin + col * spacing;
+          if (!shouldPlantTree(x, y, def)) continue;
+          plants.push({ x, shade: (col + row) % 3 });
+        }
+        if (plants.length === 0) continue;
+        this.treeChunks.push(new TreeRowChunk(y, plants));
       }
     }
   }
