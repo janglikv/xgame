@@ -46,7 +46,7 @@ const UNDO_MAX = 40;
 /** 右键删除敌人时的拾取半径（相对格宽） */
 const ENEMY_PICK_CELLS = 1.25;
 
-type EditTool = 'brush' | 'box' | 'enemy';
+type EditTool = 'brush' | 'eraser' | 'box' | 'enemy' | 'spawn';
 
 /** 可撤销的地图状态快照 */
 type EditSnapshot = {
@@ -74,12 +74,9 @@ export type MapEditSceneOptions = {
 };
 
 /**
- * 地图编辑：树宽格子上涂抹 / 框选可走区；敌人模式放置刷怪点。
+ * 地图编辑：树宽格子上涂抹 / 橡皮擦 / 框选可走区；敌人模式放置刷怪点；出生点模式设置起点。
  * 可切换目录关卡，改动写入草稿；预览直接进关试玩。
- * 涂抹：左键挖、右键擦、[ ] 笔粗
- * 框选：拖矩形挖/擦整块格
- * 敌人：左键放蜘蛛、右键删最近
- * Shift+点：出生点 · Ctrl/Cmd+Z 撤销 · P 预览
+ * 纯鼠标/点击操作，无快捷键依赖。
  */
 export class MapEditScene extends Container implements GameScene {
   private readonly world: Container;
@@ -114,7 +111,6 @@ export class MapEditScene extends Container implements GameScene {
   /** 框选起点 / 当前角（格子） */
   private boxStart: { c: number; r: number } | null = null;
   private boxEnd: { c: number; r: number } | null = null;
-  private shiftDown = false;
   private tipTimer = 0;
 
   private readonly onBack: () => void;
@@ -201,8 +197,10 @@ export class MapEditScene extends Container implements GameScene {
     this.hud.addChild(this.brushLabel);
 
     this.addBtn('涂抹', BTN_MODE, 0xffffff, () => this.setTool('brush'), 72, 'mode', 'brush');
+    this.addBtn('橡皮', BTN_MODE, 0xffffff, () => this.setTool('eraser'), 72, 'mode', 'eraser');
     this.addBtn('框选', BTN_MODE, 0xffffff, () => this.setTool('box'), 72, 'mode', 'box');
     this.addBtn('敌人', BTN_MODE, 0xffffff, () => this.setTool('enemy'), 72, 'mode', 'enemy');
+    this.addBtn('起点', BTN_MODE, 0xffffff, () => this.setTool('spawn'), 72, 'mode', 'spawn');
 
     this.addBtn(
       '−',
@@ -365,7 +363,7 @@ export class MapEditScene extends Container implements GameScene {
       return;
     }
     if (!isSpawnValid(def)) {
-      this.flash('请把出生点放到洞里（Shift+点击）');
+      this.flash('请把出生点放到洞里（点击起点按钮放置）');
       return;
     }
     const saved = saveMapDraft(def);
@@ -378,13 +376,19 @@ export class MapEditScene extends Container implements GameScene {
   }
 
   private defaultTip(): string {
+    if (this.tool === 'eraser') {
+      return `橡皮擦：左/右键擦除 · 笔 ${this.brushSize} · 滚轮缩放`;
+    }
     if (this.tool === 'box') {
-      return '框选：左键挖 · 右键擦 · Shift+点出生 · P 预览 · B/R/E 工具 · 滚轮缩放';
+      return '框选：拖矩形批量挖/擦格子 · 滚轮缩放';
     }
     if (this.tool === 'enemy') {
-      return `敌人：左键放 · 右键删 · ${this.enemies.length} 只 · P 预览 · E 本工具 · 滚轮缩放`;
+      return `敌人：左键放 · 右键删 · ${this.enemies.length} 只 · 滚轮缩放`;
     }
-    return `涂抹：左键挖 · 右键擦 · 笔 ${this.brushSize} · P 预览 · B/R/E 工具 · 滚轮缩放`;
+    if (this.tool === 'spawn') {
+      return '起点：点击地图放置玩家出生点 · 滚轮缩放';
+    }
+    return `涂抹：左键挖 · 右键擦 · 笔 ${this.brushSize} · 滚轮缩放`;
   }
 
   private takeSnapshot(): EditSnapshot {
@@ -434,11 +438,23 @@ export class MapEditScene extends Container implements GameScene {
     this.boxStart = null;
     this.boxEnd = null;
     this.cursor =
-      tool === 'box' ? 'crosshair' : tool === 'enemy' ? 'pointer' : 'cell';
+      tool === 'box'
+        ? 'crosshair'
+        : tool === 'enemy' || tool === 'spawn'
+          ? 'pointer'
+          : 'cell';
     this.refreshModeButtons();
     this.layout();
     this.flash(
-      tool === 'box' ? '框选模式' : tool === 'enemy' ? '敌人模式' : '涂抹模式',
+      tool === 'eraser'
+        ? '橡皮擦模式'
+        : tool === 'box'
+          ? '框选模式'
+          : tool === 'enemy'
+            ? '敌人模式'
+            : tool === 'spawn'
+              ? '起点模式'
+              : '涂抹模式',
     );
     this.paint();
   }
@@ -706,18 +722,20 @@ export class MapEditScene extends Container implements GameScene {
   }): void => {
     const cell = this.cellAtScreenLoose(e.global.x, e.global.y);
 
-    if (this.shiftDown && e.button === 0) {
-      const next = cellCenter(cell.c, cell.r, this.mapSize, this.cellSize);
-      if (next.x !== this.spawn.x || next.y !== this.spawn.y) {
-        this.pushUndo();
-        this.spawn = next;
+    if (this.tool === 'spawn') {
+      if (e.button === 0) {
+        const next = cellCenter(cell.c, cell.r, this.mapSize, this.cellSize);
+        if (next.x !== this.spawn.x || next.y !== this.spawn.y) {
+          this.pushUndo();
+          this.spawn = next;
+        }
+        this.paint();
+        this.flash(
+          this.cells.has(cellKey(cell.c, cell.r, this.cols))
+            ? '出生点已设置'
+            : '出生点不在洞里（请先挖洞）',
+        );
       }
-      this.paint();
-      this.flash(
-        this.cells.has(cellKey(cell.c, cell.r, this.cols))
-          ? '出生点已放'
-          : '出生点不在洞里（先挖洞再放）',
-      );
       return;
     }
 
@@ -732,8 +750,9 @@ export class MapEditScene extends Container implements GameScene {
       return;
     }
 
-    const dig = e.button === 0;
-    const erase = e.button === 2;
+    const isEraser = this.tool === 'eraser';
+    const dig = isEraser ? false : e.button === 0;
+    const erase = isEraser ? true : e.button === 2;
     if (!dig && !erase) return;
 
     if (this.tool === 'box') {
@@ -744,7 +763,7 @@ export class MapEditScene extends Container implements GameScene {
       return;
     }
 
-    // 涂抹：下笔前压栈（整段拖动算一步）
+    // 涂抹 / 橡皮擦：下笔前压栈（整段拖动算一步）
     this.pushUndo();
     this.painting = dig ? 'dig' : 'fill';
     this.lastCell = null;
@@ -762,7 +781,7 @@ export class MapEditScene extends Container implements GameScene {
       return;
     }
 
-    if (this.painting && this.tool === 'brush') {
+    if (this.painting && (this.tool === 'brush' || this.tool === 'eraser')) {
       this.strokeTo(cell.c, cell.r, this.painting === 'dig');
     }
     this.paint();
@@ -847,8 +866,8 @@ export class MapEditScene extends Container implements GameScene {
           color: dig ? 0xffe14a : 0xff8888,
           alpha: 0.95,
         });
-    } else if (this.tool === 'brush' && this.hoverCell) {
-      // 画笔预览
+    } else if ((this.tool === 'brush' || this.tool === 'eraser') && this.hoverCell) {
+      // 画笔 / 橡皮擦预览
       const s = this.brushSize;
       const halfB = Math.floor((s - 1) / 2);
       const o = cellOrigin(
@@ -857,16 +876,17 @@ export class MapEditScene extends Container implements GameScene {
         this.mapSize,
         this.cellSize,
       );
+      const isEraser = this.tool === 'eraser';
       this.gfx
         .rect(o.x, o.y, s * this.cellSize, s * this.cellSize)
-        .fill({ color: 0xffffff, alpha: 0.12 })
-        .stroke({ width: sw * 2, color: 0xffe14a, alpha: 0.9 });
+        .fill({ color: isEraser ? 0xff4444 : 0xffffff, alpha: isEraser ? 0.2 : 0.12 })
+        .stroke({ width: sw * 2, color: isEraser ? 0xff6666 : 0xffe14a, alpha: 0.9 });
     } else if (
-      (this.tool === 'box' || this.tool === 'enemy') &&
+      (this.tool === 'box' || this.tool === 'enemy' || this.tool === 'spawn') &&
       this.hoverCell &&
       !this.painting
     ) {
-      // 框选 / 敌人空闲时高亮当前格
+      // 框选 / 敌人 / 出生点空闲时高亮当前格
       const o = cellOrigin(
         this.hoverCell.c,
         this.hoverCell.r,
@@ -877,7 +897,7 @@ export class MapEditScene extends Container implements GameScene {
         .rect(o.x, o.y, this.cellSize, this.cellSize)
         .stroke({
           width: sw * 2,
-          color: this.tool === 'enemy' ? ENEMY : 0xffe14a,
+          color: this.tool === 'enemy' ? ENEMY : this.tool === 'spawn' ? SPAWN : 0xffe14a,
           alpha: 0.7,
         });
     }
@@ -970,7 +990,7 @@ export class MapEditScene extends Container implements GameScene {
     }
     bx += 12;
 
-    const showBrush = this.tool === 'brush';
+    const showBrush = this.tool === 'brush' || this.tool === 'eraser';
     this.brushLabel.visible = showBrush;
     const brushBtns = this.actionBtns.filter((b) => b.__group === 'brush');
     for (const b of brushBtns) b.visible = showBrush;
@@ -997,53 +1017,6 @@ export class MapEditScene extends Container implements GameScene {
     }
   }
 
-  private readonly onKeyDown = (e: KeyboardEvent): void => {
-    if (e.key === 'Shift') this.shiftDown = true;
-
-    // Ctrl/Cmd+Z 撤销
-    if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
-      this.undo();
-      e.preventDefault();
-      return;
-    }
-
-    if (e.key === 'b' || e.key === 'B') {
-      this.setTool('brush');
-      e.preventDefault();
-      return;
-    }
-    if (e.key === 'r' || e.key === 'R') {
-      this.setTool('box');
-      e.preventDefault();
-      return;
-    }
-    if (e.key === 'e' || e.key === 'E') {
-      this.setTool('enemy');
-      e.preventDefault();
-      return;
-    }
-    if (e.key === 'p' || e.key === 'P') {
-      this.preview();
-      e.preventDefault();
-      return;
-    }
-    if (this.tool !== 'brush') return;
-    if (e.key === '[' || e.key === '-' || e.key === '_') {
-      this.setBrushSize(this.brushSize - 1);
-      e.preventDefault();
-    } else if (e.key === ']' || e.key === '=' || e.key === '+') {
-      this.setBrushSize(this.brushSize + 1);
-      e.preventDefault();
-    } else if (e.key >= '1' && e.key <= '9') {
-      this.setBrushSize(Number(e.key));
-      e.preventDefault();
-    }
-  };
-
-  private readonly onKeyUp = (e: KeyboardEvent): void => {
-    if (e.key === 'Shift') this.shiftDown = false;
-  };
-
   private readonly onWheel = (e: WheelEvent): void => {
     e.preventDefault();
     const next = Math.min(
@@ -1063,8 +1036,6 @@ export class MapEditScene extends Container implements GameScene {
 
   async init(): Promise<void> {
     this.onBackground?.(BG);
-    window.addEventListener('keydown', this.onKeyDown);
-    window.addEventListener('keyup', this.onKeyUp);
     window.addEventListener('wheel', this.onWheel, { passive: false });
     window.addEventListener('contextmenu', this.onContext);
   }
@@ -1086,8 +1057,6 @@ export class MapEditScene extends Container implements GameScene {
   }
 
   destroy(options?: Parameters<Container['destroy']>[0]): void {
-    window.removeEventListener('keydown', this.onKeyDown);
-    window.removeEventListener('keyup', this.onKeyUp);
     window.removeEventListener('wheel', this.onWheel);
     window.removeEventListener('contextmenu', this.onContext);
     this.off('pointerdown', this.onDown);
