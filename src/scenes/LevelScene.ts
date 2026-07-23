@@ -21,6 +21,7 @@ import {
 import { CharacterSwitchHud } from '../ui/CharacterSwitchHud';
 import { HealthBar } from '../ui/HealthBar';
 import { PauseMenu } from '../ui/PauseMenu';
+import { BombAmmoHud } from '../ui/BombAmmoHud';
 import { SpearAmmoHud } from '../ui/SpearAmmoHud';
 import { LEVEL_1, type LevelMapDef } from '../data/maps';
 import { getNightBackground, NightOverlay } from '../world/NightOverlay';
@@ -45,8 +46,12 @@ const MOVE_SPEED = 220;
 const HUD_HP_WIDTH = 240;
 const HUD_HP_HEIGHT = 14;
 const HUD_HP_MARGIN_BOTTOM = 28;
-/** 飞剑数量相对血条上沿再上移（屏幕像素） */
-const HUD_SPEAR_GAP = 22;
+/** 弹药数量相对血条上沿再上移（屏幕像素） */
+const HUD_AMMO_GAP = 22;
+/** 炸药 HUD 相对血条左缘再左移（屏幕像素） */
+const HUD_BOMB_AMMO_NUDGE_X = -6;
+/** 炸药 HUD 相对弹药基线再下移（屏幕像素） */
+const HUD_BOMB_AMMO_NUDGE_Y = 8;
 const PLAYER_MAX_HP = 100;
 /** 切换角色冷却（秒） */
 const CHAR_SWITCH_COOLDOWN = 0.3;
@@ -103,6 +108,7 @@ export class LevelScene extends Container implements GameScene {
   private player: PlayerCharacterBase | null = null;
   private readonly healthBar: HealthBar;
   private readonly spearAmmoHud: SpearAmmoHud;
+  private readonly bombAmmoHud: BombAmmoHud;
   private readonly characterHud: CharacterSwitchHud;
   private readonly spiders: Spider[] = [];
   private readonly keyboard = new Keyboard();
@@ -189,6 +195,7 @@ export class LevelScene extends Container implements GameScene {
       sortDepth: () => this.sortDepth(),
       syncWorldActors: () => this.syncWorldActors(),
       onSpearAmmoChanged: (snap) => this.spearAmmoHud.setAmmo(snap),
+      onBombAmmoChanged: (snap) => this.bombAmmoHud.setAmmo(snap),
     });
 
     this.debugOverlay = new DebugOverlay();
@@ -208,6 +215,10 @@ export class LevelScene extends Container implements GameScene {
     this.spearAmmoHud = new SpearAmmoHud();
     this.spearAmmoHud.visible = false;
     this.addChild(this.spearAmmoHud);
+
+    this.bombAmmoHud = new BombAmmoHud();
+    this.bombAmmoHud.visible = false;
+    this.addChild(this.bombAmmoHud);
 
     this.characterHud = new CharacterSwitchHud({
       onSelect: (id) => this.switchCharacter(id),
@@ -289,8 +300,11 @@ export class LevelScene extends Container implements GameScene {
 
     this.player = next;
     this.spearAmmoHud.visible = next instanceof IceRanger;
+    this.bombAmmoHud.visible = next instanceof BombGirl;
     if (next instanceof IceRanger) {
       this.spearAmmoHud.setAmmo(next.spearAmmo);
+    } else if (next instanceof BombGirl) {
+      this.bombAmmoHud.setAmmo(next.bombAmmo);
     }
     this.cursor = next.canRangedAttack ? 'crosshair' : 'default';
 
@@ -751,6 +765,9 @@ export class LevelScene extends Container implements GameScene {
     if (player instanceof IceRanger) {
       player.tickSpearAmmo(deltaMS);
       this.spearAmmoHud.setAmmo(player.spearAmmo);
+    } else if (player instanceof BombGirl) {
+      player.tickBombAmmo(deltaMS);
+      this.bombAmmoHud.setAmmo(player.bombAmmo);
     }
 
     for (let si = 0; si < this.spiders.length; si++) {
@@ -862,16 +879,18 @@ export class LevelScene extends Container implements GameScene {
     this.keyboard.clear();
   }
 
-  /** 玩家血条 + 飞剑数量 HUD：底部居中，飞剑在血条之上并与血条左对齐 */
+  /** 玩家血条 + 弹药数量 HUD：底部居中，弹药在血条之上并与血条左对齐 */
   private layoutHealthHud(): void {
     const cx = this.camera.width / 2;
     const hpY = this.camera.height - HUD_HP_MARGIN_BOTTOM;
     this.healthBar.position.set(cx, hpY);
-    // 血条以中心为原点 → 左缘 cx - width/2；飞剑 HUD 原点在左缘
+    // 血条以中心为原点 → 左缘 cx - width/2；弹药 HUD 原点在左缘
     const hpLeft = cx - HUD_HP_WIDTH / 2;
-    this.spearAmmoHud.position.set(
-      hpLeft,
-      hpY - HUD_HP_HEIGHT / 2 - HUD_SPEAR_GAP,
+    const ammoY = hpY - HUD_HP_HEIGHT / 2 - HUD_AMMO_GAP;
+    this.spearAmmoHud.position.set(hpLeft, ammoY);
+    this.bombAmmoHud.position.set(
+      hpLeft + HUD_BOMB_AMMO_NUDGE_X,
+      ammoY + HUD_BOMB_AMMO_NUDGE_Y,
     );
   }
 }

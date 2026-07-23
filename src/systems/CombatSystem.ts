@@ -9,6 +9,7 @@ import { IceRanger, SPEAR_THROW_RECOIL_SPEED } from '../entities/IceRanger';
 import type { PlayerCharacterBase } from '../entities/PlayerCharacterBase';
 import { SpearProjectile } from '../entities/SpearProjectile';
 import type { SpearAmmoSnapshot } from '../entities/SpearAmmo';
+import type { BombAmmoSnapshot } from '../entities/BombAmmo';
 import { applyRecoilHop } from '../entities/knockArc';
 import type { Spider } from '../entities/Spider';
 import {
@@ -54,6 +55,8 @@ export type CombatSystemHooks = {
   syncWorldActors: () => void;
   /** 飞剑弹药 HUD（投矛后同步） */
   onSpearAmmoChanged?: (snap: SpearAmmoSnapshot) => void;
+  /** 炸药弹药 HUD（投弹后同步） */
+  onBombAmmoChanged?: (snap: BombAmmoSnapshot) => void;
 };
 
 /**
@@ -298,6 +301,9 @@ export class CombatSystem {
       landDy *= s;
     }
 
+    // 有效瞄准后再扣弹，避免点太近空耗
+    if (!player.tryConsumeBomb()) return;
+
     const endX = worldX + landDx;
     const endY = worldY + landDy;
 
@@ -319,6 +325,7 @@ export class CombatSystem {
     this.bombs.push(bomb);
     bomb.syncToWorld();
     this.hooks.sortDepth();
+    this.hooks.onBombAmmoChanged?.(player.bombAmmo);
   }
 
   private throwSpearAtScreen(

@@ -135,6 +135,11 @@ export async function loadBombTextures(): Promise<void> {
   sharedExplosion = explosion;
 }
 
+/** HUD / 预览用炸弹贴图（需先 loadBombTextures） */
+export function getBombTexture(): Texture | null {
+  return sharedBomb;
+}
+
 /**
  * @deprecated 已取消随机尺寸衰减；恒返回 1。
  */

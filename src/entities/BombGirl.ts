@@ -1,4 +1,10 @@
 import { PlayerCharacterBase } from './PlayerCharacterBase';
+import {
+  DEFAULT_BOMB_AMMO,
+  BombAmmo,
+  type BombAmmoSnapshot,
+  type BombAmmoStats,
+} from './BombAmmo';
 
 /**
  * 扔炸弹后仰（sprite 局部）。
@@ -28,7 +34,7 @@ const THROW_HAND_TEX = {
 
 /**
  * 玩家角色「炸炸」：橙发炸弹妹（整图预览）
- * 原点在脚底中心附近；可扔炸弹。
+ * 原点在脚底中心附近；可扔炸弹，带弹药上限与自动恢复。
  */
 export class BombGirl extends PlayerCharacterBase {
   /**
@@ -36,8 +42,9 @@ export class BombGirl extends PlayerCharacterBase {
    * 作用在 sprite 局部，翻转后仍相对朝向“向后”。
    */
   private throwRecoil = 0;
+  private readonly ammo: BombAmmo;
 
-  constructor(scale = 1) {
+  constructor(scale = 1, ammoStats: BombAmmoStats = DEFAULT_BOMB_AMMO) {
     super(
       {
         characterId: 'bomb-girl',
@@ -49,6 +56,33 @@ export class BombGirl extends PlayerCharacterBase {
       },
       scale,
     );
+    this.ammo = new BombAmmo(ammoStats);
+  }
+
+  /** 当前炸药库存（供 HUD / 调试） */
+  get bombAmmo(): BombAmmoSnapshot {
+    return this.ammo.snapshot;
+  }
+
+  /**
+   * 解锁改写上限 / 恢复速率（后续技能树入口）。
+   * @example girl.applyBombUnlock({ max: 16, regenPerSec: 3 })
+   */
+  applyBombUnlock(partial: Partial<BombAmmoStats>): void {
+    this.ammo.applyUnlock(partial);
+  }
+
+  /** 尝试消耗一枚炸药；不足时返回 false */
+  tryConsumeBomb(): boolean {
+    return this.ammo.tryConsume(1);
+  }
+
+  /**
+   * 炸药自动恢复（由场景在非暂停时调用）。
+   * 与 update 分离，避免暂停阶段偷回弹。
+   */
+  tickBombAmmo(deltaMS: number): void {
+    this.ammo.update(deltaMS / 1000);
   }
 
   /**
