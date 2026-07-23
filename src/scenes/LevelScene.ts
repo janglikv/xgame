@@ -22,17 +22,11 @@ import { CharacterSwitchHud } from '../ui/CharacterSwitchHud';
 import { HealthBar } from '../ui/HealthBar';
 import { PauseMenu } from '../ui/PauseMenu';
 import { SpearAmmoHud } from '../ui/SpearAmmoHud';
-import { LEVEL_1 } from '../data/maps';
-import { getThemeBackground, NightOverlay } from '../world/NightOverlay';
-import {
-  GRID,
-  islandCenter,
-  MAP_SIZE,
-  MAP_WORLD_HALF,
-  WorldMap,
-} from '../world/WorldMap';
+import { LEVEL_1, type LevelMapDef } from '../data/maps';
+import { getNightBackground, NightOverlay } from '../world/NightOverlay';
+import { MAP_SIZE, MAP_WORLD_HALF, WorldMap } from '../world/WorldMap';
 import { LevelCamera } from './LevelCamera';
-import type { GameScene, LevelTheme } from './types';
+import type { GameScene } from './types';
 
 /** 黑夜松树冷色 tint（环境变暗，不盖角色） */
 const NIGHT_TREE_TINT = 0x6a7f9e;
@@ -50,10 +44,6 @@ const KNOCK_CONTROL_SOFTEN = 220;
 
 const SPIDER_SCALE = 0.1;
 
-/** 当前关卡地图定义（编辑器导出后替换 LEVEL_1） */
-const LEVEL_MAP = LEVEL_1;
-const PLAYER_SPAWN = LEVEL_MAP.spawn;
-
 /** 角色出场缩放 */
 const CHAR_SCALE: Record<CharacterId, number> = {
   'bomb-girl': 0.07,
@@ -61,7 +51,8 @@ const CHAR_SCALE: Record<CharacterId, number> = {
 };
 
 export type LevelSceneOptions = {
-  theme: LevelTheme;
+  /** 本关地图；缺省 LEVEL_1 */
+  mapDef?: LevelMapDef;
   onBack: () => void;
   onBackground?: (color: number) => void;
   /** 上次操控角色；缺省 bomb-girl */
@@ -71,11 +62,10 @@ export type LevelSceneOptions = {
 };
 
 /**
- * 可玩关卡：白天 / 黑夜地图，WASD 移动，点击抛物线扔炸弹，Esc 暂停。
- * 场上始终只有一名角色；右侧头像点击切换（缺色切换）。
+ * 可玩关卡（默认黑夜）：WASD 移动，点击远程攻击，Esc 暂停。
+ * 场上始终只有一名角色；右侧头像点击切换。
  * 滚轮 / +/- 缩放，0 复位，F 看全景。
- * 纵深：worldRoot 镜头变换 + sortLayer 按脚底 Y 排序（树/角色/炸弹互遮）。
- * 黑夜 = 白天地图 + NightOverlay 叠加，不单独换色盘。
+ * 纵深：worldRoot 镜头变换 + sortLayer 按脚底 Y 排序。
  */
 export class LevelScene extends Container implements GameScene {
   /**
@@ -90,7 +80,7 @@ export class LevelScene extends Container implements GameScene {
    * 含松树、蜘蛛、玩家、炸弹。
    */
   private readonly sortLayer: Container;
-  private readonly nightOverlay: NightOverlay | null;
+  private readonly nightOverlay: NightOverlay;
   /** 全角色池：场上只挂当前操控者，其余离场保留状态（弹药等） */
   private readonly roster = new Map<CharacterId, PlayerCharacterBase>();
   private player: PlayerCharacterBase | null = null;
@@ -103,7 +93,8 @@ export class LevelScene extends Container implements GameScene {
   private readonly combat: CombatSystem;
   private readonly pauseMenu: PauseMenu;
   private readonly camera: LevelCamera;
-  private readonly theme: LevelTheme;
+  private readonly mapDef: LevelMapDef;
+  private readonly spawn: { x: number; y: number };
   private readonly onBack: () => void;
   private readonly onBackground?: (color: number) => void;
   private readonly getLastCharacter: () => CharacterId;
@@ -117,8 +108,9 @@ export class LevelScene extends Container implements GameScene {
 
   constructor(width: number, height: number, options: LevelSceneOptions) {
     super();
-    this.label = `LevelScene:${options.theme}`;
-    this.theme = options.theme;
+    this.mapDef = options.mapDef ?? LEVEL_1;
+    this.spawn = { ...this.mapDef.spawn };
+    this.label = `LevelScene:${this.mapDef.id}`;
     this.onBack = options.onBack;
     this.onBackground = options.onBackground;
     this.getLastCharacter =
@@ -137,23 +129,20 @@ export class LevelScene extends Container implements GameScene {
 
     this.camera = new LevelCamera({
       worldRoot: this.worldRoot,
-      spawnX: PLAYER_SPAWN.x,
-      spawnY: PLAYER_SPAWN.y,
+      spawnX: this.spawn.x,
+      spawnY: this.spawn.y,
       viewWidth: width,
       viewHeight: height,
     });
 
-    this.worldMap = new WorldMap(LEVEL_MAP);
+    this.worldMap = new WorldMap(this.mapDef);
     this.worldRoot.addChild(this.worldMap);
 
     // 夜色只压在地面（草坪）上，不进 sortLayer，避免角色/怪/爆炸变黑
-    this.nightOverlay =
-      options.theme === 'night' ? new NightOverlay() : null;
-    if (this.nightOverlay) {
-      this.nightOverlay.position.set(-MAP_WORLD_HALF, -MAP_WORLD_HALF);
-      this.nightOverlay.layout(MAP_SIZE, MAP_SIZE);
-      this.worldRoot.addChild(this.nightOverlay);
-    }
+    this.nightOverlay = new NightOverlay();
+    this.nightOverlay.position.set(-MAP_WORLD_HALF, -MAP_WORLD_HALF);
+    this.nightOverlay.layout(MAP_SIZE, MAP_SIZE);
+    this.worldRoot.addChild(this.nightOverlay);
 
     this.sortLayer = new Container();
     this.sortLayer.label = 'SortLayer';
@@ -167,9 +156,7 @@ export class LevelScene extends Container implements GameScene {
       onSpearAmmoChanged: (snap) => this.spearAmmoHud.setAmmo(snap),
     });
 
-    if (options.theme === 'night') {
-      this.spawnCornerSpiders();
-    }
+    this.spawnCornerSpiders();
 
     // HUD 须先于 activateCharacter：后者会同步飞剑条 / 光标
     this.healthBar = new HealthBar({
@@ -197,8 +184,8 @@ export class LevelScene extends Container implements GameScene {
 
     this.mountRoster();
     this.activateCharacter(this.getLastCharacter(), {
-      worldX: PLAYER_SPAWN.x,
-      worldY: PLAYER_SPAWN.y,
+      worldX: this.spawn.x,
+      worldY: this.spawn.y,
       facing: 1,
       persist: false,
     });
@@ -288,7 +275,7 @@ export class LevelScene extends Container implements GameScene {
   }
 
   async init(): Promise<void> {
-    this.onBackground?.(getThemeBackground(this.theme));
+    this.onBackground?.(getNightBackground());
     this.keyboard.bind();
     window.addEventListener('wheel', this.onWheel, { passive: false });
 
@@ -318,25 +305,29 @@ export class LevelScene extends Container implements GameScene {
     if (this.treesMounted) return;
     this.treesMounted = true;
     for (const tree of this.worldMap.getTrees()) {
-      if (this.theme === 'night') {
-        tree.tint = NIGHT_TREE_TINT;
-      }
+      tree.tint = NIGHT_TREE_TINT;
       this.sortLayer.addChild(tree);
     }
   }
 
-  /** 黑夜关：九宫格上方角落岛各一只蜘蛛，出生时朝向中心 */
+  /** 蜘蛛：出生点两侧，再经 solid 推回可走区 */
   private spawnCornerSpiders(): void {
-    const last = GRID - 1;
-    const corners: Array<[number, number]> = [
-      [0, 0],
-      [last, 0],
+    const offsets = [
+      { x: -180, y: -160 },
+      { x: 180, y: -160 },
     ];
-
-    for (const [ix, iy] of corners) {
-      const { x: wx, y: wy } = islandCenter(ix, iy);
-      const spider = new Spider(wx, wy, { scale: SPIDER_SCALE });
-      spider.faceToward(0, 0);
+    for (const o of offsets) {
+      const tx = this.spawn.x + o.x;
+      const ty = this.spawn.y + o.y;
+      const solid = WorldMap.resolveSolid(
+        this.spawn.x,
+        this.spawn.y,
+        tx,
+        ty,
+        16,
+      );
+      const spider = new Spider(solid.x, solid.y, { scale: SPIDER_SCALE });
+      spider.faceToward(this.spawn.x, this.spawn.y);
       this.sortLayer.addChild(spider);
       this.spiders.push(spider);
     }
@@ -359,7 +350,7 @@ export class LevelScene extends Container implements GameScene {
       player.worldY = solid.y;
       return { x: player.worldX, y: player.worldY };
     }
-    return { x: PLAYER_SPAWN.x, y: PLAYER_SPAWN.y };
+    return { x: this.spawn.x, y: this.spawn.y };
   }
 
   /**

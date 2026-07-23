@@ -49,7 +49,13 @@ export class NightOverlay extends Container {
   }
 }
 
-export function getThemeBackground(theme: 'day' | 'night'): number {
-  // 黑夜仍用偏暗的底，避免 letterbox 露亮绿
-  return theme === 'night' ? 0x0b1524 : 0x5a8f3c;
+/** 关卡背景色（默认黑夜） */
+export function getNightBackground(): number {
+  // 偏暗底，避免 letterbox 露亮绿
+  return 0x0b1524;
+}
+
+/** @deprecated 使用 getNightBackground */
+export function getThemeBackground(theme: 'day' | 'night' = 'night'): number {
+  return theme === 'night' ? getNightBackground() : 0x5a8f3c;
 }

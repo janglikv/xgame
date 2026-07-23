@@ -24,3 +24,11 @@ export {
 export { buildGridLevelDef, GRID_LAYOUT_META } from './gridTemplate';
 export { formatLevelDefTs, copyLevelDefTs } from './exportLevel';
 export { LEVEL_1 } from './level-1';
+export { LEVEL_2 } from './level-2';
+export {
+  LEVEL_CATALOG,
+  getLevelById,
+  getLevelIndex,
+  levelDisplayName,
+  type LevelId,
+} from './catalog';

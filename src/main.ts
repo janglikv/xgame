@@ -1,4 +1,5 @@
 import { Application } from 'pixi.js';
+import { getLevelById, LEVEL_1, type LevelMapDef } from './data/maps';
 import { LocalSaveStore } from './data/SaveStore';
 import type { SavedScene } from './data/types';
 import type { CharacterId } from './entities/types';
@@ -6,7 +7,6 @@ import { LevelScene } from './scenes/LevelScene';
 import { MainScene } from './scenes/MainScene';
 import { MapEditScene } from './scenes/MapEditScene';
 import { SceneManager } from './scenes/SceneManager';
-import type { LevelTheme } from './scenes/types';
 
 async function bootstrap(): Promise<void> {
   const host = document.getElementById('app');
@@ -18,7 +18,7 @@ async function bootstrap(): Promise<void> {
 
   await app.init({
     resizeTo: host,
-    background: 0x5a8f3c,
+    background: 0x0b1524,
     antialias: true,
     resolution: Math.min(window.devicePixelRatio || 1, 2),
     autoDensity: true,
@@ -42,6 +42,14 @@ async function bootstrap(): Promise<void> {
     saveStore.saveScene(scene);
   };
 
+  const levelOptions = (mapDef: LevelMapDef) => ({
+    mapDef,
+    onBack: goMain,
+    onBackground: setBackground,
+    getLastCharacter: () => saveStore.getLastCharacter(),
+    setLastCharacter: (id: CharacterId) => saveStore.saveLastCharacter(id),
+  });
+
   const goMain = (): void => {
     persistScene({ kind: 'main' });
     void scenes.setScene(
@@ -54,28 +62,19 @@ async function bootstrap(): Promise<void> {
     );
   };
 
-  const levelOptions = (theme: LevelTheme) => ({
-    theme,
-    onBack: goMain,
-    onBackground: setBackground,
-    getLastCharacter: () => saveStore.getLastCharacter(),
-    setLastCharacter: (id: CharacterId) => saveStore.saveLastCharacter(id),
-  });
-
-  const goLevel = (theme: LevelTheme): void => {
-    persistScene({ kind: 'level', theme });
+  const goLevel = (mapDef: LevelMapDef): void => {
+    persistScene({ kind: 'level', levelId: mapDef.id });
     void scenes.setScene(
       () =>
         new LevelScene(
           app.screen.width,
           app.screen.height,
-          levelOptions(theme),
+          levelOptions(mapDef),
         ),
     );
   };
 
   const goMapEdit = (): void => {
-    // 编辑器不写存档，返回后仍回主菜单
     void scenes.setScene(
       () =>
         new MapEditScene(app.screen.width, app.screen.height, {
@@ -88,12 +87,13 @@ async function bootstrap(): Promise<void> {
   /** 按存档恢复上次场景；损坏 / 无档则进主菜单 */
   const bootScene = saveStore.load().progress.scene;
   if (bootScene.kind === 'level') {
+    const map = getLevelById(bootScene.levelId) ?? LEVEL_1;
     await scenes.setScene(
       () =>
         new LevelScene(
           app.screen.width,
           app.screen.height,
-          levelOptions(bootScene.theme),
+          levelOptions(map),
         ),
     );
   } else {

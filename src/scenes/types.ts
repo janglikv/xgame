@@ -7,4 +7,3 @@ export interface GameScene extends Container {
   resize(width: number, height: number): void;
 }
 
-export type LevelTheme = 'day' | 'night';

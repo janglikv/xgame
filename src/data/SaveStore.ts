@@ -6,20 +6,21 @@ const STORAGE_KEY = 'lu-o-lu:save:v1';
 /** 旧版散落 key，读档时迁移一次后删除 */
 const LEGACY_CHARACTER_KEY = 'lu_o_lu_last_character';
 
-function isLevelTheme(value: unknown): value is 'day' | 'night' {
-  return value === 'day' || value === 'night';
-}
-
 function isCharacterId(value: unknown): value is CharacterId {
   return value === 'bomb-girl' || value === 'ice-ranger';
 }
 
 function parseSavedScene(raw: unknown): SavedScene | null {
   if (!raw || typeof raw !== 'object') return null;
-  const scene = raw as { kind?: unknown; theme?: unknown };
+  const scene = raw as { kind?: unknown; levelId?: unknown; theme?: unknown };
   if (scene.kind === 'main') return { kind: 'main' };
-  if (scene.kind === 'level' && isLevelTheme(scene.theme)) {
-    return { kind: 'level', theme: scene.theme };
+  if (scene.kind === 'level') {
+    // 新档带 levelId；旧档（theme 或无 id）默认 level-1
+    const levelId =
+      typeof scene.levelId === 'string' && scene.levelId.length > 0
+        ? scene.levelId
+        : 'level-1';
+    return { kind: 'level', levelId };
   }
   return null;
 }
