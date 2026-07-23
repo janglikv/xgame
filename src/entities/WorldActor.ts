@@ -16,7 +16,7 @@ export const SPIDER_HURT_R = 24;
 
 /**
  * 关卡内可站立单位：自己持有脚底坐标与击飞抛物线。
- * 玩家 / 停场角色 / 蜘蛛统一此契约，场景与 solid / combat 只读写接口字段。
+ * 玩家 / 蜘蛛统一此契约，场景与 solid / combat 只读写接口字段。
  */
 export interface WorldActor {
   worldX: number;

@@ -5,7 +5,7 @@ import { loadSpiderTexture } from '../entities/Spider';
 export type LevelPreloadOptions = {
   /** 地图贴图 / 生成资源 */
   loadMap: () => Promise<void>;
-  /** 候选角色 load() */
+  /** 角色实体 load() */
   loadCharacters: Array<() => Promise<void>>;
   /** 黑夜关等需要蜘蛛贴图时 */
   spiders?: boolean;

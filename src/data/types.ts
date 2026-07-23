@@ -11,7 +11,7 @@ export type SaveData = {
   version: 1;
   progress: {
     scene: SavedScene;
-    /** 上次选中的角色（选角默认高亮） */
+    /** 上次操控的角色（进关默认出场） */
     lastCharacter: CharacterId;
   };
 };

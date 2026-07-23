@@ -18,14 +18,14 @@ export type LevelCameraOptions = {
   followLambda?: number;
   /** 缩放过渡 */
   zoomLambda?: number;
-  /** 选角确认后短暂加快镜头 */
-  confirmBoostLambda?: number;
-  confirmBoostTime?: number;
+  /** 切换角色后短暂加快镜头 */
+  switchBoostLambda?: number;
+  switchBoostTime?: number;
 };
 
 /**
  * 关卡镜头：worldRoot 缩放 + 平移，使 cam 落在屏幕中心。
- * 焦点由外部每帧提供（选角中点 / 玩家脚底）。
+ * 焦点由外部每帧提供（玩家脚底）。
  */
 export class LevelCamera {
   private readonly worldRoot: Container;
@@ -35,8 +35,8 @@ export class LevelCamera {
   private readonly zoomWheelStep: number;
   private readonly followLambda: number;
   private readonly zoomLambda: number;
-  private readonly confirmBoostLambda: number;
-  private readonly confirmBoostDuration: number;
+  private readonly switchBoostLambda: number;
+  private readonly switchBoostDuration: number;
 
   private viewWidth: number;
   private viewHeight: number;
@@ -48,10 +48,8 @@ export class LevelCamera {
   private camTargetY: number;
   private zoom: number;
   private zoomTarget: number;
-  /** 选角确认后的加速跟随剩余时间（秒） */
+  /** 切换角色后的加速跟随剩余时间（秒） */
   private camBoostTime = 0;
-  /** 选角中不跟随位移，只贴目标 */
-  private selecting = true;
 
   constructor(options: LevelCameraOptions) {
     this.worldRoot = options.worldRoot;
@@ -63,8 +61,8 @@ export class LevelCamera {
     this.zoomWheelStep = options.zoomWheelStep ?? 1.12;
     this.followLambda = options.followLambda ?? 12;
     this.zoomLambda = options.zoomLambda ?? 9;
-    this.confirmBoostLambda = options.confirmBoostLambda ?? 16;
-    this.confirmBoostDuration = options.confirmBoostTime ?? 0.55;
+    this.switchBoostLambda = options.switchBoostLambda ?? 16;
+    this.switchBoostDuration = options.switchBoostTime ?? 0.35;
 
     this.camX = options.spawnX;
     this.camY = options.spawnY;
@@ -98,13 +96,9 @@ export class LevelCamera {
     return this.viewHeight;
   }
 
-  setSelecting(active: boolean): void {
-    this.selecting = active;
-  }
-
-  /** 选角确认后短暂加快跟焦 */
+  /** 切换角色后短暂加快跟焦 */
   boostFollow(): void {
-    this.camBoostTime = this.confirmBoostDuration;
+    this.camBoostTime = this.switchBoostDuration;
   }
 
   resize(width: number, height: number): void {
@@ -183,20 +177,14 @@ export class LevelCamera {
       this.zoom = this.zoomTarget;
       this.camBoostTime = 0;
     } else if (dt > 0) {
-      // 选角中镜头目标固定，无需跟焦；确认后 / 游玩中再平滑跟随
-      let posLambda = this.selecting ? 0 : this.followLambda;
+      let posLambda = this.followLambda;
       if (this.camBoostTime > 0) {
-        posLambda = this.confirmBoostLambda;
+        posLambda = this.switchBoostLambda;
         this.camBoostTime = Math.max(0, this.camBoostTime - dt);
       }
 
-      if (posLambda > 0) {
-        this.camX = expApproach(this.camX, this.camTargetX, posLambda, dt);
-        this.camY = expApproach(this.camY, this.camTargetY, posLambda, dt);
-      } else {
-        this.camX = this.camTargetX;
-        this.camY = this.camTargetY;
-      }
+      this.camX = expApproach(this.camX, this.camTargetX, posLambda, dt);
+      this.camY = expApproach(this.camY, this.camTargetY, posLambda, dt);
       this.zoom = expApproach(this.zoom, this.zoomTarget, this.zoomLambda, dt);
 
       if (Math.abs(this.camX - this.camTargetX) < 0.05) this.camX = this.camTargetX;

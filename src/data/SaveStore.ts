@@ -101,7 +101,7 @@ export class LocalSaveStore {
     return this.load().progress.lastCharacter;
   }
 
-  /** 更新上次选角并立刻落盘 */
+  /** 更新上次操控角色并立刻落盘 */
   saveLastCharacter(id: CharacterId): void {
     const data = this.load();
     data.progress.lastCharacter = id;

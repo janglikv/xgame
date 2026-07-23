@@ -35,11 +35,10 @@ export type CombatCameraView = {
 
 /**
  * 一帧武器结算所需世界。
- * 玩家 / 停场均为 WorldActor（实体自持 worldX/Y + knock）。
+ * 玩家为 WorldActor（实体自持 worldX/Y + knock）；场上仅一名玩家角色。
  */
 export type CombatWorld = {
   player: PlayerCharacterBase | null;
-  parked: PlayerCharacterBase[];
   /** 可变数组：死亡蜘蛛会从中 splice */
   spiders: Spider[];
 };
@@ -241,8 +240,7 @@ export class CombatSystem {
   }
 
   /**
-   * 直线长矛：飞行中检测蜘蛛 / 停场角色；撞墙由投射物内部处理。
-   * 停场角色：击飞 + 姿态，不扣血。
+   * 直线长矛：飞行中检测蜘蛛；撞墙由投射物内部处理。
    */
   private updateSpears(deltaMS: number, world: CombatWorld): void {
     let needSync = false;
@@ -252,8 +250,6 @@ export class CombatSystem {
       let phase = spear.update(deltaMS);
 
       if (phase === 'flying') {
-        let stuck = false;
-
         for (let s = world.spiders.length - 1; s >= 0; s--) {
           const spider = world.spiders[s]!;
           if (!spider.isAlive) continue;
@@ -269,28 +265,7 @@ export class CombatSystem {
           spear.stick();
           phase = spear.getPhase();
           needSync = true;
-          stuck = true;
           break;
-        }
-
-        if (!stuck) {
-          for (const parked of world.parked) {
-            if (
-              !spear.hitsTarget(
-                parked.worldX,
-                parked.worldY,
-                parked.hurtR,
-              )
-            ) {
-              continue;
-            }
-            const hit = spear.buildHit();
-            this.applyParkedHitFx(parked, hit, 1);
-            spear.stick();
-            phase = spear.getPhase();
-            needSync = true;
-            break;
-          }
         }
       }
 
@@ -310,7 +285,7 @@ export class CombatSystem {
 
   /**
    * 把炸弹算出的命中接到目标上。
-   * 玩家 / 停场：击飞 / 姿态，不扣血；蜘蛛可死亡。
+   * 玩家：击飞 / 姿态，不扣血；蜘蛛可死亡。
    */
   private applyBombBlast(bomb: BombProjectile, world: CombatWorld): void {
     const player = world.player;
@@ -336,18 +311,6 @@ export class CombatSystem {
     }
 
     let anyFx = false;
-    for (const parked of world.parked) {
-      const hit = bomb.evaluateHit(
-        parked.worldX,
-        parked.worldY,
-        parked.worldX >= bomb.groundX ? 1 : -1,
-        parked.hurtR,
-      );
-      if (!hit) continue;
-      this.applyParkedHitFx(parked, hit, 1);
-      anyFx = true;
-    }
-
     for (let i = world.spiders.length - 1; i >= 0; i--) {
       const spider = world.spiders[i]!;
       if (!spider.isAlive) continue;
@@ -371,30 +334,6 @@ export class CombatSystem {
       this.hooks.syncWorldActors();
       this.hooks.sortDepth();
     }
-  }
-
-  private applyParkedHitFx(
-    parked: PlayerCharacterBase,
-    hit: {
-      knockVelX: number;
-      knockVelY: number;
-      dirX: number;
-      poseStrength: number;
-      airSpinTurns?: number;
-    },
-    knockScale = 1,
-  ): void {
-    applyKnockImpulse(
-      parked.knock,
-      hit.knockVelX,
-      hit.knockVelY,
-      knockScale,
-    );
-    parked.playBlastKnock(
-      hit.poseStrength,
-      hit.dirX,
-      hit.airSpinTurns ?? 0,
-    );
   }
 
   private removeSpider(world: CombatWorld, index: number): void {

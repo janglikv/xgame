@@ -205,7 +205,7 @@ export class IceRanger extends PlayerCharacterBase {
 
   /**
    * 飞剑自动恢复（由场景在非暂停时调用）。
-   * 与 update 分离，避免暂停 / 选角阶段偷回弹。
+   * 与 update 分离，避免暂停阶段偷回弹。
    */
   tickSpearAmmo(deltaMS: number): void {
     const { restoredFromEmpty } = this.ammo.update(deltaMS / 1000);

@@ -15,7 +15,7 @@ export const SPEAR_SPEED = 640;
  */
 export const SPEAR_BODY_R = 10;
 /**
- * 攻击体：对敌人 / 停场角色的命中半径（与 BODY 独立）。
+ * 攻击体：对敌人的命中半径（与 BODY 独立）。
  * 实际判定 = SPEAR_HIT_R + 目标 hurtbox 半径。
  */
 export const SPEAR_HIT_R = 12;
