@@ -6,6 +6,10 @@ export class Keyboard {
   private bound = false;
 
   private readonly onKeyDown = (e: KeyboardEvent): void => {
+    // 游戏内 Tab 用于切角色，阻止浏览器焦点跳转
+    if (e.code === 'Tab') {
+      e.preventDefault();
+    }
     if (e.repeat) return;
     this.down.add(e.code);
   };

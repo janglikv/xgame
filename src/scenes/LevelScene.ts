@@ -48,6 +48,8 @@ const HUD_HP_MARGIN_BOTTOM = 28;
 /** 飞剑数量相对血条上沿再上移（屏幕像素） */
 const HUD_SPEAR_GAP = 22;
 const PLAYER_MAX_HP = 100;
+/** 切换角色冷却（秒） */
+const CHAR_SWITCH_COOLDOWN = 0.3;
 /** 击退很强时削弱 WASD 控制（水平速度） */
 const KNOCK_CONTROL_SOFTEN = 220;
 
@@ -78,7 +80,7 @@ export type LevelSceneOptions = {
 
 /**
  * 可玩关卡（默认黑夜）：WASD 移动，点击远程攻击，Esc 暂停。
- * 场上始终只有一名角色；右侧头像点击切换。
+ * 场上始终只有一名角色；右侧头像点击或 Tab 切换。
  * 滚轮 / +/- 缩放，0 复位，F 看全景。
  * 纵深：worldRoot 镜头变换 + sortLayer 按脚底 Y 排序。
  */
@@ -131,9 +133,12 @@ export class LevelScene extends Container implements GameScene {
 
   private paused = false;
   private escWasDown = false;
+  private tabWasDown = false;
   private fitWasDown = false;
   private resetZoomWasDown = false;
   private treesMounted = false;
+  /** 切换角色剩余冷却（秒）；0 表示可切换 */
+  private switchCooldownRemaining = 0;
 
   constructor(width: number, height: number, options: LevelSceneOptions) {
     super();
@@ -294,9 +299,10 @@ export class LevelScene extends Container implements GameScene {
     }
   }
 
-  /** 右侧头像：同位置切换操控角色（缺色切换） */
+  /** 右侧头像 / Tab：同位置切换操控角色（0.3s 冷却） */
   private switchCharacter(id: CharacterId): void {
     if (this.paused) return;
+    if (this.switchCooldownRemaining > 0) return;
     const current = this.player;
     if (!current || current.characterId === id) return;
     if (!this.roster.has(id)) return;
@@ -315,9 +321,27 @@ export class LevelScene extends Container implements GameScene {
       this.startBombEntrance(this.player);
     }
     this.characterHud.setActive(id);
+    this.switchCooldownRemaining = CHAR_SWITCH_COOLDOWN;
+    this.characterHud.setSwitchCooldown(
+      this.switchCooldownRemaining,
+      CHAR_SWITCH_COOLDOWN,
+    );
     this.camera.boostFollow();
     this.syncWorldActors();
     this.sortDepth();
+  }
+
+  /** 推进切换冷却并同步 HUD 遮罩 */
+  private tickSwitchCooldown(dt: number): void {
+    if (this.switchCooldownRemaining <= 0) return;
+    this.switchCooldownRemaining = Math.max(
+      0,
+      this.switchCooldownRemaining - dt,
+    );
+    this.characterHud.setSwitchCooldown(
+      this.switchCooldownRemaining,
+      CHAR_SWITCH_COOLDOWN,
+    );
   }
 
   /** 冰冰从当前位置上空垂直落下，落地后触发免费三剑齐射。 */
@@ -630,6 +654,13 @@ export class LevelScene extends Container implements GameScene {
     }
     this.escWasDown = escDown;
 
+    // Tab：循环切换操控角色（暂停 / CD 中忽略）
+    const tabDown = this.keyboard.isDown('Tab');
+    if (tabDown && !this.tabWasDown && !this.paused) {
+      this.switchCharacter(this.characterHud.getNextCharacterId());
+    }
+    this.tabWasDown = tabDown;
+
     // 缩放快捷键在暂停时也可用（方便看全景）
     this.handleZoomKeys(dt);
 
@@ -653,6 +684,8 @@ export class LevelScene extends Container implements GameScene {
       }
       return;
     }
+
+    this.tickSwitchCooldown(dt);
 
     const { x, y } = this.keyboard.getMoveAxis();
     let moved = false;

@@ -20,6 +20,8 @@ type Slot = {
   root: Container;
   ring: Graphics;
   dim: Graphics;
+  /** 切换冷却遮罩：自顶向下按剩余比例覆盖 */
+  cdOverlay: Graphics;
   sprite: Sprite;
   previewUrl: string;
 };
@@ -44,6 +46,9 @@ export class CharacterSwitchHud extends Container {
   private activeId: CharacterId = 'bomb-girl';
   private viewWidth = 0;
   private viewHeight = 0;
+  /** 切换冷却剩余秒数；0 表示可切换 */
+  private switchCdRemaining = 0;
+  private switchCdTotal = 1;
 
   constructor(options: CharacterSwitchHudOptions) {
     super();
@@ -70,11 +75,38 @@ export class CharacterSwitchHud extends Container {
     return this.activeId;
   }
 
+  /** 花名册顺序（与 HUD 卡片一致） */
+  get rosterIds(): readonly CharacterId[] {
+    return this.slots.map((s) => s.id);
+  }
+
+  /**
+   * 取当前角色的下一位（循环）；仅一名角色时返回自身。
+   * 不改 activeId，由外部 switch 成功后再 setActive。
+   */
+  getNextCharacterId(): CharacterId {
+    const ids = this.rosterIds;
+    if (ids.length === 0) return this.activeId;
+    const idx = ids.indexOf(this.activeId);
+    const next = idx < 0 ? 0 : (idx + 1) % ids.length;
+    return ids[next]!;
+  }
+
   /** 高亮当前角色；不触发 onSelect */
   setActive(id: CharacterId): void {
     if (this.activeId === id) return;
     this.activeId = id;
     this.refreshSelection();
+  }
+
+  /**
+   * 同步切换冷却到 HUD（非当前角色头像显示自顶向下遮罩）。
+   * remaining=0 时清除遮罩。
+   */
+  setSwitchCooldown(remaining: number, total: number): void {
+    this.switchCdRemaining = Math.max(0, remaining);
+    this.switchCdTotal = Math.max(total, 1e-4);
+    this.refreshCooldownVisual();
   }
 
   async load(): Promise<void> {
@@ -119,13 +151,17 @@ export class CharacterSwitchHud extends Container {
     dim.eventMode = 'none';
     dim.visible = false;
 
+    const cdOverlay = new Graphics();
+    cdOverlay.eventMode = 'none';
+    cdOverlay.visible = false;
+
     const ring = new Graphics();
     ring.eventMode = 'none';
 
-    root.addChild(base, sprite, mask, dim, ring);
+    root.addChild(base, sprite, mask, dim, cdOverlay, ring);
 
     root.on('pointerover', () => {
-      if (id === this.activeId) return;
+      if (id === this.activeId || this.switchCdRemaining > 0) return;
       root.scale.set(1.06);
     });
     root.on('pointerout', () => {
@@ -134,12 +170,13 @@ export class CharacterSwitchHud extends Container {
     root.on('pointertap', (e) => {
       e.stopPropagation();
       if (id === this.activeId) return;
+      if (this.switchCdRemaining > 0) return;
       this.onSelect(id);
     });
 
     this.addChild(root);
 
-    return { id, root, ring, dim, sprite, previewUrl };
+    return { id, root, ring, dim, cdOverlay, sprite, previewUrl };
   }
 
   private async loadSlotTexture(slot: Slot): Promise<void> {
@@ -179,6 +216,41 @@ export class CharacterSwitchHud extends Container {
       slot.root.scale.set(active ? 1.08 : 1);
       slot.root.alpha = active ? 1 : 0.88;
       this.paintRing(slot.ring, active);
+    }
+    this.refreshCooldownVisual();
+  }
+
+  /** 非当前角色：冷却中自顶向下遮罩 + 不可点样式 */
+  private refreshCooldownVisual(): void {
+    const onCd = this.switchCdRemaining > 0;
+    const ratio = onCd
+      ? Math.min(1, this.switchCdRemaining / this.switchCdTotal)
+      : 0;
+
+    for (const slot of this.slots) {
+      const active = slot.id === this.activeId;
+      if (active || !onCd) {
+        slot.cdOverlay.visible = false;
+        slot.cdOverlay.clear();
+        slot.root.cursor = active ? 'default' : 'pointer';
+        continue;
+      }
+
+      const w = this.cardW;
+      const h = this.cardH;
+      const radius = 6;
+      const pad = 2;
+      const innerW = w - pad * 2;
+      const innerH = h - pad * 2;
+      const coverH = innerH * ratio;
+      slot.cdOverlay.clear();
+      if (coverH > 0.5) {
+        slot.cdOverlay
+          .roundRect(-w / 2 + pad, -h / 2 + pad, innerW, coverH, radius - 1)
+          .fill({ color: 0x0a1018, alpha: 0.62 });
+      }
+      slot.cdOverlay.visible = coverH > 0.5;
+      slot.root.cursor = 'not-allowed';
     }
   }
 
