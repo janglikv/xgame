@@ -27,7 +27,7 @@ const THROW_HAND_TEX = {
 } as const;
 
 /**
- * 玩家角色：橙发炸弹妹（整图预览）
+ * 玩家角色「炸炸」：橙发炸弹妹（整图预览）
  * 原点在脚底中心附近；可扔炸弹。
  */
 export class BombGirl extends PlayerCharacterBase {

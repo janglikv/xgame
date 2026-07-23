@@ -59,7 +59,7 @@ const HAND_SPEAR = {
 } as const;
 
 /**
- * 冰霜游侠：直线投矛。
+ * 玩家角色「冰冰」：冰霜游侠，直线投矛。
  * 原点在脚底中心附近。
  */
 export class IceRanger extends PlayerCharacterBase {
@@ -197,6 +197,29 @@ export class IceRanger extends PlayerCharacterBase {
       y: feetY,
       height: Math.max(4, lift),
     };
+  }
+
+  /** 空降时复制当前角色轮廓，交给场景作为短暂残影。 */
+  createEntranceAfterimage(): Sprite | null {
+    const body = this.sprite;
+    if (!body) return null;
+
+    const ghost = new Sprite(body.texture);
+    ghost.label = 'IceEntranceAfterimage';
+    ghost.anchor.set(body.anchor.x, body.anchor.y);
+    ghost.position.set(
+      this.worldX + body.x * this.scale.x,
+      this.worldY - this.knock.height + body.y * this.scale.y,
+    );
+    ghost.scale.set(
+      this.scale.x * body.scale.x,
+      this.scale.y * body.scale.y,
+    );
+    ghost.rotation = this.scale.x < 0 ? -body.rotation : body.rotation;
+    ghost.tint = 0xa9e7ff;
+    ghost.alpha = 0.42;
+    ghost.eventMode = 'none';
+    return ghost;
   }
 
   /** 投矛瞬间：身体后仰（手上矛由 tryConsumeSpear 处理） */

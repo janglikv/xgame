@@ -23,6 +23,12 @@ export { PLAYER_HURT_R, SPIDER_HURT_R };
 export const SPIDER_KNOCK_SCALE = 0.85;
 /** 点太近不扔（屏幕像素） */
 const THROW_MIN_DIST = 12;
+/** 冰冰登场三连发的单发间隔（秒） */
+const ENTRANCE_SPEAR_INTERVAL = 0.12;
+/** 冰冰登场自动攻击的索敌半径（世界像素） */
+const ENTRANCE_AUTO_AIM_RANGE = 520;
+/** 炸炸出场时三枚炸弹围绕角色的落点半径 */
+const BOMB_ENTRANCE_RADIUS = 34;
 
 /** 镜头参数：屏幕点击 → 世界瞄准 */
 export type CombatCameraView = {
@@ -59,6 +65,17 @@ export class CombatSystem {
   private readonly spears: SpearProjectile[] = [];
   private readonly sortLayer: Container;
   private readonly hooks: CombatSystemHooks;
+  private entranceVolley: {
+    player: IceRanger;
+    spiders: readonly Spider[];
+    remaining: number;
+    targetIndex: number;
+    elapsed: number;
+  } | null = null;
+  private readonly entranceBombBlasts = new Map<
+    BombProjectile,
+    () => void
+  >();
 
   constructor(sortLayer: Container, hooks: CombatSystemHooks) {
     this.sortLayer = sortLayer;
@@ -112,10 +129,130 @@ export class CombatSystem {
     }
   }
 
+  /** 冰冰落地时开始自动瞄准三连发，不走手持飞剑与弹药流程。 */
+  fireFreeAutoAimSpearVolley(
+    player: IceRanger,
+    spiders: readonly Spider[],
+    count = 3,
+  ): void {
+    if (count <= 0) return;
+    this.entranceVolley = {
+      player,
+      spiders,
+      remaining: count,
+      targetIndex: 0,
+      elapsed: 0,
+    };
+    this.fireNextEntranceSpear();
+  }
+
+  /**
+   * 炸炸出场时从原地同时抛出三枚小炸弹。
+   * 三枚炸弹共用一次回调，首次爆炸时让角色显现。
+   */
+  throwBombEntranceBurst(player: BombGirl, onFirstBlast: () => void): void {
+    let revealed = false;
+    const revealOnce = (): void => {
+      if (revealed) return;
+      revealed = true;
+      onFirstBlast();
+    };
+
+    for (let i = 0; i < 3; i++) {
+      const angle = -Math.PI / 2 + (i * Math.PI * 2) / 3;
+      const endX =
+        player.worldX + Math.cos(angle) * BOMB_ENTRANCE_RADIUS;
+      const endY =
+        player.worldY + Math.sin(angle) * BOMB_ENTRANCE_RADIUS;
+      const bomb = new BombProjectile(
+        player.worldX,
+        player.worldY,
+        endX,
+        endY,
+        {
+          originHeight: 24,
+          sizeScale: 0.7,
+          blast: {
+            maxDamage: 12,
+            minDamage: 4,
+            knockSpeed: 420,
+          },
+        },
+      );
+      this.sortLayer.addChild(bomb);
+      this.bombs.push(bomb);
+      this.entranceBombBlasts.set(bomb, revealOnce);
+      bomb.syncToWorld();
+    }
+    this.hooks.sortDepth();
+  }
+
   /** 推进所有投射物；结算爆炸 / 矛命中；清理 done */
   update(deltaMS: number, world: CombatWorld): void {
+    this.updateEntranceVolley(deltaMS / 1000);
     this.updateBombs(deltaMS, world);
     this.updateSpears(deltaMS, world);
+  }
+
+  private updateEntranceVolley(dt: number): void {
+    const volley = this.entranceVolley;
+    if (!volley) return;
+
+    volley.elapsed += dt;
+    if (volley.elapsed < ENTRANCE_SPEAR_INTERVAL) return;
+    volley.elapsed -= ENTRANCE_SPEAR_INTERVAL;
+    this.fireNextEntranceSpear();
+  }
+
+  private fireNextEntranceSpear(): void {
+    const volley = this.entranceVolley;
+    if (!volley || volley.remaining <= 0) {
+      this.entranceVolley = null;
+      return;
+    }
+
+    const targets = volley.spiders
+      .filter((spider) => {
+        if (!spider.isAlive) return false;
+        const dx = spider.worldX - volley.player.worldX;
+        const dy = spider.worldY - volley.player.worldY;
+        return dx * dx + dy * dy <= ENTRANCE_AUTO_AIM_RANGE ** 2;
+      })
+      .sort((a, b) => {
+        const adx = a.worldX - volley.player.worldX;
+        const ady = a.worldY - volley.player.worldY;
+        const bdx = b.worldX - volley.player.worldX;
+        const bdy = b.worldY - volley.player.worldY;
+        return adx * adx + ady * ady - (bdx * bdx + bdy * bdy);
+      });
+    if (targets.length === 0) {
+      this.entranceVolley = null;
+      return;
+    }
+
+    const target = targets[volley.targetIndex % targets.length]!;
+    volley.player.setFacingFromMoveX(target.worldX - volley.player.worldX);
+    const origin = volley.player.getThrowOrigin(
+      volley.player.worldX,
+      volley.player.worldY,
+    );
+    const spear = new SpearProjectile(
+      origin.x,
+      origin.y,
+      target.worldX - origin.x,
+      target.worldY - origin.y,
+      { originHeight: origin.height },
+    );
+    this.sortLayer.addChild(spear);
+    this.spears.push(spear);
+    spear.syncToWorld();
+    this.hooks.sortDepth();
+
+    volley.remaining -= 1;
+    volley.targetIndex += 1;
+    if (volley.remaining <= 0) {
+      this.entranceVolley = null;
+    }
   }
 
   private screenAimWorldDelta(
@@ -238,10 +375,12 @@ export class CombatSystem {
       bomb.syncToWorld();
 
       if (bomb.consumeBlastResolve()) {
+        this.entranceBombBlasts.get(bomb)?.();
         this.applyBombBlast(bomb, world);
       }
 
       if (phase === 'done') {
+        this.entranceBombBlasts.delete(bomb);
         this.sortLayer.removeChild(bomb);
         bomb.destroy({ children: true });
         this.bombs.splice(i, 1);
