@@ -392,7 +392,7 @@ export class LevelScene extends Container implements GameScene {
     }
   }
 
-  /** 炸炸先隐藏，原地三枚炸弹首次爆炸时再被冲击炸出来。 */
+  /** 炸炸先隐藏，原地三枚炸弹首次爆炸时再显现。 */
   private startBombEntrance(player: BombGirl): void {
     player.alpha = 0;
     this.bombEntrancePending = true;

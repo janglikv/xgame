@@ -9,7 +9,7 @@ import { IceRanger, SPEAR_THROW_RECOIL_SPEED } from '../entities/IceRanger';
 import type { PlayerCharacterBase } from '../entities/PlayerCharacterBase';
 import { SpearProjectile } from '../entities/SpearProjectile';
 import type { SpearAmmoSnapshot } from '../entities/SpearAmmo';
-import { applyKnockImpulse, applyRecoilHop } from '../entities/knockArc';
+import { applyRecoilHop } from '../entities/knockArc';
 import type { Spider } from '../entities/Spider';
 import {
   PLAYER_HURT_R,
@@ -175,7 +175,6 @@ export class CombatSystem {
           blast: {
             maxDamage: 12,
             minDamage: 4,
-            knockSpeed: 420,
           },
         },
       );
@@ -434,31 +433,9 @@ export class CombatSystem {
 
   /**
    * 把炸弹算出的命中接到目标上。
-   * 玩家：击飞 / 姿态，不扣血；蜘蛛可死亡。
+   * 炸弹无击飞：玩家不受影响；蜘蛛只结算伤害（可死亡）。
    */
   private applyBombBlast(bomb: BombProjectile, world: CombatWorld): void {
-    const player = world.player;
-    if (player) {
-      const playerHit = bomb.evaluateHit(
-        player.worldX,
-        player.worldY,
-        player.facingDir,
-        player.hurtR,
-      );
-      if (playerHit) {
-        applyKnockImpulse(
-          player.knock,
-          playerHit.knockVelX,
-          playerHit.knockVelY,
-        );
-        player.playBlastKnock(
-          playerHit.poseStrength,
-          playerHit.dirX,
-          playerHit.airSpinTurns,
-        );
-      }
-    }
-
     let anyFx = false;
     for (let i = world.spiders.length - 1; i >= 0; i--) {
       const spider = world.spiders[i]!;

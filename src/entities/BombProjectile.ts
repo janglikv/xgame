@@ -7,11 +7,12 @@ const EXPLOSION_URL = '/assets/bomb/explosion.png';
 export const BOMB_MAX_RANGE = 280;
 
 /**
- * 炸弹爆炸属性：伤害 + 击飞都由炸弹持有，方便后续调参 / 做不同炸弹类型。
+ * 炸弹爆炸属性：伤害由炸弹持有，方便后续调参 / 做不同炸弹类型。
+ * 当前关闭击飞（knockSpeed 固定为 0）。
  * 距离衰减：strength = (1 - dist/radius)²，中心 1、边缘 0。
  */
 export type BombBlastStats = {
-  /** 伤害 / 击退半径（世界像素） */
+  /** 伤害半径（世界像素） */
   radius: number;
   /** 中心最大伤害 */
   maxDamage: number;
@@ -22,7 +23,10 @@ export type BombBlastStats = {
    * 再 clamp 到 minDamage。
    */
   damageFloor: number;
-  /** 中心最大击飞初速度（像素/秒） */
+  /**
+   * 中心最大击飞初速度（像素/秒）。
+   * 已关闭击飞：默认 0，保留字段便于以后重开。
+   */
   knockSpeed: number;
   /**
    * 击飞混合：impulse = knockSpeed * (knockFloor + (1-knockFloor) * strength)
@@ -39,7 +43,7 @@ export const DEFAULT_BOMB_BLAST: Readonly<BombBlastStats> = {
   maxDamage: 28,
   minDamage: 6,
   damageFloor: 0.35,
-  knockSpeed: 920,
+  knockSpeed: 0,
   knockFloor: 0.45,
   poseBase: 0.55,
   poseGain: 0.7,
@@ -57,15 +61,15 @@ export const DEFAULT_BOMB_STABILITY = 1;
 export const BOMB_MIN_SIZE_SCALE = 0.35;
 
 /**
- * 尺寸 ≥ 此值视为“大弹”：额外击飞加成 + 被炸目标空中旋转两圈。
- * （相对满尺寸 sizeScale）
+ * 尺寸 ≥ 此值曾视为“大弹”（额外击飞 / 空中转圈）。
+ * 击飞已关闭，阈值仅保留兼容。
  */
 export const BOMB_SPIN_SIZE_THRESHOLD = 0.88;
 
-/** 大弹在阈值处起算的额外击飞倍率上限（size=1 时再乘这么多） */
+/** @deprecated 击飞已关闭 */
 export const BOMB_LARGE_KNOCK_BONUS = 0.4;
 
-/** 大弹空中旋转圈数 */
+/** @deprecated 击飞已关闭，空中转圈不再触发 */
 export const BOMB_AIR_SPIN_TURNS = 2;
 
 /** 对某个目标的一次爆炸结算结果（由炸弹算出，场景只负责应用） */
@@ -73,7 +77,7 @@ export type BlastHit = {
   /** 0~1，越近越大（已平方衰减） */
   strength: number;
   damage: number;
-  /** 击飞初速度向量（世界像素/秒，远离爆心） */
+  /** 击飞初速度（当前恒为 0） */
   knockVelX: number;
   knockVelY: number;
   /** 单位方向（远离爆心） */
@@ -81,10 +85,7 @@ export type BlastHit = {
   dirY: number;
   /** 建议姿态强度 */
   poseStrength: number;
-  /**
-   * 空中旋转圈数；大弹为 2，普通弹为 0。
-   * 目标侧负责播放旋转动画。
-   */
+  /** 空中旋转圈数（击飞关闭后恒为 0） */
   airSpinTurns: number;
 };
 
@@ -144,7 +145,7 @@ export function rollBombSizeScale(
   return 1;
 }
 
-/** 满尺寸 blast 按尺寸倍率缩放（范围 / 伤害 / 击飞） */
+/** 满尺寸 blast 按尺寸倍率缩放（范围 / 伤害） */
 export function scaleBlastStats(
   base: BombBlastStats,
   sizeScale: number,
@@ -180,7 +181,7 @@ export class BombProjectile extends Container {
   /** 出手离地高度（飞行过程中线性降到 0） */
   private readonly originHeight: number;
 
-  /** 本颗炸弹的爆炸 / 击飞配置（已含尺寸缩放） */
+  /** 本颗炸弹的爆炸配置（已含尺寸缩放） */
   readonly blast: BombBlastStats;
   /** 扔出时的稳定性 0~1 */
   readonly stability: number;
@@ -263,7 +264,7 @@ export class BombProjectile extends Container {
 
   /**
    * 对世界坐标上的目标做一次爆炸命中检测与数值结算。
-   * 半径 / 伤害 / 击飞均来自本实例已缩放的 blast。
+   * 半径 / 伤害来自本实例已缩放的 blast；击飞已关闭。
    * @param targetHurtR 目标受击半径（hurtbox）；爆炸圆与 hurt 圆相交即命中
    */
   evaluateHit(
@@ -285,30 +286,13 @@ export class BombProjectile extends Container {
     const falloff = 1 - inner / radius;
     const strength = falloff * falloff;
 
-    const {
-      maxDamage,
-      minDamage,
-      damageFloor,
-      knockSpeed,
-      knockFloor,
-      poseBase,
-      poseGain,
-    } = this.blast;
+    const { maxDamage, minDamage, damageFloor, poseBase, poseGain } =
+      this.blast;
 
     const damage = Math.max(
       minDamage,
       Math.round(maxDamage * (damageFloor + (1 - damageFloor) * strength)),
     );
-    let impulse = knockSpeed * (knockFloor + (1 - knockFloor) * strength);
-
-    // 大弹：额外推远 + 空中转圈
-    let airSpinTurns = 0;
-    if (this.sizeScale >= BOMB_SPIN_SIZE_THRESHOLD) {
-      const span = Math.max(1e-6, 1 - BOMB_SPIN_SIZE_THRESHOLD);
-      const largeT = Math.min(1, (this.sizeScale - BOMB_SPIN_SIZE_THRESHOLD) / span);
-      impulse *= 1 + BOMB_LARGE_KNOCK_BONUS * largeT;
-      airSpinTurns = BOMB_AIR_SPIN_TURNS;
-    }
 
     let dirX: number;
     let dirY: number;
@@ -326,12 +310,12 @@ export class BombProjectile extends Container {
     return {
       strength,
       damage,
-      knockVelX: dirX * impulse,
-      knockVelY: dirY * impulse,
+      knockVelX: 0,
+      knockVelY: 0,
       dirX,
       dirY,
       poseStrength: poseBase + poseGain * strength,
-      airSpinTurns,
+      airSpinTurns: 0,
     };
   }
 
