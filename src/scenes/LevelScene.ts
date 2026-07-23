@@ -30,7 +30,7 @@ import type { GameScene } from './types';
 import { DebugOverlay } from '../systems/DebugOverlay';
 
 /** 黑夜松树冷色 tint（环境变暗，不盖角色） */
-const NIGHT_TREE_TINT = 0x6a7f9e;
+const NIGHT_TREE_TINT = 0x40516b;
 
 const MOVE_SPEED = 220;
 /** 玩家 HUD 血条尺寸 / 底边边距（屏幕像素） */

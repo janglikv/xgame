@@ -39,13 +39,13 @@ export class NightOverlay extends Container {
     this.multiply
       .clear()
       .rect(0, 0, width, height)
-      .fill({ color: 0x3d5a8c });
+      .fill({ color: 0x263a60 });
 
     // 额外压暗，避免 multiply 后仍偏亮
     this.shade
       .clear()
       .rect(0, 0, width, height)
-      .fill({ color: 0x060c18, alpha: 0.42 });
+      .fill({ color: 0x03070e, alpha: 0.62 });
   }
 }
 
