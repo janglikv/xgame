@@ -3,9 +3,11 @@ import type { CharacterId } from '../entities/types';
 
 export type CharacterSwitchHudOptions = {
   onSelect: (id: CharacterId) => void;
-  /** 头像直径（屏幕像素） */
-  avatarSize?: number;
-  /** 相邻头像间距 */
+  /** 头像卡片宽（屏幕像素） */
+  cardWidth?: number;
+  /** 头像卡片高（屏幕像素） */
+  cardHeight?: number;
+  /** 相邻卡片间距 */
   gap?: number;
   /** 距屏幕右缘 */
   marginRight?: number;
@@ -28,12 +30,13 @@ const ROSTER: Array<{ id: CharacterId; previewUrl: string }> = [
 ];
 
 /**
- * 右下角角色切换 HUD：竖排小圆形头像，点击切换当前操控角色。
+ * 右下角角色切换 HUD：横排长方形头像卡，点击切换当前操控角色。
  * 场上只应有一名角色；本组件不负责实体，只发 onSelect。
  */
 export class CharacterSwitchHud extends Container {
   private readonly onSelect: (id: CharacterId) => void;
-  private readonly avatarSize: number;
+  private readonly cardW: number;
+  private readonly cardH: number;
   private readonly gap: number;
   private readonly marginRight: number;
   private readonly marginBottom: number;
@@ -49,10 +52,12 @@ export class CharacterSwitchHud extends Container {
     this.sortableChildren = true;
 
     this.onSelect = options.onSelect;
-    this.avatarSize = options.avatarSize ?? 48;
-    this.gap = options.gap ?? 10;
-    this.marginRight = options.marginRight ?? 18;
-    this.marginBottom = options.marginBottom ?? 22;
+    // 竖向长方形卡：窄且矮，整体占位更小
+    this.cardW = options.cardWidth ?? 34;
+    this.cardH = options.cardHeight ?? 48;
+    this.gap = options.gap ?? 8;
+    this.marginRight = options.marginRight ?? 16;
+    this.marginBottom = options.marginBottom ?? 20;
 
     for (const entry of ROSTER) {
       this.slots.push(this.createSlot(entry.id, entry.previewUrl));
@@ -83,16 +88,18 @@ export class CharacterSwitchHud extends Container {
   }
 
   private createSlot(id: CharacterId, previewUrl: string): Slot {
-    const size = this.avatarSize;
+    const w = this.cardW;
+    const h = this.cardH;
+    const radius = 6;
     const root = new Container();
     root.label = `CharSlot:${id}`;
     root.eventMode = 'static';
     root.cursor = 'pointer';
-    root.hitArea = new Rectangle(-size / 2, -size / 2, size, size);
+    root.hitArea = new Rectangle(-w / 2, -h / 2, w, h);
 
-    // 圆形裁剪：mask 与头像同父级
+    // 圆角矩形裁剪
     const mask = new Graphics()
-      .circle(0, 0, size / 2 - 3)
+      .roundRect(-w / 2 + 2, -h / 2 + 2, w - 4, h - 4, radius - 1)
       .fill({ color: 0xffffff });
     mask.eventMode = 'none';
 
@@ -101,14 +108,13 @@ export class CharacterSwitchHud extends Container {
     sprite.eventMode = 'none';
     sprite.mask = mask;
 
-    // 暗角底，贴图未就绪时也能看出槽位
     const base = new Graphics()
-      .circle(0, 0, size / 2 - 2)
+      .roundRect(-w / 2, -h / 2, w, h, radius)
       .fill({ color: 0x1a2230, alpha: 0.92 });
     base.eventMode = 'none';
 
     const dim = new Graphics()
-      .circle(0, 0, size / 2 - 3)
+      .roundRect(-w / 2 + 2, -h / 2 + 2, w - 4, h - 4, radius - 1)
       .fill({ color: 0x000000, alpha: 0.42 });
     dim.eventMode = 'none';
     dim.visible = false;
@@ -140,11 +146,10 @@ export class CharacterSwitchHud extends Container {
     try {
       const tex = await Assets.load<Texture>(slot.previewUrl);
       slot.sprite.texture = tex;
-      // 头像偏上半身：略放大并以胸口为中心
-      const size = this.avatarSize;
-      const scale = (size * 1.35) / Math.max(tex.width, tex.height);
+      // 竖卡：按高度铺满，略放大取上半身
+      const scale = (this.cardH * 1.15) / Math.max(tex.height, 1);
       slot.sprite.scale.set(scale);
-      slot.sprite.position.set(0, size * 0.08);
+      slot.sprite.position.set(0, this.cardH * 0.06);
     } catch (err) {
       console.warn('[CharacterSwitchHud] avatar load failed:', slot.id, err);
     }
@@ -154,14 +159,16 @@ export class CharacterSwitchHud extends Container {
     const n = this.slots.length;
     if (n === 0) return;
 
-    const size = this.avatarSize;
-    const x = this.viewWidth - this.marginRight - size / 2;
-    // 自下而上堆叠：roster 顺序从上到下，最底一个贴底边 margin
-    let y = this.viewHeight - this.marginBottom - size / 2;
-    for (let i = n - 1; i >= 0; i--) {
-      const slot = this.slots[i]!;
+    const w = this.cardW;
+    const h = this.cardH;
+    const totalW = n * w + (n - 1) * this.gap;
+    // 横排贴右下角
+    const y = this.viewHeight - this.marginBottom - h / 2;
+    let x = this.viewWidth - this.marginRight - totalW + w / 2;
+
+    for (const slot of this.slots) {
       slot.root.position.set(x, y);
-      y -= size + this.gap;
+      x += w + this.gap;
     }
   }
 
@@ -176,22 +183,24 @@ export class CharacterSwitchHud extends Container {
   }
 
   private paintRing(g: Graphics, active: boolean): void {
-    const r = this.avatarSize / 2;
+    const w = this.cardW;
+    const h = this.cardH;
+    const radius = 6;
     g.clear();
     if (active) {
-      g.circle(0, 0, r).stroke({
-        width: 2.5,
+      g.roundRect(-w / 2, -h / 2, w, h, radius).stroke({
+        width: 2,
         color: 0xffd76a,
         alpha: 0.95,
       });
-      g.circle(0, 0, r + 3).stroke({
-        width: 1.5,
+      g.roundRect(-w / 2 - 2, -h / 2 - 2, w + 4, h + 4, radius + 1).stroke({
+        width: 1.25,
         color: 0xfff0b0,
-        alpha: 0.35,
+        alpha: 0.32,
       });
     } else {
-      g.circle(0, 0, r).stroke({
-        width: 1.5,
+      g.roundRect(-w / 2, -h / 2, w, h, radius).stroke({
+        width: 1.25,
         color: 0xffffff,
         alpha: 0.28,
       });
