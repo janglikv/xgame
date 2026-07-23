@@ -4,6 +4,7 @@ import type { SavedScene } from './data/types';
 import type { CharacterId } from './entities/types';
 import { LevelScene } from './scenes/LevelScene';
 import { MainScene } from './scenes/MainScene';
+import { MapEditScene } from './scenes/MapEditScene';
 import { SceneManager } from './scenes/SceneManager';
 import type { LevelTheme } from './scenes/types';
 
@@ -47,6 +48,7 @@ async function bootstrap(): Promise<void> {
       () =>
         new MainScene(app.screen.width, app.screen.height, {
           onSelectLevel: goLevel,
+          onMapEdit: goMapEdit,
           onBackground: setBackground,
         }),
     );
@@ -72,6 +74,17 @@ async function bootstrap(): Promise<void> {
     );
   };
 
+  const goMapEdit = (): void => {
+    // 编辑器不写存档，返回后仍回主菜单
+    void scenes.setScene(
+      () =>
+        new MapEditScene(app.screen.width, app.screen.height, {
+          onBack: goMain,
+          onBackground: setBackground,
+        }),
+    );
+  };
+
   /** 按存档恢复上次场景；损坏 / 无档则进主菜单 */
   const bootScene = saveStore.load().progress.scene;
   if (bootScene.kind === 'level') {
@@ -88,6 +101,7 @@ async function bootstrap(): Promise<void> {
       () =>
         new MainScene(app.screen.width, app.screen.height, {
           onSelectLevel: goLevel,
+          onMapEdit: goMapEdit,
           onBackground: setBackground,
         }),
     );

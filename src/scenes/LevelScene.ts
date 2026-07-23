@@ -22,6 +22,7 @@ import { CharacterSwitchHud } from '../ui/CharacterSwitchHud';
 import { HealthBar } from '../ui/HealthBar';
 import { PauseMenu } from '../ui/PauseMenu';
 import { SpearAmmoHud } from '../ui/SpearAmmoHud';
+import { LEVEL_1 } from '../data/maps';
 import { getThemeBackground, NightOverlay } from '../world/NightOverlay';
 import {
   GRID,
@@ -49,8 +50,9 @@ const KNOCK_CONTROL_SOFTEN = 220;
 
 const SPIDER_SCALE = 0.1;
 
-/** 默认出生：九宫格下方正中岛中心（非地图原点） */
-const PLAYER_SPAWN = islandCenter(1, GRID - 1);
+/** 当前关卡地图定义（编辑器导出后替换 LEVEL_1） */
+const LEVEL_MAP = LEVEL_1;
+const PLAYER_SPAWN = LEVEL_MAP.spawn;
 
 /** 角色出场缩放 */
 const CHAR_SCALE: Record<CharacterId, number> = {
@@ -141,7 +143,7 @@ export class LevelScene extends Container implements GameScene {
       viewHeight: height,
     });
 
-    this.worldMap = new WorldMap();
+    this.worldMap = new WorldMap(LEVEL_MAP);
     this.worldRoot.addChild(this.worldMap);
 
     // 夜色只压在地面（草坪）上，不进 sortLayer，避免角色/怪/爆炸变黑

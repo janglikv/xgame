@@ -6,17 +6,18 @@ const BG_COLOR = 0x2a3a28;
 
 export type MainSceneOptions = {
   onSelectLevel: (theme: LevelTheme) => void;
+  onMapEdit?: () => void;
   onBackground?: (color: number) => void;
 };
 
 type MenuButton = {
   root: Container;
   bg: Graphics;
-  theme: LevelTheme;
   width: number;
   height: number;
   baseColor: number;
   hoverColor: number;
+  onClick: () => void;
 };
 
 /**
@@ -28,6 +29,7 @@ export class MainScene extends Container implements GameScene {
   private readonly subtitle: Text;
   private readonly buttons: MenuButton[] = [];
   private readonly onSelectLevel: (theme: LevelTheme) => void;
+  private readonly onMapEdit?: () => void;
   private readonly onBackground?: (color: number) => void;
   private viewWidth: number;
   private viewHeight: number;
@@ -38,6 +40,7 @@ export class MainScene extends Container implements GameScene {
     this.viewWidth = width;
     this.viewHeight = height;
     this.onSelectLevel = options.onSelectLevel;
+    this.onMapEdit = options.onMapEdit;
     this.onBackground = options.onBackground;
 
     this.bg = new Graphics();
@@ -75,9 +78,20 @@ export class MainScene extends Container implements GameScene {
     this.addChild(this.subtitle);
 
     this.buttons.push(
-      this.createButton('白天关卡', 'day', 0xf0c040, 0xffd86a),
-      this.createButton('黑夜关卡', 'night', 0x3a5a9a, 0x5a7fd4),
+      this.createButton('白天关卡', 0xf0c040, 0xffd86a, () =>
+        this.onSelectLevel('day'),
+      ),
+      this.createButton('黑夜关卡', 0x3a5a9a, 0x5a7fd4, () =>
+        this.onSelectLevel('night'),
+      ),
     );
+    if (this.onMapEdit) {
+      this.buttons.push(
+        this.createButton('地图编辑', 0x4a7a52, 0x6aaa72, () =>
+          this.onMapEdit?.(),
+        ),
+      );
+    }
 
     this.layout();
   }
@@ -88,9 +102,9 @@ export class MainScene extends Container implements GameScene {
 
   private createButton(
     text: string,
-    theme: LevelTheme,
     baseColor: number,
     hoverColor: number,
+    onClick: () => void,
   ): MenuButton {
     const width = 240;
     const height = 64;
@@ -118,11 +132,11 @@ export class MainScene extends Container implements GameScene {
     const btn: MenuButton = {
       root,
       bg,
-      theme,
       width,
       height,
       baseColor,
       hoverColor,
+      onClick,
     };
 
     root.on('pointerover', () => {
@@ -134,7 +148,7 @@ export class MainScene extends Container implements GameScene {
       root.scale.set(1);
     });
     root.on('pointertap', () => {
-      this.onSelectLevel(theme);
+      onClick();
     });
 
     this.addChild(root);
@@ -172,14 +186,15 @@ export class MainScene extends Container implements GameScene {
     const cx = this.viewWidth / 2;
     const cy = this.viewHeight / 2;
 
-    this.title.position.set(cx, cy - 110);
-    this.subtitle.position.set(cx, cy - 55);
-
     const gap = 20;
     const totalH =
       this.buttons.reduce((s, b) => s + b.height, 0) +
       gap * (this.buttons.length - 1);
-    let y = cy - totalH / 2 + 40;
+    // 标题在按钮堆上方
+    this.title.position.set(cx, cy - totalH / 2 - 70);
+    this.subtitle.position.set(cx, cy - totalH / 2 - 28);
+
+    let y = cy - totalH / 2 + 16;
 
     for (const btn of this.buttons) {
       btn.root.pivot.set(btn.width / 2, btn.height / 2);

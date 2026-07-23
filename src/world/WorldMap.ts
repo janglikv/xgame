@@ -1,51 +1,37 @@
 import { Container, Graphics } from 'pixi.js';
+import { getActiveMapDef, setActiveMapDef } from '../data/maps/activeMap';
+import type { LevelMapDef } from '../data/maps/types';
+import {
+  cellRectToWorld,
+  isWalkable,
+  shouldPlantTree,
+} from '../data/maps/walkMask';
 import type { Vec2 } from '../utils/math';
+import { ISLAND_SIZE, PINE_SPACING } from './mapLayout';
 import { PineTree } from './PineTree';
 
-/** 九宫格边长（3×3 岛） */
-export const GRID = 3;
-
-/** 单岛外沿边长（世界像素，双倍放大的广阔关卡空间） */
-export const ISLAND_SIZE = 1920;
-
-/** 松树网格间距（越小越密） */
-const PINE_SPACING = 36;
-
-/** 林带厚度：十二棵树 */
-const FOREST_TREE_DEPTH = 12;
-
-/** 岛与岛之间的森林走廊宽度（十二棵树厚） */
-export const FOREST_WIDTH = FOREST_TREE_DEPTH * PINE_SPACING;
-
-/** 整图最外圈松林带宽（围住九宫格，十二棵树厚） */
-export const OUTER_FOREST_WIDTH = FOREST_TREE_DEPTH * PINE_SPACING;
-
-/** 松树整体尺寸倍率（碰撞过道净空用；绘制见 PineTree） */
-const PINE_SCALE = 2.7;
-
-/** 岛内装饰内缩（避免贴边） */
-const EDGE_INSET = 24;
-
-/** 林间通道 / 墙洞宽度（视觉与可行走草坪宽，双倍放大） */
-const PATH_WIDTH = 156;
+// 布局常量 re-export，保持旧 import 路径可用
+export {
+  CELL_PITCH,
+  CHANNEL_WIDTH,
+  FOREST_WIDTH,
+  GRID,
+  ISLAND_SIZE,
+  MAP_SIZE,
+  MAP_WORLD_HALF,
+  OUTER_FOREST_WIDTH,
+  islandCenter,
+  isRemovedIsland,
+} from './mapLayout';
 
 /** 角色/实体默认碰撞半径（世界像素） */
 export const DEFAULT_BODY_RADIUS = 16;
 
-/** 相邻岛中心距 */
-export const CELL_PITCH = ISLAND_SIZE + FOREST_WIDTH;
+/** 开阔区装饰：短边小于此值的走廊不刷花草 */
+const DECOR_MIN_SIDE = 280;
 
-/** 九宫格核心区边长（不含外圈林带） */
-const CORE_SIZE = GRID * ISLAND_SIZE + (GRID - 1) * FOREST_WIDTH;
-
-/** 整图边长（核心 + 外圈林带） */
-export const MAP_SIZE = CORE_SIZE + 2 * OUTER_FOREST_WIDTH;
-
-/** 地图半宽/半高（中心 = 原点） */
-export const MAP_WORLD_HALF = MAP_SIZE / 2;
-
-/** @deprecated 使用 FOREST_WIDTH；保留别名以免外部引用断裂 */
-export const CHANNEL_WIDTH = FOREST_WIDTH;
+/** 岛内装饰内缩 */
+const EDGE_INSET = 24;
 
 const COLORS = {
   grass: 0x7fd84a,
@@ -75,192 +61,11 @@ function createRng(seed: number): () => number {
 }
 
 /**
- * 九宫格岛中心（世界坐标）。
- * ix/iy ∈ [0, GRID)，(0,0) 为左上，(1,1) 为中心岛。
- * 外圈留 OUTER_FOREST_WIDTH 松林。
- */
-export function islandCenter(ix: number, iy: number): Vec2 {
-  const start = -MAP_WORLD_HALF + OUTER_FOREST_WIDTH + ISLAND_SIZE / 2;
-  return {
-    x: start + ix * CELL_PITCH,
-    y: start + iy * CELL_PITCH,
-  };
-}
-
-type Rect = { x: number; y: number; w: number; h: number };
-
-/** 岛外沿轴对齐包围盒（世界坐标） */
-function islandBounds(ix: number, iy: number): {
-  left: number;
-  top: number;
-  right: number;
-  bottom: number;
-} {
-  const c = islandCenter(ix, iy);
-  const h = ISLAND_SIZE / 2;
-  return {
-    left: c.x - h,
-    top: c.y - h,
-    right: c.x + h,
-    bottom: c.y + h,
-  };
-}
-
-function pointInRect(px: number, py: number, r: Rect): boolean {
-  return px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h;
-}
-
-function pointInAnyRect(px: number, py: number, rects: Rect[]): boolean {
-  for (const r of rects) {
-    if (pointInRect(px, py, r)) return true;
-  }
-  return false;
-}
-
-/**
- * 出生岛格子：下中 (1, GRID-1)。
- * 其左右水平过道封闭，开局只能沿竖直过道往上走。
- */
-const SPAWN_ISLAND = { ix: 1, iy: GRID - 1 } as const;
-
-/** 是否是被移除并用密林填满的房间（出生点左右房间：(0, 2) 与 (2, 2)） */
-export function isRemovedIsland(ix: number, iy: number): boolean {
-  return iy === GRID - 1 && (ix === 0 || ix === GRID - 1);
-}
-
-function pointInAnyIsland(px: number, py: number, margin: number): boolean {
-  for (let iy = 0; iy < GRID; iy++) {
-    for (let ix = 0; ix < GRID; ix++) {
-      if (isRemovedIsland(ix, iy)) continue;
-      const b = islandBounds(ix, iy);
-      if (
-        px >= b.left - margin &&
-        px <= b.right + margin &&
-        py >= b.top - margin &&
-        py <= b.bottom + margin
-      ) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
-/** 可种树区域：外圈林带 + 岛间十字走廊 + 被删除的角落岛 */
-function collectForestRects(): Rect[] {
-  const h = MAP_WORLD_HALF;
-  const o = OUTER_FOREST_WIDTH;
-  const rects: Rect[] = [
-    { x: -h, y: -h, w: MAP_SIZE, h: o },
-    { x: -h, y: h - o, w: MAP_SIZE, h: o },
-    { x: -h, y: -h, w: o, h: MAP_SIZE },
-    { x: h - o, y: -h, w: o, h: MAP_SIZE },
-  ];
-
-  const coreLeft = -h + o;
-  for (let i = 0; i < GRID - 1; i++) {
-    const cx = coreLeft + ISLAND_SIZE + FOREST_WIDTH / 2 + i * CELL_PITCH;
-    rects.push({
-      x: cx - FOREST_WIDTH / 2,
-      y: -h,
-      w: FOREST_WIDTH,
-      h: MAP_SIZE,
-    });
-    const cy = coreLeft + ISLAND_SIZE + FOREST_WIDTH / 2 + i * CELL_PITCH;
-    rects.push({
-      x: -h,
-      y: cy - FOREST_WIDTH / 2,
-      w: MAP_SIZE,
-      h: FOREST_WIDTH,
-    });
-  }
-
-  // 将被删除的左右房间区域填满森林
-  for (let iy = 0; iy < GRID; iy++) {
-    for (let ix = 0; ix < GRID; ix++) {
-      if (isRemovedIsland(ix, iy)) {
-        const b = islandBounds(ix, iy);
-        rects.push({
-          x: b.left,
-          y: b.top,
-          w: ISLAND_SIZE,
-          h: ISLAND_SIZE,
-        });
-      }
-    }
-  }
-
-  return rects;
-}
-
-/**
- * 林间过道（无树可行走）。
- * 宽度 = 路宽 + 树冠余量，与种树清空区一致。
- */
-function collectPathRects(): Rect[] {
-  const clear = PATH_WIDTH + 26 * PINE_SCALE;
-  const half = clear / 2;
-  const rects: Rect[] = [];
-
-  for (let iy = 0; iy < GRID; iy++) {
-    for (let ix = 0; ix < GRID - 1; ix++) {
-      // 出生岛左右：封闭 (0↔1) 与 (1↔2) 底排水平过道
-      if (
-        iy === SPAWN_ISLAND.iy &&
-        (ix === SPAWN_ISLAND.ix - 1 || ix === SPAWN_ISLAND.ix)
-      ) {
-        continue;
-      }
-      const a = islandCenter(ix, iy);
-      const b = islandCenter(ix + 1, iy);
-      const x0 = a.x + ISLAND_SIZE / 2;
-      const x1 = b.x - ISLAND_SIZE / 2;
-      const left = Math.min(x0, x1);
-      const len = Math.abs(x1 - x0);
-      rects.push({ x: left, y: a.y - half, w: len, h: clear });
-    }
-  }
-
-  for (let iy = 0; iy < GRID - 1; iy++) {
-    for (let ix = 0; ix < GRID; ix++) {
-      // 封闭通往被移除左右房间的竖直过道
-      if (iy === GRID - 2 && (ix === 0 || ix === GRID - 1)) {
-        continue;
-      }
-      const a = islandCenter(ix, iy);
-      const b = islandCenter(ix, iy + 1);
-      const y0 = a.y + ISLAND_SIZE / 2;
-      const y1 = b.y - ISLAND_SIZE / 2;
-      const top = Math.min(y0, y1);
-      const len = Math.abs(y1 - y0);
-      rects.push({ x: a.x - half, y: top, w: clear, h: len });
-    }
-  }
-
-  return rects;
-}
-
-let cachedForestRects: Rect[] | null = null;
-let cachedPathRects: Rect[] | null = null;
-
-function forestRects(): Rect[] {
-  if (!cachedForestRects) cachedForestRects = collectForestRects();
-  return cachedForestRects;
-}
-
-function pathRects(): Rect[] {
-  if (!cachedPathRects) cachedPathRects = collectPathRects();
-  return cachedPathRects;
-}
-
-/**
- * 点是否落在密林阻挡区（有树、不可走）。
- * 岛内 / 过道可走；走廊与外圈林带不可走。
+ * 点是否落在密林阻挡区。
+ * 默认整图挡；walkable 并集可走。
  */
 export function isTreeBlocked(x: number, y: number): boolean {
-  if (pointInAnyIsland(x, y, 0)) return false;
-  if (pointInAnyRect(x, y, pathRects())) return false;
-  return pointInAnyRect(x, y, forestRects());
+  return !isWalkable(x, y, getActiveMapDef());
 }
 
 /** 实体圆形碰撞体是否碰到树区 */
@@ -272,7 +77,6 @@ export function bodyHitsTrees(
   const r = Math.max(0, radius);
   if (isTreeBlocked(x, y)) return true;
   if (r <= 0) return false;
-  // 四向采样，近似圆盘
   return (
     isTreeBlocked(x + r, y) ||
     isTreeBlocked(x - r, y) ||
@@ -287,7 +91,6 @@ export function bodyHitsTrees(
 
 /**
  * 从 from 移向 to 时做轴分离滑动，避免穿进树区。
- * 返回最终可站立坐标（仍可能需再 clamp 地图边界）。
  */
 export function resolveTreeCollision(
   fromX: number,
@@ -306,13 +109,11 @@ export function resolveTreeCollision(
   if (canX && !canY) return { x: toX, y: fromY };
   if (canY && !canX) return { x: fromX, y: toY };
   if (canX && canY) {
-    // 两轴都可行时取离目标更近的一侧（斜向贴墙）
     const dx = Math.abs(toX - fromX);
     const dy = Math.abs(toY - fromY);
     return dx >= dy ? { x: toX, y: fromY } : { x: fromX, y: toY };
   }
 
-  // 仍堵在树里（例如已生成在林内）：尝试轻推到最近可走采样
   if (bodyHitsTrees(fromX, fromY, radius)) {
     const escaped = tryEscapeTrees(fromX, fromY, radius);
     if (escaped) return escaped;
@@ -348,22 +149,30 @@ function tryEscapeTrees(
 }
 
 /**
- * 程序生成的九宫格地图：
- * 全图草坪底 + 可排序松树实例（由关卡 sortLayer 托管）。
+ * 程序地图：草坪底 + 按 LevelMapDef 抠空种树。
  * 地图内容在世界坐标中绘制；镜头变换由外层 worldRoot 负责。
  */
 export class WorldMap extends Container {
   private readonly root: Container;
   private readonly trees: PineTree[] = [];
+  private readonly def: LevelMapDef;
   private built = false;
 
-  constructor(private readonly seed = 42) {
+  constructor(
+    def?: LevelMapDef,
+    private readonly seed = 42,
+  ) {
     super();
     this.label = 'WorldMap';
     this.eventMode = 'none';
+    this.def = def ?? getActiveMapDef();
     this.root = new Container();
     this.root.label = 'MapRoot';
     this.addChild(this.root);
+  }
+
+  get mapDef(): LevelMapDef {
+    return this.def;
   }
 
   /** 松树实例（脚底世界坐标，参与 Y-sort） */
@@ -371,9 +180,9 @@ export class WorldMap extends Container {
     return this.trees;
   }
 
-  /** 与位图版 API 兼容；程序地图同步构建即可 */
   async load(): Promise<void> {
     if (this.built) return;
+    setActiveMapDef(this.def);
     this.build();
     this.built = true;
   }
@@ -392,19 +201,14 @@ export class WorldMap extends Container {
     // no-op
   }
 
-  /** 限制世界坐标在地图范围内（角色/实体不走出图外）。 */
   static clampWorld(x: number, y: number): Vec2 {
-    const h = MAP_WORLD_HALF;
+    const h = mapHalfFromActive();
     return {
       x: Math.min(h, Math.max(-h, x)),
       y: Math.min(h, Math.max(-h, y)),
     };
   }
 
-  /**
-   * 地图边界 + 树区碰撞后的最终落点。
-   * @param fromX/fromY 本帧移动前坐标（用于轴分离滑动）
-   */
   static resolveSolid(
     fromX: number,
     fromY: number,
@@ -416,19 +220,16 @@ export class WorldMap extends Container {
     return WorldMap.clampWorld(hit.x, hit.y);
   }
 
-  /**
-   * 限制相机，使视口始终被地图填满，不露出图外。
-   * 地图比视口小时锁在 0。
-   */
   static clampCamera(
     desiredX: number,
     desiredY: number,
     viewW: number,
     viewH: number,
   ): Vec2 {
+    const half = mapHalfFromActive();
     return {
-      x: clampAxis(desiredX, viewW, MAP_WORLD_HALF),
-      y: clampAxis(desiredY, viewH, MAP_WORLD_HALF),
+      x: clampAxis(desiredX, viewW, half),
+      y: clampAxis(desiredY, viewH, half),
     };
   }
 
@@ -441,18 +242,17 @@ export class WorldMap extends Container {
     const decor = new Graphics();
     decor.label = 'Decor';
 
-    // 草坪 + 岛装饰；树改为独立实例供纵深排序
     this.drawGrassBase(grass);
-    this.drawIslandDecorAll(decor);
+    this.drawWalkableDecor(decor);
     this.spawnForestTrees();
 
     this.root.addChild(grass, decor);
   }
 
-  /** 整张地图统一草坪底，过道/岛/林下都同一层 */
   private drawGrassBase(g: Graphics): void {
-    const h = MAP_WORLD_HALF;
-    g.rect(-h, -h, MAP_SIZE, MAP_SIZE).fill({ color: COLORS.grass });
+    const size = this.def.mapSize;
+    const h = size / 2;
+    g.rect(-h, -h, size, size).fill({ color: COLORS.grass });
 
     const rng = createRng(this.seed ^ 0x2222);
     const band = 72;
@@ -474,32 +274,37 @@ export class WorldMap extends Container {
     }
   }
 
-  private drawIslandDecorAll(decor: Graphics): void {
-    for (let iy = 0; iy < GRID; iy++) {
-      for (let ix = 0; ix < GRID; ix++) {
-        if (isRemovedIsland(ix, iy)) continue;
-        this.drawIslandDecor(decor, ix, iy, islandBounds(ix, iy));
-      }
+  /** 在较开阔的可走格子矩形内刷花草装饰 */
+  private drawWalkableDecor(decor: Graphics): void {
+    let idx = 0;
+    for (const cell of this.def.walk) {
+      const r = cellRectToWorld(cell, this.def.mapSize, this.def.cellSize);
+      if (Math.min(r.w, r.h) < DECOR_MIN_SIDE) continue;
+      this.drawRegionDecor(decor, r, idx);
+      idx++;
     }
   }
 
-  private drawIslandDecor(
+  private drawRegionDecor(
     g: Graphics,
-    ix: number,
-    iy: number,
-    b: { left: number; top: number; right: number; bottom: number },
+    r: { x: number; y: number; w: number; h: number },
+    idx: number,
   ): void {
     const rng = createRng(
-      (this.seed ^ Math.imul(ix + 1, 73856093) ^ Math.imul(iy + 1, 19349663)) >>>
+      (this.seed ^ Math.imul(idx + 1, 73856093) ^ Math.imul(r.w | 0, 19349663)) >>>
         0,
     );
 
-    const x0 = b.left + EDGE_INSET + 8;
-    const y0 = b.top + EDGE_INSET + 8;
-    const x1 = b.right - EDGE_INSET - 8;
-    const y1 = b.bottom - EDGE_INSET - 8;
+    const x0 = r.x + EDGE_INSET + 8;
+    const y0 = r.y + EDGE_INSET + 8;
+    const x1 = r.x + r.w - EDGE_INSET - 8;
+    const y1 = r.y + r.h - EDGE_INSET - 8;
+    if (x1 <= x0 || y1 <= y0) return;
 
-    for (let i = 0; i < 35; i++) {
+    const area = r.w * r.h;
+    const scale = Math.min(1.4, Math.max(0.35, area / (ISLAND_SIZE * ISLAND_SIZE)));
+
+    for (let i = 0; i < Math.floor(35 * scale); i++) {
       const x = x0 + rng() * (x1 - x0);
       const y = y0 + rng() * (y1 - y0);
       const rx = 36 + rng() * 64;
@@ -513,19 +318,19 @@ export class WorldMap extends Container {
       g.ellipse(x, y, rx, ry).fill({ color, alpha: 0.28 });
     }
 
-    for (let i = 0; i < 14; i++) {
+    for (let i = 0; i < Math.floor(14 * scale); i++) {
       if (rng() > 0.75) continue;
       const x = x0 + rng() * (x1 - x0);
       const y = y0 + rng() * (y1 - y0);
-      const r = 12 + rng() * 18;
-      g.ellipse(x, y, r * 1.1, r * 0.7).fill({
+      const rad = 12 + rng() * 18;
+      g.ellipse(x, y, rad * 1.1, rad * 0.7).fill({
         color: COLORS.dirtDark,
         alpha: 0.3,
       });
-      g.ellipse(x, y, r, r * 0.55).fill({ color: COLORS.dirt, alpha: 0.45 });
+      g.ellipse(x, y, rad, rad * 0.55).fill({ color: COLORS.dirt, alpha: 0.45 });
     }
 
-    for (let i = 0; i < 75; i++) {
+    for (let i = 0; i < Math.floor(75 * scale); i++) {
       const x = x0 + rng() * (x1 - x0);
       const y = y0 + rng() * (y1 - y0);
       const blades = 2 + Math.floor(rng() * 3);
@@ -559,7 +364,7 @@ export class WorldMap extends Container {
       COLORS.flowerYellow,
       COLORS.flowerWhite,
     ];
-    for (let i = 0; i < 24; i++) {
+    for (let i = 0; i < Math.floor(24 * scale); i++) {
       if (rng() > 0.55) continue;
       const x = x0 + rng() * (x1 - x0);
       const y = y0 + rng() * (y1 - y0);
@@ -578,32 +383,29 @@ export class WorldMap extends Container {
   }
 
   /**
-   * 整齐密植松树实例：等距网格，种在走廊 + 外圈林带；
-   * 过道清空。实例交给 LevelScene.sortLayer 做 Y-sort。
+   * 全图网格密植松树；walkable（含树冠净空）内不种。
    */
   private spawnForestTrees(): void {
-    const paths = pathRects();
-    const forests = forestRects();
-    const half = MAP_WORLD_HALF;
-
+    const def = this.def;
+    const half = def.mapSize / 2;
     const origin = -half + PINE_SPACING * 0.5;
-    const cols = Math.floor(MAP_SIZE / PINE_SPACING);
-    const rows = Math.floor(MAP_SIZE / PINE_SPACING);
+    const cols = Math.floor(def.mapSize / PINE_SPACING);
+    const rows = Math.floor(def.mapSize / PINE_SPACING);
 
     for (let row = 0; row < rows; row++) {
       for (let col = 0; col < cols; col++) {
         const x = origin + col * PINE_SPACING;
         const y = origin + row * PINE_SPACING;
-
-        if (!pointInAnyRect(x, y, forests)) continue;
-        if (pointInAnyIsland(x, y, 6)) continue;
-        if (pointInAnyRect(x, y, paths)) continue;
-
+        if (!shouldPlantTree(x, y, def)) continue;
         const shade = (col + row) % 3;
         this.trees.push(new PineTree(x, y, shade));
       }
     }
   }
+}
+
+function mapHalfFromActive(): number {
+  return getActiveMapDef().mapSize / 2;
 }
 
 function clampAxis(desired: number, viewSize: number, mapHalf: number): number {
