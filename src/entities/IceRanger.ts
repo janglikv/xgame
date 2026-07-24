@@ -484,14 +484,35 @@ export class IceRanger extends PlayerCharacterBase {
     }
     combat.spawnRadialSpearFormation(origin.x, origin.y, formationOpts);
 
-    // 闪现 = 指针方向的反向（相对脚底）；无有效瞄准时回退朝向反水平
-    let nx = -this.facingDir;
+    this.performBlink(ctx, aim, -1);
+    this.playThrowRecoil();
+    return true;
+  }
+
+  /** E：沿指针正方向闪现并生成残影，不生成剑阵。 */
+  override tryMobilityAbility(
+    ctx?: EntranceContext,
+    aim?: RangedAim,
+  ): boolean {
+    this.performBlink(ctx, aim, 1);
+    return true;
+  }
+
+  /** 沿指针方向闪现；direction 为 1 向前，-1 向后。 */
+  private performBlink(
+    ctx?: EntranceContext,
+    aim?: RangedAim,
+    direction = 1,
+  ): void {
+    const fromX = this.worldX;
+    const fromY = this.worldY;
+    let nx = this.facingDir * direction;
     let ny = 0;
     if (aim) {
       const len = Math.hypot(aim.dx, aim.dy);
       if (len > 1e-4) {
-        nx = -aim.dx / len;
-        ny = -aim.dy / len;
+        nx = (aim.dx / len) * direction;
+        ny = (aim.dy / len) * direction;
       }
     }
     const toX = fromX + nx * Q_BLINK.distance;
@@ -506,9 +527,6 @@ export class IceRanger extends PlayerCharacterBase {
     // 掐断击飞/后坐残留，避免闪身后继续滑
     this.knock.velX = 0;
     this.knock.velY = 0;
-
-    this.playThrowRecoil();
-    return true;
   }
 
   /**

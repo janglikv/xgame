@@ -249,6 +249,19 @@ export abstract class PlayerCharacterBase
     return false;
   }
 
+  /**
+   * E 键位移技：默认无；子类覆盖。
+   * @param ctx 出场/特效上下文（残影等世界 FX）
+   * @param aim 指针相对脚底的世界瞄准向量（未归一化）
+   * @returns 是否成功发动
+   */
+  tryMobilityAbility(
+    _ctx?: EntranceContext,
+    _aim?: RangedAim,
+  ): boolean {
+    return false;
+  }
+
   async load(): Promise<void> {
     if (this.sprite) return;
 

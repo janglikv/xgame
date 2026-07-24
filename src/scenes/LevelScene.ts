@@ -129,6 +129,7 @@ export class LevelScene extends Container implements GameScene {
   private escWasDown = false;
   private tabWasDown = false;
   private qWasDown = false;
+  private eWasDown = false;
   private fitWasDown = false;
   private resetZoomWasDown = false;
   private treesMounted = false;
@@ -676,6 +677,41 @@ export class LevelScene extends Container implements GameScene {
       }
     }
     this.qWasDown = qDown;
+
+    // E：冰冰仅沿指针正方向闪现，不生成剑阵
+    const eDown = this.keyboard.isDown('KeyE');
+    if (eDown && !this.eWasDown && !this.paused) {
+      const p = this.player;
+      if (p && !p.entranceLocks.move) {
+        const fromX = p.worldX;
+        const fromY = p.worldY;
+        const aim = this.pointerSeen
+          ? this.combat.aimFromScreen(
+              p.worldX,
+              p.worldY,
+              this.pointerScreenX,
+              this.pointerScreenY,
+              {
+                x: this.camera.x,
+                y: this.camera.y,
+                zoom: this.camera.currentZoom,
+                width: this.camera.width,
+                height: this.camera.height,
+              },
+            )
+          : null;
+        if (
+          p.tryMobilityAbility(
+            this.entranceContext(),
+            aim ?? undefined,
+          )
+        ) {
+          this.applyPlayerSolid(fromX, fromY);
+          this.syncWorldActors();
+        }
+      }
+    }
+    this.eWasDown = eDown;
 
     // 缩放快捷键在暂停时也可用（方便看全景）
     this.handleZoomKeys(dt);
