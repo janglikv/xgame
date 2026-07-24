@@ -1,0 +1,347 @@
+/**
+ * 碰撞体 / 受击体配置（权威默认值）。
+ * 编辑器导出应整段替换本文件中的 BODY_PROFILES。
+ *
+ * 坐标：相对脚底 worldX/Y 的世界像素偏移（oy 向上为负）。
+ * solid / hurt 均为形状数组，可多圆 + 多矩形组合。
+ */
+
+/** 与实体种类一一对应的模板 id（编的是类型，不是场上实例） */
+export type BodyProfileId =
+  | 'bomb-girl'
+  | 'ice-ranger'
+  | 'spider'
+  | 'flame-flower'
+  | 'wooden-dummy';
+
+/** 圆形：圆心 = 脚底 + (ox, oy) */
+export type CircleShape = {
+  type: 'circle';
+  ox: number;
+  oy: number;
+  r: number;
+};
+
+/** 轴对齐矩形：中心 = 脚底 + (ox, oy) */
+export type RectShape = {
+  type: 'rect';
+  ox: number;
+  oy: number;
+  w: number;
+  h: number;
+};
+
+export type BodyShape = CircleShape | RectShape;
+
+export type BodyProfile = {
+  id: BodyProfileId;
+  /** 中文显示名 */
+  label: string;
+  /** 碰撞体（挡树 / 互挤）；可多样 */
+  solid: BodyShape[];
+  /** 受击体（武器命中）；可多样，命中任一即可 */
+  hurt: BodyShape[];
+};
+
+/** 仓库内默认配置（碰撞编辑器导出） */
+export const BODY_PROFILES: Record<BodyProfileId, BodyProfile> = {
+  'bomb-girl': {
+    id: 'bomb-girl',
+    label: '炸炸',
+    solid: [{ type: 'circle', ox: 0.21, oy: -9.42, r: 18 }],
+    hurt: [
+      { type: 'circle', ox: 0.5, oy: -35.99, r: 20.15 },
+      { type: 'circle', ox: -0.52, oy: -14.09, r: 18.71 },
+    ],
+  },
+  'ice-ranger': {
+    id: 'ice-ranger',
+    label: '冰冰',
+    solid: [{ type: 'circle', ox: 1.35, oy: -6.3, r: 19.4 }],
+    hurt: [
+      { type: 'circle', ox: -2.44, oy: -32.09, r: 22 },
+      { type: 'circle', ox: 0, oy: -11.42, r: 20 },
+    ],
+  },
+  spider: {
+    id: 'spider',
+    label: '蜘蛛',
+    solid: [{ type: 'circle', ox: -3.11, oy: -18.7, r: 23.06 }],
+    hurt: [{ type: 'circle', ox: -1.67, oy: -22.58, r: 29.76 }],
+  },
+  'flame-flower': {
+    id: 'flame-flower',
+    label: '火焰花',
+    solid: [{ type: 'circle', ox: -6.25, oy: -9.66, r: 20 }],
+    hurt: [
+      { type: 'circle', ox: -7.56, oy: -17.33, r: 24 },
+      { type: 'circle', ox: -11.59, oy: -50.19, r: 23.77 },
+    ],
+  },
+  'wooden-dummy': {
+    id: 'wooden-dummy',
+    label: '木桩',
+    solid: [{ type: 'circle', ox: -0.1, oy: -11.68, r: 18 }],
+    hurt: [
+      { type: 'rect', ox: 0, oy: -40.45, w: 21.31, h: 73.35 },
+      { type: 'rect', ox: 0.8, oy: -44.47, w: 50.49, h: 8.51 },
+    ],
+  },
+};
+
+/** 运行时覆盖（编辑器本局，不写盘） */
+const overrides = new Map<BodyProfileId, BodyProfile>();
+
+export const BODY_PROFILE_IDS: readonly BodyProfileId[] = [
+  'bomb-girl',
+  'ice-ranger',
+  'spider',
+  'flame-flower',
+  'wooden-dummy',
+];
+
+export function cloneShape(s: BodyShape): BodyShape {
+  return s.type === 'circle' ? { ...s } : { ...s };
+}
+
+function cloneProfile(p: BodyProfile): BodyProfile {
+  return {
+    id: p.id,
+    label: p.label,
+    solid: p.solid.map(cloneShape),
+    hurt: p.hurt.map(cloneShape),
+  };
+}
+
+/** 生效配置：默认 ⊕ 本局 override */
+export function getBodyProfile(id: BodyProfileId): BodyProfile {
+  const base = BODY_PROFILES[id];
+  const over = overrides.get(id);
+  if (!over) return cloneProfile(base);
+  return cloneProfile(over);
+}
+
+export function hasBodyProfileOverride(id: BodyProfileId): boolean {
+  return overrides.has(id);
+}
+
+export function hasAnyBodyProfileOverride(): boolean {
+  return overrides.size > 0;
+}
+
+export function setBodyProfileOverride(profile: BodyProfile): void {
+  overrides.set(profile.id, cloneProfile(profile));
+}
+
+export function clearBodyProfileOverride(id: BodyProfileId): void {
+  overrides.delete(id);
+}
+
+export function clearAllBodyProfileOverrides(): void {
+  overrides.clear();
+}
+
+export function getAllEffectiveBodyProfiles(): Record<
+  BodyProfileId,
+  BodyProfile
+> {
+  const out = {} as Record<BodyProfileId, BodyProfile>;
+  for (const id of BODY_PROFILE_IDS) {
+    out[id] = getBodyProfile(id);
+  }
+  return out;
+}
+
+/** 形状 → 用于物理的圆近似 */
+export function shapeAsCircle(s: BodyShape): CircleShape {
+  if (s.type === 'circle') return { ...s };
+  return {
+    type: 'circle',
+    ox: s.ox,
+    oy: s.oy,
+    r: Math.max(4, Math.hypot(s.w * 0.5, s.h * 0.5)),
+  };
+}
+
+/**
+ * 主 solid 圆（移动 / 树挡用）：优先第一个圆，否则第一形状的外接圆。
+ */
+export function primarySolidCircle(id: BodyProfileId): CircleShape {
+  const solids = getBodyProfile(id).solid;
+  if (solids.length === 0) {
+    return { type: 'circle', ox: 0, oy: 0, r: 16 };
+  }
+  const firstCircle = solids.find((s) => s.type === 'circle');
+  if (firstCircle && firstCircle.type === 'circle') return { ...firstCircle };
+  return shapeAsCircle(solids[0]!);
+}
+
+/** solid 半径快捷（主圆） */
+export function profileSolidR(id: BodyProfileId): number {
+  return primarySolidCircle(id).r;
+}
+
+/** 主 solid 偏移 */
+export function profileSolidOffset(id: BodyProfileId): {
+  ox: number;
+  oy: number;
+} {
+  const c = primarySolidCircle(id);
+  return { ox: c.ox, oy: c.oy };
+}
+
+/**
+ * 全部 solid 圆（世界脚底下），用于互推障碍。
+ * 矩形用外接圆近似。
+ */
+export function solidCirclesAtFeet(
+  feetX: number,
+  feetY: number,
+  id: BodyProfileId,
+): Array<{ x: number; y: number; r: number }> {
+  const solids = getBodyProfile(id).solid;
+  if (solids.length === 0) {
+    return [{ x: feetX, y: feetY, r: 16 }];
+  }
+  return solids.map((s) => {
+    const c = shapeAsCircle(s);
+    return {
+      x: feetX + c.ox,
+      y: feetY + c.oy,
+      r: Math.max(1, c.r),
+    };
+  });
+}
+
+/**
+ * 受击近似半径（兼容旧 API / 扑咬粗判）：取所有 hurt 外接半径最大值。
+ */
+export function profileHurtR(id: BodyProfileId): number {
+  const hurts = getBodyProfile(id).hurt;
+  if (hurts.length === 0) return 0;
+  let max = 0;
+  for (const h of hurts) {
+    const r = h.type === 'circle' ? h.r : Math.hypot(h.w * 0.5, h.h * 0.5);
+    if (r > max) max = r;
+  }
+  return max;
+}
+
+/** 第一 hurt 中心偏移（兼容旧中心 API） */
+export function profileHurtOffset(id: BodyProfileId): {
+  ox: number;
+  oy: number;
+} {
+  const h = getBodyProfile(id).hurt[0];
+  if (!h) return { ox: 0, oy: 0 };
+  return { ox: h.ox, oy: h.oy };
+}
+
+export function hurtCenterFromFeet(
+  feetX: number,
+  feetY: number,
+  id: BodyProfileId,
+): { x: number; y: number } {
+  const o = profileHurtOffset(id);
+  return { x: feetX + o.ox, y: feetY + o.oy };
+}
+
+function circleHitsShape(
+  ax: number,
+  ay: number,
+  ar: number,
+  feetX: number,
+  feetY: number,
+  s: BodyShape,
+): boolean {
+  const cx = feetX + s.ox;
+  const cy = feetY + s.oy;
+  if (s.type === 'circle') {
+    const rr = ar + Math.max(0, s.r);
+    const dx = ax - cx;
+    const dy = ay - cy;
+    return dx * dx + dy * dy <= rr * rr;
+  }
+  const hw = s.w * 0.5;
+  const hh = s.h * 0.5;
+  const closestX = Math.max(cx - hw, Math.min(ax, cx + hw));
+  const closestY = Math.max(cy - hh, Math.min(ay, cy + hh));
+  const dx = ax - closestX;
+  const dy = ay - closestY;
+  const r = Math.max(0, ar);
+  return dx * dx + dy * dy <= r * r;
+}
+
+function distancePastShape(
+  ax: number,
+  ay: number,
+  feetX: number,
+  feetY: number,
+  s: BodyShape,
+): number {
+  const cx = feetX + s.ox;
+  const cy = feetY + s.oy;
+  if (s.type === 'circle') {
+    return Math.max(0, Math.hypot(ax - cx, ay - cy) - Math.max(0, s.r));
+  }
+  const hw = s.w * 0.5;
+  const hh = s.h * 0.5;
+  const inside =
+    ax >= cx - hw && ax <= cx + hw && ay >= cy - hh && ay <= cy + hh;
+  if (inside) return 0;
+  const closestX = Math.max(cx - hw, Math.min(ax, cx + hw));
+  const closestY = Math.max(cy - hh, Math.min(ay, cy + hh));
+  return Math.hypot(ax - closestX, ay - closestY);
+}
+
+/**
+ * 圆攻击体是否命中目标任意 hurt 形状。
+ */
+export function circleHitsHurt(
+  ax: number,
+  ay: number,
+  ar: number,
+  feetX: number,
+  feetY: number,
+  id: BodyProfileId,
+): boolean {
+  const hurts = getBodyProfile(id).hurt;
+  if (hurts.length === 0) {
+    const r = Math.max(0, ar);
+    const dx = ax - feetX;
+    const dy = ay - feetY;
+    return dx * dx + dy * dy <= r * r;
+  }
+  for (const h of hurts) {
+    if (circleHitsShape(ax, ay, ar, feetX, feetY, h)) return true;
+  }
+  return false;
+}
+
+/**
+ * 爆炸：到 hurt 表面的最短内距（多形状取最小）。
+ */
+export function distancePastHurt(
+  ax: number,
+  ay: number,
+  feetX: number,
+  feetY: number,
+  id: BodyProfileId,
+): number {
+  const hurts = getBodyProfile(id).hurt;
+  if (hurts.length === 0) {
+    return Math.hypot(ax - feetX, ay - feetY);
+  }
+  let best = Infinity;
+  for (const h of hurts) {
+    const d = distancePastShape(ax, ay, feetX, feetY, h);
+    if (d < best) best = d;
+  }
+  return best;
+}
+
+/** 兼容旧常量名 */
+export const PLAYER_BODY_R = primarySolidCircle('bomb-girl').r;
+export const PLAYER_HURT_R = profileHurtR('bomb-girl');
+export const SPIDER_BODY_R = primarySolidCircle('spider').r;
+export const SPIDER_HURT_R = profileHurtR('spider');

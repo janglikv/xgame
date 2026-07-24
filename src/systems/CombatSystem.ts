@@ -11,8 +11,12 @@ import {
   type BombProjectileOptions,
 } from '../entities/BombProjectile';
 import type { PlayerCharacterBase } from '../entities/PlayerCharacterBase';
-import { SpearProjectile } from '../entities/SpearProjectile';
+import { SPEAR_HIT_R, SpearProjectile } from '../entities/SpearProjectile';
 import type { Spider } from '../entities/Spider';
+import {
+  circleHitsHurt,
+  distancePastHurt,
+} from '../data/bodyProfiles';
 
 /** 蜘蛛对击飞的接收倍率（目标抗性，非炸弹属性） */
 export const SPIDER_KNOCK_SCALE = 0.85;
@@ -343,7 +347,16 @@ export class CombatSystem {
         for (let s = world.spiders.length - 1; s >= 0; s--) {
           const spider = world.spiders[s]!;
           if (!spider.isAlive) continue;
-          if (!spear.hitsTarget(spider.worldX, spider.worldY, spider.hurtR)) {
+          if (
+            !circleHitsHurt(
+              spear.groundX,
+              spear.groundY,
+              SPEAR_HIT_R,
+              spider.worldX,
+              spider.worldY,
+              spider.bodyProfileId,
+            )
+          ) {
             continue;
           }
 
@@ -383,11 +396,19 @@ export class CombatSystem {
       const spider = world.spiders[i]!;
       if (!spider.isAlive) continue;
 
+      const inner = distancePastHurt(
+        bomb.groundX,
+        bomb.groundY,
+        spider.worldX,
+        spider.worldY,
+        spider.bodyProfileId,
+      );
       const hit = bomb.evaluateHit(
         spider.worldX,
         spider.worldY,
         spider.worldX >= bomb.groundX ? 1 : -1,
-        spider.hurtR,
+        0,
+        inner,
       );
       if (!hit) continue;
 

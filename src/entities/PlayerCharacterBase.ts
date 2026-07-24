@@ -14,11 +14,13 @@ import type {
   RangedCombatServices,
 } from './CharacterRanged';
 import { createKnockArcState, type KnockArcState } from './knockArc';
+import type { WorldActor } from './WorldActor';
 import {
-  PLAYER_BODY_R,
-  PLAYER_HURT_R,
-  type WorldActor,
-} from './WorldActor';
+  profileHurtOffset,
+  profileHurtR,
+  profileSolidR,
+  type BodyProfileId,
+} from '../data/bodyProfiles';
 import {
   loadOutlinedTexture,
   OUTLINE_PX_CHARACTER,
@@ -88,8 +90,28 @@ export abstract class PlayerCharacterBase
   readonly characterId: CharacterId;
   readonly canThrowBomb: boolean;
   readonly canThrowSpear: boolean;
-  readonly bodyR = PLAYER_BODY_R;
-  readonly hurtR = PLAYER_HURT_R;
+
+  /** 与 characterId 对齐的碰撞模板 */
+  get bodyProfileId(): BodyProfileId {
+    return this.characterId;
+  }
+
+  get bodyR(): number {
+    return profileSolidR(this.bodyProfileId);
+  }
+
+  get hurtR(): number {
+    return profileHurtR(this.bodyProfileId);
+  }
+
+  /** 第一 hurt 中心（多形状时取首个） */
+  get hurtWorldX(): number {
+    return this.worldX + profileHurtOffset(this.bodyProfileId).ox;
+  }
+
+  get hurtWorldY(): number {
+    return this.worldY + profileHurtOffset(this.bodyProfileId).oy;
+  }
 
   /** 脚底世界坐标（与蜘蛛同一空间） */
   worldX = 0;

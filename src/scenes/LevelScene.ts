@@ -22,6 +22,7 @@ import {
   SolidResolver,
   type SolidContext,
 } from '../systems/SolidResolver';
+import { DebugOverlay } from '../systems/DebugOverlay';
 import { CharacterSwitchHud } from '../ui/CharacterSwitchHud';
 import { HealthBar } from '../ui/HealthBar';
 import { PauseMenu } from '../ui/PauseMenu';
@@ -32,7 +33,6 @@ import { getNightBackground, NightOverlay } from '../world/NightOverlay';
 import { MAP_SIZE, MAP_WORLD_HALF, WorldMap } from '../world/WorldMap';
 import { LevelCamera } from './LevelCamera';
 import type { GameScene } from './types';
-import { DebugOverlay } from '../systems/DebugOverlay';
 
 /** 黑夜松树冷色 tint（环境变暗，不盖角色） */
 const NIGHT_TREE_TINT = 0x40516b;
@@ -615,7 +615,7 @@ export class LevelScene extends Container implements GameScene {
 
     const player = this.player;
 
-    // 刷新碰撞体 & 受击体 DebugOverlay 渲染
+    // 刷新碰撞体 & 受击体 Debug 可视化
     this.debugOverlay.update({
       player,
       spiders: this.spiders,
@@ -698,7 +698,7 @@ export class LevelScene extends Container implements GameScene {
         deltaMS,
         player.worldX,
         player.worldY,
-        player.hurtR,
+        player.bodyProfileId,
       );
       this.applySpiderSolid(spider, sFromX, sFromY, si);
       if (result.attackHit) {

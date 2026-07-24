@@ -14,6 +14,8 @@ const BG_COLOR = 0x1a2430;
 export type MainSceneOptions = {
   onSelectLevel: (mapDef: LevelMapDef) => void;
   onMapEdit?: () => void;
+  /** 碰撞 / 受击体模板编辑 */
+  onBodyEdit?: () => void;
   onBackground?: (color: number) => void;
 };
 
@@ -37,6 +39,7 @@ export class MainScene extends Container implements GameScene {
   private readonly buttons: MenuButton[] = [];
   private readonly onSelectLevel: (mapDef: LevelMapDef) => void;
   private readonly onMapEdit?: () => void;
+  private readonly onBodyEdit?: () => void;
   private readonly onBackground?: (color: number) => void;
   private viewWidth: number;
   private viewHeight: number;
@@ -48,6 +51,7 @@ export class MainScene extends Container implements GameScene {
     this.viewHeight = height;
     this.onSelectLevel = options.onSelectLevel;
     this.onMapEdit = options.onMapEdit;
+    this.onBodyEdit = options.onBodyEdit;
     this.onBackground = options.onBackground;
 
     this.bg = new Graphics();
@@ -74,7 +78,7 @@ export class MainScene extends Container implements GameScene {
     this.addChild(this.title);
 
     this.subtitle = new Text({
-      text: '选择关卡（含本地草稿）',
+      text: '选择关卡 · 地图 / 碰撞编辑',
       style: {
         fontFamily: 'system-ui, sans-serif',
         fontSize: 20,
@@ -105,6 +109,14 @@ export class MainScene extends Container implements GameScene {
       this.buttons.push(
         this.createButton('地图编辑', 0x4a7a52, 0x6aaa72, () =>
           this.onMapEdit?.(),
+        ),
+      );
+    }
+
+    if (this.onBodyEdit) {
+      this.buttons.push(
+        this.createButton('碰撞编辑', 0x3a6a8a, 0x5a8aaa, () =>
+          this.onBodyEdit?.(),
         ),
       );
     }

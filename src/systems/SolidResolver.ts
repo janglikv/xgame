@@ -1,4 +1,9 @@
 import {
+  primarySolidCircle,
+  solidCirclesAtFeet,
+  type BodyProfileId,
+} from '../data/bodyProfiles';
+import {
   PLAYER_BODY_R,
   SPIDER_BODY_R,
 } from '../entities/WorldActor';
@@ -11,10 +16,14 @@ export { PLAYER_BODY_R, SPIDER_BODY_R };
 /** 实体圆互推后与树区再解析的次数 */
 const BODY_SOLID_ITERS = 2;
 
-/** 可被 solid 读写的脚底坐标 */
+/**
+ * 可被 solid 读写的脚底坐标。
+ * 半径 / 偏移来自 bodyProfileId → 主 solid 圆。
+ */
 export type FootBody = {
   worldX: number;
   worldY: number;
+  bodyProfileId: BodyProfileId;
 };
 
 /** 蜘蛛等：额外需要 isAlive 以跳过尸体 */
@@ -22,90 +31,64 @@ export type AliveFootBody = FootBody & {
   isAlive: boolean;
 };
 
-/**
- * 一帧 solid 解析所需的世界快照。
- * 数组元素可被原地改 worldX/Y。
- */
 export type SolidContext = {
-  /** 操作中的玩家；无玩家时为 null */
   player: FootBody | null;
   spiders: AliveFootBody[];
 };
 
 /**
- * 关卡脚底圆 solid：树区 + 人怪互挡。
- * 场上仅一名玩家角色；不持有场景引用，每帧由 LevelScene 传入 context。
+ * 关卡 solid：树区 + 人怪互挡。
+ * 移动用主 solid 圆（含 ox/oy）；障碍收集全部 solid 圆（矩形→外接圆）。
  */
 export class SolidResolver {
-  private readonly playerR: number;
-  private readonly spiderR: number;
   private readonly iters: number;
 
-  constructor(
-    options: {
-      playerBodyR?: number;
-      spiderBodyR?: number;
-      iters?: number;
-    } = {},
-  ) {
-    this.playerR = options.playerBodyR ?? PLAYER_BODY_R;
-    this.spiderR = options.spiderBodyR ?? SPIDER_BODY_R;
+  constructor(options: { iters?: number } = {}) {
     this.iters = options.iters ?? BODY_SOLID_ITERS;
   }
 
-  /**
-   * 玩家本帧落点：树区 + vs 蜘蛛（硬）+ 边界。
-   * 原地写入 `player`。
-   */
   resolvePlayer(
     player: FootBody,
     fromX: number,
     fromY: number,
     ctx: SolidContext,
   ): void {
-    let px = player.worldX;
-    let py = player.worldY;
-    let prevX = fromX;
-    let prevY = fromY;
+    const primary = primarySolidCircle(player.bodyProfileId);
+    const r = Math.max(1, primary.r);
+    // 在 solid 圆心上解析，再写回脚底
+    let cx = player.worldX + primary.ox;
+    let cy = player.worldY + primary.oy;
+    let prevCx = fromX + primary.ox;
+    let prevCy = fromY + primary.oy;
 
     for (let i = 0; i < this.iters; i++) {
-      const tree = WorldMap.resolveSolid(prevX, prevY, px, py, this.playerR);
-      px = tree.x;
-      py = tree.y;
+      const tree = WorldMap.resolveSolid(prevCx, prevCy, cx, cy, r);
+      cx = tree.x;
+      cy = tree.y;
 
       const hard = this.collectHardBodyObstacles(ctx, {
         includePlayer: false,
         spiderSkipIndex: -1,
       });
-      const body = pushCircleOutMany(px, py, this.playerR, hard, 2);
+      const body = pushCircleOutMany(cx, cy, r, hard, 2);
 
-      if (body.x === px && body.y === py) {
-        player.worldX = body.x;
-        player.worldY = body.y;
+      if (body.x === cx && body.y === cy) {
+        player.worldX = body.x - primary.ox;
+        player.worldY = body.y - primary.oy;
         return;
       }
 
-      prevX = px;
-      prevY = py;
-      px = body.x;
-      py = body.y;
+      prevCx = cx;
+      prevCy = cy;
+      cx = body.x;
+      cy = body.y;
     }
 
-    const finalTree = WorldMap.resolveSolid(
-      prevX,
-      prevY,
-      px,
-      py,
-      this.playerR,
-    );
-    player.worldX = finalTree.x;
-    player.worldY = finalTree.y;
+    const finalTree = WorldMap.resolveSolid(prevCx, prevCy, cx, cy, r);
+    player.worldX = finalTree.x - primary.ox;
+    player.worldY = finalTree.y - primary.oy;
   }
 
-  /**
-   * 蜘蛛本帧落点：树区 + vs 玩家/其他蜘蛛 + 边界。
-   * 原地写入 `spider`。
-   */
   resolveSpider(
     spider: FootBody,
     fromX: number,
@@ -113,48 +96,41 @@ export class SolidResolver {
     spiderIndex: number,
     ctx: SolidContext,
   ): void {
-    let sx = spider.worldX;
-    let sy = spider.worldY;
-    let prevX = fromX;
-    let prevY = fromY;
+    const primary = primarySolidCircle(spider.bodyProfileId);
+    const r = Math.max(1, primary.r);
+    let cx = spider.worldX + primary.ox;
+    let cy = spider.worldY + primary.oy;
+    let prevCx = fromX + primary.ox;
+    let prevCy = fromY + primary.oy;
 
     for (let i = 0; i < this.iters; i++) {
-      const tree = WorldMap.resolveSolid(prevX, prevY, sx, sy, this.spiderR);
-      sx = tree.x;
-      sy = tree.y;
+      const tree = WorldMap.resolveSolid(prevCx, prevCy, cx, cy, r);
+      cx = tree.x;
+      cy = tree.y;
 
       const hard = this.collectHardBodyObstacles(ctx, {
         includePlayer: true,
         spiderSkipIndex: spiderIndex,
       });
-      const body = pushCircleOutMany(sx, sy, this.spiderR, hard, 2);
+      const body = pushCircleOutMany(cx, cy, r, hard, 2);
 
-      if (body.x === sx && body.y === sy) {
-        spider.worldX = body.x;
-        spider.worldY = body.y;
+      if (body.x === cx && body.y === cy) {
+        spider.worldX = body.x - primary.ox;
+        spider.worldY = body.y - primary.oy;
         return;
       }
 
-      prevX = sx;
-      prevY = sy;
-      sx = body.x;
-      sy = body.y;
+      prevCx = cx;
+      prevCy = cy;
+      cx = body.x;
+      cy = body.y;
     }
 
-    const finalTree = WorldMap.resolveSolid(
-      prevX,
-      prevY,
-      sx,
-      sy,
-      this.spiderR,
-    );
-    spider.worldX = finalTree.x;
-    spider.worldY = finalTree.y;
+    const finalTree = WorldMap.resolveSolid(prevCx, prevCy, cx, cy, r);
+    spider.worldX = finalTree.x - primary.ox;
+    spider.worldY = finalTree.y - primary.oy;
   }
 
-  /**
-   * 硬障碍脚底圆：玩家、蜘蛛。
-   */
   private collectHardBodyObstacles(
     ctx: SolidContext,
     options: { includePlayer: boolean; spiderSkipIndex: number },
@@ -162,18 +138,22 @@ export class SolidResolver {
     const out: Array<{ x: number; y: number; r: number }> = [];
 
     if (options.includePlayer && ctx.player) {
-      out.push({
-        x: ctx.player.worldX,
-        y: ctx.player.worldY,
-        r: this.playerR,
-      });
+      out.push(
+        ...solidCirclesAtFeet(
+          ctx.player.worldX,
+          ctx.player.worldY,
+          ctx.player.bodyProfileId,
+        ),
+      );
     }
 
     for (let i = 0; i < ctx.spiders.length; i++) {
       if (i === options.spiderSkipIndex) continue;
       const s = ctx.spiders[i]!;
       if (!s.isAlive) continue;
-      out.push({ x: s.worldX, y: s.worldY, r: this.spiderR });
+      out.push(
+        ...solidCirclesAtFeet(s.worldX, s.worldY, s.bodyProfileId),
+      );
     }
 
     return out;

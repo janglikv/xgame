@@ -92,7 +92,7 @@ export class PauseMenu extends Container {
   }
 
   private getDebugBtnText(): string {
-    return `碰撞&受击框: ${DebugConfig.isDebugEnabled() ? '开启' : '关闭'}`;
+    return `Debug: ${DebugConfig.isDebugEnabled() ? '开' : '关'}`;
   }
 
   private updateDebugBtnText(): void {

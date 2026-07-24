@@ -6,11 +6,14 @@ import {
   stepKnockArc,
   type KnockArcState,
 } from './knockArc';
+import type { WorldActor } from './WorldActor';
 import {
-  SPIDER_BODY_R,
-  SPIDER_HURT_R,
-  type WorldActor,
-} from './WorldActor';
+  circleHitsHurt,
+  profileHurtOffset,
+  profileHurtR,
+  profileSolidR,
+  type BodyProfileId,
+} from '../data/bodyProfiles';
 import { HealthBar } from '../ui/HealthBar';
 import {
   loadOutlinedTexture,
@@ -111,6 +114,12 @@ type LoadedMonsterTexture = {
 
 const textureCache = new Map<string, Promise<LoadedMonsterTexture>>();
 
+function bodyProfileIdFromLabel(label: string): BodyProfileId {
+  if (label === 'WoodenDummy') return 'wooden-dummy';
+  if (label === 'FlameFlower') return 'flame-flower';
+  return 'spider';
+}
+
 async function loadMonsterTexture(
   textureUrl: string,
   footAnchorY: number,
@@ -192,8 +201,24 @@ export class Spider extends Container implements WorldActor {
   readonly passive: boolean;
   /** 描边外扩后换算出的实际脚底锚点。 */
   private footAnchorY: number;
-  readonly bodyR = SPIDER_BODY_R;
-  readonly hurtR = SPIDER_HURT_R;
+  /** 碰撞模板；子类外观决定 id */
+  readonly bodyProfileId: BodyProfileId;
+
+  get bodyR(): number {
+    return profileSolidR(this.bodyProfileId);
+  }
+
+  get hurtR(): number {
+    return profileHurtR(this.bodyProfileId);
+  }
+
+  get hurtWorldX(): number {
+    return this.worldX + profileHurtOffset(this.bodyProfileId).ox;
+  }
+
+  get hurtWorldY(): number {
+    return this.worldY + profileHurtOffset(this.bodyProfileId).oy;
+  }
   /** 1 = 朝右，-1 = 朝左 */
   private facing: 1 | -1 = 1;
   /** 被炸飞姿态强度 */
@@ -245,6 +270,7 @@ export class Spider extends Container implements WorldActor {
     };
     this.footAnchorY = this.appearance.footAnchorY;
     this.label = this.appearance.label;
+    this.bodyProfileId = bodyProfileIdFromLabel(this.appearance.label);
     this.invincible = options.invincible ?? false;
     this.passive = options.passive ?? false;
     this.worldX = worldX;
@@ -442,14 +468,14 @@ export class Spider extends Container implements WorldActor {
 
   /**
    * 每帧：AI + 击退 + 姿态 / 空中转圈 + 血条。
-   * @param playerWorldX / Y 玩家世界坐标（锁定目标）
-   * @param playerHurtR 玩家受击半径（hurtbox），用于扑咬命中；默认 0 仅中心点
+   * @param playerWorldX / Y 玩家脚底（锁定 / 追击）
+   * @param playerBodyProfileId 玩家碰撞模板（扑咬用 hurt 多形状判定）
    */
   update(
     deltaMS: number,
     playerWorldX: number,
     playerWorldY: number,
-    playerHurtR = 0,
+    playerBodyProfileId: BodyProfileId | null = null,
   ): SpiderUpdateResult {
     const dt = deltaMS / 1000;
     this.healthBar.update(deltaMS);
@@ -482,7 +508,7 @@ export class Spider extends Container implements WorldActor {
         dt,
         playerWorldX,
         playerWorldY,
-        playerHurtR,
+        playerBodyProfileId,
       );
       if (aiResult.moved) moved = true;
       attackHit = aiResult.attackHit;
@@ -552,7 +578,7 @@ export class Spider extends Container implements WorldActor {
     dt: number,
     playerX: number,
     playerY: number,
-    playerHurtR = 0,
+    playerBodyProfileId: BodyProfileId | null = null,
   ): { moved: boolean; attackHit: SpiderAttackHit | null } {
     let moved = false;
     let attackHit: SpiderAttackHit | null = null;
@@ -567,7 +593,6 @@ export class Spider extends Container implements WorldActor {
     const inv = dist > 1e-4 ? 1 / dist : 0;
     const dirX = dx * inv;
     const dirY = dy * inv;
-    const hurt = Math.max(0, playerHurtR);
 
     // 察觉 → 永久锁定
     if (!this.locked && dist <= AI.detectRange) {
@@ -603,8 +628,17 @@ export class Spider extends Container implements WorldActor {
         moved = true;
 
         if (!this.attackDealt) {
-          // 攻击体 ∩ 玩家 hurtbox
-          const stillClose = dist <= AI.attackHitR + hurt;
+          // 攻击体（蜘蛛中心圆）∩ 玩家 hurt 多形状
+          const stillClose = playerBodyProfileId
+            ? circleHitsHurt(
+                this.worldX,
+                this.worldY,
+                AI.attackHitR,
+                playerX,
+                playerY,
+                playerBodyProfileId,
+              )
+            : dist <= AI.attackHitR;
           if (stillClose) {
             attackHit = {
               damage: AI.attackDamage,

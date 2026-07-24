@@ -2,8 +2,7 @@ import { Container, Graphics, Text } from 'pixi.js';
 import { DebugConfig } from '../utils/DebugConfig';
 
 /**
- * 屏幕右上角 Debug 状态常驻指示徽章
- * 点击直接切换受击体与碰撞体 Debug 开关，按 F3 / F4 也可快捷切换。
+ * 屏幕右上角 Debug 状态徽章，点击切换开关。
  */
 export class DebugBadge extends Container {
   private readonly bg: Graphics;
@@ -23,7 +22,7 @@ export class DebugBadge extends Container {
     this.addChild(this.dot);
 
     this.labelText = new Text({
-      text: '[F3] 碰撞/受击 Debug: 关',
+      text: 'Debug: 关',
       style: {
         fontFamily: 'system-ui, -apple-system, sans-serif',
         fontSize: 12,
@@ -48,7 +47,7 @@ export class DebugBadge extends Container {
 
   refresh(): void {
     const enabled = DebugConfig.isDebugEnabled();
-    const text = `[F3] 碰撞/受击 Debug: ${enabled ? '开' : '关'}`;
+    const text = `Debug: ${enabled ? '开' : '关'}`;
     this.labelText.text = text;
 
     const width = this.labelText.width + 36;

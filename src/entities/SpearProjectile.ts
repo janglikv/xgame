@@ -130,6 +130,7 @@ export class SpearProjectile extends Container {
 
   /**
    * 对圆目标做一次命中检测（飞行中）。
+   * @param targetX/Y 受击圆心（含偏移），勿传 solid 脚底 unless 无偏移
    * @param targetHurtR 目标受击半径（hurtbox），勿传 solid BODY
    */
   hitsTarget(targetX: number, targetY: number, targetHurtR: number): boolean {
@@ -138,6 +139,11 @@ export class SpearProjectile extends Container {
     const dy = targetY - this.groundY;
     const r = SPEAR_HIT_R + Math.max(0, targetHurtR);
     return dx * dx + dy * dy <= r * r;
+  }
+
+  /** 飞行中是否命中任意 hurt 形状（圆/矩形），由外部用 profile 判定时可用 ground 点 */
+  get hitProbe(): { x: number; y: number; r: number } {
+    return { x: this.groundX, y: this.groundY, r: SPEAR_HIT_R };
   }
 
   /** 命中敌人时的击飞 / 伤害结算 */

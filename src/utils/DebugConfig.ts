@@ -1,5 +1,5 @@
 /**
- * 受击体 & 碰撞体 Debug 全局开关管理
+ * Debug 全局开关（碰撞/受击绘制与编辑）
  */
 export class DebugConfig {
   private static enabled = false;

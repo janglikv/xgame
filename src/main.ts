@@ -10,6 +10,7 @@ import {
 import { LocalSaveStore } from './data/SaveStore';
 import type { SavedScene } from './data/types';
 import type { CharacterId } from './entities/types';
+import { BodyEditScene } from './scenes/BodyEditScene';
 import { LevelScene } from './scenes/LevelScene';
 import { MainScene } from './scenes/MainScene';
 import { MapEditScene } from './scenes/MapEditScene';
@@ -78,6 +79,17 @@ async function bootstrap(): Promise<void> {
         new MainScene(app.screen.width, app.screen.height, {
           onSelectLevel: goLevel,
           onMapEdit: () => goMapEdit(),
+          onBodyEdit: () => goBodyEdit(),
+          onBackground: setBackground,
+        }),
+    );
+  };
+
+  const goBodyEdit = (): void => {
+    void scenes.setScene(
+      () =>
+        new BodyEditScene(app.screen.width, app.screen.height, {
+          onBack: goMain,
           onBackground: setBackground,
         }),
     );
@@ -138,6 +150,7 @@ async function bootstrap(): Promise<void> {
         new MainScene(app.screen.width, app.screen.height, {
           onSelectLevel: goLevel,
           onMapEdit: () => goMapEdit(),
+          onBodyEdit: () => goBodyEdit(),
           onBackground: setBackground,
         }),
     );
