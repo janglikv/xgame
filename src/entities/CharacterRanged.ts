@@ -1,5 +1,5 @@
 import type { BombProjectileOptions } from './BombProjectile';
-import type { PlayerCharacterBase } from './PlayerCharacterBase';
+import type { AmmoHudModel } from './CharacterResources';
 
 /**
  * 屏幕点击换算后的世界瞄准向量（相对角色脚底，未归一化）。
@@ -12,7 +12,7 @@ export type RangedAim = {
 
 /**
  * 远程出手可用的战斗能力（由 CombatSystem 实现）。
- * 角色决定打什么；系统只负责生成投射物与刷新 HUD。
+ * 角色决定打什么；系统只负责生成投射物与转发 HUD 模型。
  */
 export type RangedCombatServices = {
   spawnBomb: (
@@ -29,6 +29,6 @@ export type RangedCombatServices = {
     dirY: number,
     options?: { originHeight?: number },
   ) => void;
-  /** 扣弹 / 出手后按 getAmmoHud 刷新场景弹药 HUD */
-  notifyAmmoHud: (player: PlayerCharacterBase) => void;
+  /** 扣弹 / 出手后刷新弹药 HUD（传入 getAmmoHud() 结果） */
+  notifyAmmoHud: (model: AmmoHudModel) => void;
 };

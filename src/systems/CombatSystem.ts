@@ -1,24 +1,18 @@
 import type { Container } from 'pixi.js';
-import type { EntranceAimTarget } from '../entities/CharacterEntrance';
+import type {
+  AutoAimSpearCaster,
+  EntranceAimTarget,
+  WorldFeetOrigin,
+} from '../entities/CharacterEntrance';
 import type { RangedCombatServices } from '../entities/CharacterRanged';
+import type { AmmoHudModel } from '../entities/CharacterResources';
 import {
   BombProjectile,
   type BombProjectileOptions,
 } from '../entities/BombProjectile';
-import { BombGirl } from '../entities/BombGirl';
-import { IceRanger } from '../entities/IceRanger';
 import type { PlayerCharacterBase } from '../entities/PlayerCharacterBase';
 import { SpearProjectile } from '../entities/SpearProjectile';
-import type { SpearAmmoSnapshot } from '../entities/SpearAmmo';
-import type { BombAmmoSnapshot } from '../entities/BombAmmo';
 import type { Spider } from '../entities/Spider';
-import {
-  PLAYER_HURT_R,
-  SPIDER_HURT_R,
-} from '../entities/WorldActor';
-
-/** 再导出，方便场景引用 */
-export { PLAYER_HURT_R, SPIDER_HURT_R };
 
 /** 蜘蛛对击飞的接收倍率（目标抗性，非炸弹属性） */
 export const SPIDER_KNOCK_SCALE = 0.85;
@@ -48,18 +42,20 @@ export type CombatWorld = {
   spiders: Spider[];
 };
 
+/**
+ * 场景注入的世界/UI 能力。
+ * 弹药只经统一 AmmoHudModel 回传，不点名飞剑/炸药。
+ */
 export type CombatSystemHooks = {
   sortDepth: () => void;
   syncWorldActors: () => void;
-  /** 飞剑弹药 HUD（投矛后同步） */
-  onSpearAmmoChanged?: (snap: SpearAmmoSnapshot) => void;
-  /** 炸药弹药 HUD（投弹后同步） */
-  onBombAmmoChanged?: (snap: BombAmmoSnapshot) => void;
+  /** 弹药显示变更（模型由角色 getAmmoHud 产生） */
+  onAmmoHudChanged?: (model: AmmoHudModel) => void;
 };
 
 /**
- * 远程战斗：扔炸弹 / 投矛、弹体更新、爆炸与矛命中。
- * 拥有 bombs / spears 列表；场景只负责传入世界快照与镜头。
+ * 远程投射物运行时：生成、更新、命中结算、销毁。
+ * 不识别具体角色类；玩法意图在角色，弹体事实在本系统。
  */
 export class CombatSystem {
   private readonly bombs: BombProjectile[] = [];
@@ -68,13 +64,13 @@ export class CombatSystem {
   private readonly hooks: CombatSystemHooks;
   /** 脚本化免费自动瞄准连射（出场等调用，非普攻） */
   private autoAimVolley: {
-    player: IceRanger;
+    caster: AutoAimSpearCaster;
     targets: readonly EntranceAimTarget[];
     remaining: number;
     targetIndex: number;
     elapsed: number;
   } | null = null;
-  /** 炸弹首次爆炸回调（如出场显现）；与「出场」语义无关的通用钩子 */
+  /** 炸弹首次爆炸回调（通用钩子，不绑定出场语义） */
   private readonly bombFirstBlastHooks = new Map<
     BombProjectile,
     () => void
@@ -136,8 +132,8 @@ export class CombatSystem {
       spawnSpear: (originX, originY, dirX, dirY, options) => {
         this.spawnSpear(originX, originY, dirX, dirY, options);
       },
-      notifyAmmoHud: (p) => {
-        this.notifyAmmoHud(p);
+      notifyAmmoHud: (model) => {
+        this.hooks.onAmmoHudChanged?.(model);
       },
     };
   }
@@ -148,12 +144,13 @@ export class CombatSystem {
     endX: number,
     endY: number,
     options: BombProjectileOptions = {},
-  ): void {
+  ): BombProjectile {
     const bomb = new BombProjectile(startX, startY, endX, endY, options);
     this.sortLayer.addChild(bomb);
     this.bombs.push(bomb);
     bomb.syncToWorld();
     this.hooks.sortDepth();
+    return bomb;
   }
 
   private spawnSpear(
@@ -172,27 +169,18 @@ export class CombatSystem {
     this.hooks.sortDepth();
   }
 
-  private notifyAmmoHud(player: PlayerCharacterBase): void {
-    const model = player.getAmmoHud();
-    if (model.kind === 'spear') {
-      this.hooks.onSpearAmmoChanged?.(model.snap);
-    } else if (model.kind === 'bomb') {
-      this.hooks.onBombAmmoChanged?.(model.snap);
-    }
-  }
-
   /**
    * 免费自动瞄准连射：不走手持飞剑与弹药。
    * 供角色出场等脚本调用；战斗系统不感知「出场」语义。
    */
   fireFreeAutoAimSpearVolley(
-    player: IceRanger,
+    caster: AutoAimSpearCaster,
     targets: readonly EntranceAimTarget[],
     count = 3,
   ): void {
     if (count <= 0) return;
     this.autoAimVolley = {
-      player,
+      caster,
       targets,
       remaining: count,
       targetIndex: 0,
@@ -202,11 +190,11 @@ export class CombatSystem {
   }
 
   /**
-   * 从角色位置同时抛向多个落点（不扣弹药）。
+   * 从原点同时抛向多个落点（不扣弹药）。
    * `onFirstBlast` 在本组任一枚首次爆炸时调用一次。
    */
   throwBombBurst(
-    player: BombGirl,
+    origin: WorldFeetOrigin,
     landings: ReadonlyArray<{ endX: number; endY: number }>,
     options: BombProjectileOptions = {},
     onFirstBlast?: () => void,
@@ -221,26 +209,22 @@ export class CombatSystem {
       : null;
 
     for (const land of landings) {
-      const bomb = new BombProjectile(
-        player.worldX,
-        player.worldY,
+      const bomb = this.spawnBomb(
+        origin.worldX,
+        origin.worldY,
         land.endX,
         land.endY,
         options,
       );
-      this.sortLayer.addChild(bomb);
-      this.bombs.push(bomb);
       if (firstBlastOnce) {
         this.bombFirstBlastHooks.set(bomb, firstBlastOnce);
       }
-      bomb.syncToWorld();
     }
-    this.hooks.sortDepth();
   }
 
-  /** 取消该角色相关的脚本化攻击（切换角色时调用） */
-  cancelScriptedAttacks(player: PlayerCharacterBase): void {
-    if (this.autoAimVolley?.player === player) {
+  /** 取消该实体相关的脚本化攻击（切换角色时调用） */
+  cancelScriptedAttacks(owner: object): void {
+    if (this.autoAimVolley?.caster === owner) {
       this.autoAimVolley = null;
     }
   }
@@ -269,18 +253,19 @@ export class CombatSystem {
       return;
     }
 
+    const { caster } = volley;
     const targets = volley.targets
       .filter((t) => {
         if (!t.isAlive) return false;
-        const dx = t.worldX - volley.player.worldX;
-        const dy = t.worldY - volley.player.worldY;
+        const dx = t.worldX - caster.worldX;
+        const dy = t.worldY - caster.worldY;
         return dx * dx + dy * dy <= AUTO_AIM_RANGE ** 2;
       })
       .sort((a, b) => {
-        const adx = a.worldX - volley.player.worldX;
-        const ady = a.worldY - volley.player.worldY;
-        const bdx = b.worldX - volley.player.worldX;
-        const bdy = b.worldY - volley.player.worldY;
+        const adx = a.worldX - caster.worldX;
+        const ady = a.worldY - caster.worldY;
+        const bdx = b.worldX - caster.worldX;
+        const bdy = b.worldY - caster.worldY;
         return adx * adx + ady * ady - (bdx * bdx + bdy * bdy);
       });
     if (targets.length === 0) {
@@ -289,11 +274,8 @@ export class CombatSystem {
     }
 
     const target = targets[volley.targetIndex % targets.length]!;
-    volley.player.setFacingFromMoveX(target.worldX - volley.player.worldX);
-    const origin = volley.player.getThrowOrigin(
-      volley.player.worldX,
-      volley.player.worldY,
-    );
+    caster.setFacingFromMoveX(target.worldX - caster.worldX);
+    const origin = caster.getThrowOrigin(caster.worldX, caster.worldY);
     this.spawnSpear(
       origin.x,
       origin.y,

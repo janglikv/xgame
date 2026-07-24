@@ -432,7 +432,7 @@ export class IceRanger extends PlayerCharacterBase {
       combat.spawnSpear(origin.x, origin.y, dirX, dirY, {
         originHeight: origin.height,
       });
-      combat.notifyAmmoHud(this);
+      combat.notifyAmmoHud(this.getAmmoHud());
     });
   }
 

@@ -1,8 +1,5 @@
 import type { Container } from 'pixi.js';
 import type { BombProjectileOptions } from './BombProjectile';
-import type { BombGirl } from './BombGirl';
-import type { IceRanger } from './IceRanger';
-import type { PlayerCharacterBase } from './PlayerCharacterBase';
 
 /** 出场期间对输入 / 切换的锁定 */
 export type EntranceLocks = {
@@ -24,29 +21,46 @@ export type EntranceAimTarget = {
   isAlive: boolean;
 };
 
+/** 仅需脚底坐标的世界实体（多弹齐抛原点等） */
+export type WorldFeetOrigin = {
+  worldX: number;
+  worldY: number;
+};
+
+/**
+ * 可投免费自动瞄准矛的施法者能力（不绑定具体角色类）。
+ */
+export type AutoAimSpearCaster = WorldFeetOrigin & {
+  setFacingFromMoveX(dirX: number): void;
+  getThrowOrigin(
+    feetX: number,
+    feetY: number,
+  ): { x: number; y: number; height: number };
+};
+
 /**
  * 出场可用的战斗能力（由 CombatSystem 实现）。
- * 角色只表达意图，不直接 new 投射物。
+ * 角色只表达意图，不直接 new 投射物；类型也不点名具体角色类。
  */
 export type EntranceCombatServices = {
   /** 免费自动瞄准连射（不走手持飞剑与弹药） */
   fireFreeAutoAimSpearVolley: (
-    player: IceRanger,
+    caster: AutoAimSpearCaster,
     targets: readonly EntranceAimTarget[],
     count?: number,
   ) => void;
   /**
-   * 从角色位置同时抛出多枚炸弹。
+   * 从原点同时抛向多个落点。
    * `onFirstBlast` 在任一枚首次爆炸结算时调用一次。
    */
   throwBombBurst: (
-    player: BombGirl,
+    origin: WorldFeetOrigin,
     landings: ReadonlyArray<{ endX: number; endY: number }>,
     options?: BombProjectileOptions,
     onFirstBlast?: () => void,
   ) => void;
-  /** 取消该角色相关的脚本化攻击（如自动连射） */
-  cancelScriptedAttacks: (player: PlayerCharacterBase) => void;
+  /** 取消该实体相关的脚本化攻击（如自动连射） */
+  cancelScriptedAttacks: (owner: object) => void;
 };
 
 /**

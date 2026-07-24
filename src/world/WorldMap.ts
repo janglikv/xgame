@@ -17,7 +17,6 @@ import {
 // 布局常量 re-export，保持旧 import 路径可用
 export {
   CELL_PITCH,
-  CHANNEL_WIDTH,
   FOREST_WIDTH,
   GRID,
   ISLAND_SIZE,

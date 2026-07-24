@@ -1,6 +1,7 @@
 import { Container, Rectangle } from 'pixi.js';
 import { preloadLevelAssets } from '../assets/preload';
 import type { EntranceContext } from '../entities/CharacterEntrance';
+import type { AmmoHudModel } from '../entities/CharacterResources';
 import { BombGirl } from '../entities/BombGirl';
 import { IceRanger } from '../entities/IceRanger';
 import type { PlayerCharacterBase } from '../entities/PlayerCharacterBase';
@@ -175,8 +176,7 @@ export class LevelScene extends Container implements GameScene {
     this.combat = new CombatSystem(this.sortLayer, {
       sortDepth: () => this.sortDepth(),
       syncWorldActors: () => this.syncWorldActors(),
-      onSpearAmmoChanged: (snap) => this.spearAmmoHud.setAmmo(snap),
-      onBombAmmoChanged: (snap) => this.bombAmmoHud.setAmmo(snap),
+      onAmmoHudChanged: (model) => this.applyAmmoHudModel(model),
     });
 
     this.debugOverlay = new DebugOverlay();
@@ -317,12 +317,16 @@ export class LevelScene extends Container implements GameScene {
     this.sortDepth();
   }
 
-  /**
-   * 按角色 getAmmoHud() 切换飞剑 / 炸药 HUD。
-   * 只认数据 kind，不 instanceof 角色类。
-   */
+  /** 按角色 getAmmoHud() 刷新弹药 HUD */
   private syncAmmoHud(player: PlayerCharacterBase): void {
-    const model = player.getAmmoHud();
+    this.applyAmmoHudModel(player.getAmmoHud());
+  }
+
+  /**
+   * 按 AmmoHudModel 切换飞剑 / 炸药 HUD。
+   * 只认数据 kind，不依赖角色类名。
+   */
+  private applyAmmoHudModel(model: AmmoHudModel): void {
     this.spearAmmoHud.visible = model.kind === 'spear';
     this.bombAmmoHud.visible = model.kind === 'bomb';
     if (model.kind === 'spear') {

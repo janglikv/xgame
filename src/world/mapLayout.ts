@@ -30,8 +30,6 @@ export const MAP_SIZE = CORE_SIZE + 2 * OUTER_FOREST_WIDTH;
 /** 地图半宽/半高（中心 = 原点） */
 export const MAP_WORLD_HALF = MAP_SIZE / 2;
 
-/** @deprecated 使用 FOREST_WIDTH */
-export const CHANNEL_WIDTH = FOREST_WIDTH;
 
 /**
  * 九宫格岛中心（世界坐标）。

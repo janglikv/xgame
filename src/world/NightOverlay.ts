@@ -54,8 +54,3 @@ export function getNightBackground(): number {
   // 偏暗底，避免 letterbox 露亮绿
   return 0x0b1524;
 }
-
-/** @deprecated 使用 getNightBackground */
-export function getThemeBackground(theme: 'day' | 'night' = 'night'): number {
-  return theme === 'night' ? getNightBackground() : 0x5a8f3c;
-}

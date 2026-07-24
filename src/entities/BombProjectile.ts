@@ -50,27 +50,9 @@ export const DEFAULT_BOMB_BLAST: Readonly<BombBlastStats> = {
 };
 
 /**
- * 默认稳定性（兼容旧 API）。
- * 炸弹默认始终满尺寸，不再按稳定性随机衰减。
- */
-export const DEFAULT_BOMB_STABILITY = 1;
-
-/**
  * 显式指定 sizeScale 时的尺寸下限（相对满尺寸）。
  */
 export const BOMB_MIN_SIZE_SCALE = 0.35;
-
-/**
- * 尺寸 ≥ 此值曾视为“大弹”（额外击飞 / 空中转圈）。
- * 击飞已关闭，阈值仅保留兼容。
- */
-export const BOMB_SPIN_SIZE_THRESHOLD = 0.88;
-
-/** @deprecated 击飞已关闭 */
-export const BOMB_LARGE_KNOCK_BONUS = 0.4;
-
-/** @deprecated 击飞已关闭，空中转圈不再触发 */
-export const BOMB_AIR_SPIN_TURNS = 2;
 
 /** 对某个目标的一次爆炸结算结果（由炸弹算出，场景只负责应用） */
 export type BlastHit = {
@@ -89,11 +71,6 @@ export type BlastHit = {
   airSpinTurns: number;
 };
 
-// 兼容旧导出名
-export const BLAST_RADIUS = DEFAULT_BOMB_BLAST.radius;
-export const BLAST_MAX_DAMAGE = DEFAULT_BOMB_BLAST.maxDamage;
-export const BLAST_KNOCK_SPEED = DEFAULT_BOMB_BLAST.knockSpeed;
-
 const ARC_PEAK = 100;
 /** 未指定出手高度时的默认离地高度（世界像素） */
 const THROW_ORIGIN_HEIGHT = 32;
@@ -110,10 +87,6 @@ export type BombPhase = 'flying' | 'exploding' | 'done';
 export type BombProjectileOptions = {
   /** 覆盖满尺寸基准爆炸属性（再被 sizeScale 缩放） */
   blast?: Partial<BombBlastStats>;
-  /**
-   * @deprecated 已取消随机尺寸衰减；保留仅兼容旧调用，不再影响威力。
-   */
-  stability?: number;
   /**
    * 尺寸倍率（相对满尺寸）。不传则为 1（满尺寸满伤）。
    */
@@ -138,16 +111,6 @@ export async function loadBombTextures(): Promise<void> {
 /** HUD / 预览用炸弹贴图（需先 loadBombTextures） */
 export function getBombTexture(): Texture | null {
   return sharedBomb;
-}
-
-/**
- * @deprecated 已取消随机尺寸衰减；恒返回 1。
- */
-export function rollBombSizeScale(
-  _stability?: number,
-  _rng?: () => number,
-): number {
-  return 1;
 }
 
 /** 满尺寸 blast 按尺寸倍率缩放（范围 / 伤害） */
@@ -188,8 +151,6 @@ export class BombProjectile extends Container {
 
   /** 本颗炸弹的爆炸配置（已含尺寸缩放） */
   readonly blast: BombBlastStats;
-  /** 扔出时的稳定性 0~1 */
-  readonly stability: number;
   /** 本颗实际尺寸倍率（相对满尺寸），越小越弱 */
   readonly sizeScale: number;
 
@@ -216,8 +177,6 @@ export class BombProjectile extends Container {
       throw new Error('Bomb textures not loaded — call loadBombTextures() first');
     }
 
-    // 默认满尺寸；不再按 stability 随机衰减伤害 / 范围
-    this.stability = 1;
     this.sizeScale =
       options.sizeScale !== undefined
         ? Math.max(BOMB_MIN_SIZE_SCALE * 0.5, options.sizeScale)

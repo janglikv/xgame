@@ -136,7 +136,7 @@ export class BombGirl extends PlayerCharacterBase {
     combat.spawnBomb(origin.x, origin.y, endX, endY, {
       originHeight: origin.height,
     });
-    combat.notifyAmmoHud(this);
+    combat.notifyAmmoHud(this.getAmmoHud());
     return true;
   }
 
