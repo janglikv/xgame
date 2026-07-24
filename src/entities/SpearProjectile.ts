@@ -47,6 +47,8 @@ const FORMATION_LAUNCH_START_SPEED = 60;
 const FORMATION_LAUNCH_MAX_SPEED = 900;
 /** 剑阵：发射加速度（像素/秒²） */
 const FORMATION_LAUNCH_ACCEL = 3200;
+/** 剑阵飞剑静止时的最大视觉倍率 */
+const FORMATION_MAX_SCALE_MULTIPLIER = 2;
 
 export type SpearPhase = 'flying' | 'holding' | 'stuck' | 'done';
 
@@ -214,9 +216,9 @@ export class SpearProjectile extends Container {
 
     this.sprite = new Sprite(sharedSpear);
     this.sprite.anchor.set(0.5, 0.5);
-    this.sprite.scale.set(this.visualScale);
     this.sprite.label = 'SpearSprite';
     this.addChild(this.sprite);
+    this.applySpeedScale();
     this.applyFacingRotation();
   }
 
@@ -304,6 +306,7 @@ export class SpearProjectile extends Container {
 
     // 飞行/悬停：刷新矛尖朝向
     if (this.phase === 'flying' || this.phase === 'holding') {
+      this.applySpeedScale();
       this.applyFacingRotation();
     }
 
@@ -324,6 +327,9 @@ export class SpearProjectile extends Container {
     // ease-out cubic：初速快、到位时接近 0
     const eased = 1 - (1 - u) * (1 - u) * (1 - u);
     const dist = this.maxRange * eased;
+    // ease-out cubic 的瞬时速度，用于同步飞剑视觉缩放
+    this.currentSpeed =
+      (this.maxRange * 3 * (1 - u) * (1 - u)) / this.deployDuration;
     const nx = this.spawnX + this.dirX * dist;
     const ny = this.spawnY + this.dirY * dist;
 
@@ -447,6 +453,19 @@ export class SpearProjectile extends Container {
       }
     }
     this.sprite.rotation = Math.atan2(fy, fx) - SPEAR_TEX_ANGLE;
+  }
+
+  /** 剑阵飞剑越慢越大：静止为 2 倍，达到发射上限时恢复基础尺寸 */
+  private applySpeedScale(): void {
+    if (!this.isFormation) {
+      this.sprite.scale.set(this.visualScale);
+      return;
+    }
+    const speedRatio = Math.min(1, this.currentSpeed / this.launchMaxSpeed);
+    const multiplier =
+      FORMATION_MAX_SCALE_MULTIPLIER -
+      (FORMATION_MAX_SCALE_MULTIPLIER - 1) * speedRatio;
+    this.sprite.scale.set(this.visualScale * multiplier);
   }
 
   private isBlocked(x: number, y: number): boolean {

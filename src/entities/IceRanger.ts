@@ -84,8 +84,8 @@ const HAND_SPEAR = {
 /** Q：十二角剑阵（免费齐射，不耗弹） */
 const SWORD_ARRAY = {
   count: 12,
-  /** 飞出后悬停距离（世界像素） */
-  maxRange: 100,
+  /** 飞剑展开成阵的半径（世界像素） */
+  maxRange: 130,
   speed: 560,
 } as const;
 
