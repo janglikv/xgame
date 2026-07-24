@@ -12,6 +12,7 @@ import {
 } from '../entities/knockArc';
 import { Spider } from '../entities/Spider';
 import { FlameFlower } from '../entities/FlameFlower';
+import { WoodenDummy } from '../entities/WoodenDummy';
 import { Keyboard } from '../input/Keyboard';
 import {
   CombatSystem,
@@ -437,7 +438,9 @@ export class LevelScene extends Container implements GameScene {
       const spider =
         e.kind === 'flame-flower'
           ? new FlameFlower(solid.x, solid.y)
-          : new Spider(solid.x, solid.y, { scale: SPIDER_SCALE });
+          : e.kind === 'wooden-dummy'
+            ? new WoodenDummy(solid.x, solid.y)
+            : new Spider(solid.x, solid.y, { scale: SPIDER_SCALE });
       spider.faceToward(this.spawn.x, this.spawn.y);
       this.sortLayer.addChild(spider);
       this.spiders.push(spider);

@@ -144,8 +144,16 @@ export class DebugOverlay extends Container {
     this.drawCross(x, y, 5, 0x00e5ff, 0.9);
 
     // 绘制标签
-    const hpStr = `HP:${Math.ceil(spider.currentHp)}`;
-    const labelText = `[蜘蛛] ${hpStr} | Solid:R${spider.bodyR} | Hurt:R${spider.hurtR}`;
+    const name =
+      spider.label === 'WoodenDummy'
+        ? '木桩'
+        : spider.label === 'FlameFlower'
+          ? '火焰花'
+          : '蜘蛛';
+    const hpStr = spider.invincible
+      ? '无敌'
+      : `HP:${Math.ceil(spider.currentHp)}`;
+    const labelText = `[${name}] ${hpStr} | Solid:R${spider.bodyR} | Hurt:R${spider.hurtR}`;
     this.addLabel(x, y - 48, labelText, 0xff9100);
   }
 

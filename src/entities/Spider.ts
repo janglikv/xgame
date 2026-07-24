@@ -142,6 +142,16 @@ export type SpiderOptions = {
   maxHp?: number;
   /** 子类只覆盖外观，沿用蜘蛛的战斗与移动逻辑。 */
   appearance?: Partial<MonsterAppearance>;
+  /**
+   * 无敌：受击不扣血、永不死亡。
+   * 仍可播放受击姿态（与 passive 配合做木桩）。
+   */
+  invincible?: boolean;
+  /**
+   * 木桩 / 被动：不巡视、不追击、不攻击，不受击退位移。
+   * 仅原地受击抖动。
+   */
+  passive?: boolean;
 };
 
 /** 蜘蛛 AI 状态 */
@@ -176,6 +186,10 @@ export class Spider extends Container implements WorldActor {
   private readonly healthBar: HealthBar;
   private readonly maxHp: number;
   private readonly appearance: MonsterAppearance;
+  /** 无敌：受击不扣血 */
+  readonly invincible: boolean;
+  /** 被动木桩：不 AI、不击飞位移 */
+  readonly passive: boolean;
   /** 描边外扩后换算出的实际脚底锚点。 */
   private footAnchorY: number;
   readonly bodyR = SPIDER_BODY_R;
@@ -231,6 +245,8 @@ export class Spider extends Container implements WorldActor {
     };
     this.footAnchorY = this.appearance.footAnchorY;
     this.label = this.appearance.label;
+    this.invincible = options.invincible ?? false;
+    this.passive = options.passive ?? false;
     this.worldX = worldX;
     this.worldY = worldY;
     this.homeX = worldX;
@@ -253,11 +269,16 @@ export class Spider extends Container implements WorldActor {
       0,
       -this.appearance.hpBarOffsetY * this.baseScale,
     );
+    // 木桩 / 无敌单位不显示血条
+    this.healthBar.visible = !this.invincible && !this.passive;
     this.addChild(this.healthBar);
 
     // 开局错开：先短停再走向随机航点，避免四角同步齐步
-    this.patrolPause = 0.2 + Math.random() * 1.2;
-    this.pickPatrolWaypoint();
+    // 被动木桩不需要巡视
+    if (!this.passive) {
+      this.patrolPause = 0.2 + Math.random() * 1.2;
+      this.pickPatrolWaypoint();
+    }
   }
 
   get currentHp(): number {
@@ -269,6 +290,8 @@ export class Spider extends Container implements WorldActor {
   }
 
   get isAlive(): boolean {
+    // 无敌单位永远存活（可被命中、结算伤害反馈，但不移除）
+    if (this.invincible) return true;
     return this.healthBar.currentHp > 0;
   }
 
@@ -367,7 +390,22 @@ export class Spider extends Container implements WorldActor {
   ): boolean {
     if (!this.isAlive) return false;
 
-    this.healthBar.applyDelta(-Math.abs(hit.damage));
+    if (!this.invincible) {
+      this.healthBar.applyDelta(-Math.abs(hit.damage));
+    }
+
+    // 木桩：只抖一下，不位移、不空中转圈、不切 AI
+    if (this.passive) {
+      this.blastKnock = Math.max(
+        this.blastKnock,
+        Math.min(1.0, hit.poseStrength * 0.65),
+      );
+      if (hit.dirX !== 0) {
+        this.facing = hit.dirX < 0 ? -1 : 1;
+        this.applyFacingToSprite();
+      }
+      return true;
+    }
 
     applyKnockImpulse(this.knock, hit.knockVelX, hit.knockVelY, knockScale);
 
@@ -415,6 +453,12 @@ export class Spider extends Container implements WorldActor {
   ): SpiderUpdateResult {
     const dt = deltaMS / 1000;
     this.healthBar.update(deltaMS);
+
+    // 木桩：原地受击反馈，不位移、不攻击
+    if (this.passive) {
+      this.updatePose(dt, false);
+      return { moved: false, attackHit: null };
+    }
 
     let moved = false;
     let attackHit: SpiderAttackHit | null = null;

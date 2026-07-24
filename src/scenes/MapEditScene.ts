@@ -1,4 +1,12 @@
-import { Container, Graphics, Rectangle, Text } from 'pixi.js';
+import {
+  Assets,
+  Container,
+  Graphics,
+  Rectangle,
+  Sprite,
+  Text,
+  Texture,
+} from 'pixi.js';
 import {
   cellCenter,
   cellKey,
@@ -6,13 +14,8 @@ import {
   cloneLevelDef,
   copyLevelDefTs,
   defFromCells,
-  getPlayableCatalog,
-  getPlayableLevelById,
   gridDims,
-  hasMapDraft,
   isSpawnValid,
-  levelDisplayName,
-  getLevelIndex,
   saveMapDraft,
   worldToCell,
   type EnemyKind,
@@ -28,33 +31,18 @@ const FOREST = 0x243d22;
 const GRID_LINE = 0x1a3018;
 const HOLE = 0x8fe05a;
 const SPAWN = 0xff4d4d;
-const ENEMY_COLORS: Record<EnemyKind, number> = {
-  spider: 0xc45cff,
-  'flame-flower': 0xff7a32,
-};
-const BTN = 0x3d5c3d;
-const BTN_HOVER = 0x527a52;
-const BTN_MAIN = 0xf0c040;
-const BTN_BRUSH = 0x4a6a8a;
-const BTN_MODE = 0x3d4a5c;
-const BTN_MODE_ON = 0xf0c040;
-const BTN_PREVIEW = 0x3d8a6a;
-const BTN_LEVEL = 0x4a5a7a;
-const BTN_LEVEL_ON = 0xf0c040;
-const BTN_HEIGHT = 32;
-const BTN_RADIUS = 8;
 
-/** 画笔边长（格），1 = 单格，最大 11 */
+const BTN_HEIGHT = 30;
+const BTN_RADIUS = 6;
+const HEADER_HEIGHT = 44;
+
 const BRUSH_MIN = 1;
 const BRUSH_MAX = 11;
-/** 撤销步数上限 */
 const UNDO_MAX = 40;
-/** 右键删除敌人时的拾取半径（相对格宽） */
-const ENEMY_PICK_CELLS = 1.25;
+const ENEMY_PICK_CELLS = 2.0;
 
 type EditTool = 'brush' | 'eraser' | 'box' | 'enemy' | 'spawn';
 
-/** 可撤销的地图状态快照 */
 type EditSnapshot = {
   cells: number[];
   spawn: { x: number; y: number };
@@ -63,35 +51,37 @@ type EditSnapshot = {
 
 type HudBtn = Container & {
   __w: number;
-  __group: 'action' | 'brush' | 'mode' | 'enemyKind' | 'level';
-  __id?: string;
+  __h: number;
   __baseColor: number;
   __bg: Graphics;
   __label: Text;
+  __active?: boolean;
+  setActive?: (active: boolean) => void;
 };
 
 export type MapEditSceneOptions = {
   onBack: () => void;
-  /** 校验通过后进入关卡试玩 */
   onPreview: (def: LevelMapDef) => void;
   onBackground?: (color: number) => void;
-  /** 打开时编辑的关卡（应已是草稿优先的可玩版） */
   initialDef?: LevelMapDef;
 };
 
 /**
- * 地图编辑：树宽格子上涂抹 / 橡皮擦 / 框选可走区；敌人模式放置刷怪点；出生点模式设置起点。
- * 可切换目录关卡，改动写入草稿；预览直接进关试玩。
- * 纯鼠标/点击操作，无快捷键依赖。
+ * 地图编辑器 Scene
+ * 极简单行 Header 布局，无冗余关卡切换下拉
  */
 export class MapEditScene extends Container implements GameScene {
   private readonly world: Container;
   private readonly gfx: Graphics;
+  private readonly enemyLayer: Container;
   private readonly hud: Container;
-  private readonly tip: Text;
-  private readonly levelTitle: Text;
-  private readonly brushLabel: Text;
-  private readonly actionBtns: HudBtn[] = [];
+  private readonly topBarGfx: Graphics;
+
+  private readonly toastContainer: Container;
+  private readonly toastBg: Graphics;
+  private readonly toastText: Text;
+
+  private readonly enemyTextures = new Map<EnemyKind, Texture>();
 
   private mapSize: number;
   private cellSize: number;
@@ -115,7 +105,6 @@ export class MapEditScene extends Container implements GameScene {
   private painting: 'dig' | 'fill' | null = null;
   private lastCell: { c: number; r: number } | null = null;
   private hoverCell: { c: number; r: number } | null = null;
-  /** 框选起点 / 当前角（格子） */
   private boxStart: { c: number; r: number } | null = null;
   private boxEnd: { c: number; r: number } | null = null;
   private tipTimer = 0;
@@ -123,6 +112,21 @@ export class MapEditScene extends Container implements GameScene {
   private readonly onBack: () => void;
   private readonly onPreview: (def: LevelMapDef) => void;
   private readonly onBackground?: (color: number) => void;
+
+  // UI 元素引用
+  private backBtn!: HudBtn;
+  private toolBtns: Record<EditTool, HudBtn> = {} as any;
+  private enemyBtns: Record<EnemyKind, HudBtn> = {} as any;
+  private brushMinusBtn!: HudBtn;
+  private brushPlusBtn!: HudBtn;
+  private brushLabel!: Text;
+  private undoBtn!: HudBtn;
+  private clearBtn!: HudBtn;
+  private previewBtn!: HudBtn;
+  private exportBtn!: HudBtn;
+
+  private brushSubGroup!: Container;
+  private enemySubGroup!: Container;
 
   constructor(width: number, height: number, options: MapEditSceneOptions) {
     super();
@@ -164,105 +168,228 @@ export class MapEditScene extends Container implements GameScene {
     this.addChild(this.world);
 
     this.gfx = new Graphics();
-    this.world.addChild(this.gfx);
+    this.enemyLayer = new Container();
+    this.world.addChild(this.gfx, this.enemyLayer);
 
     this.hud = new Container();
     this.hud.eventMode = 'static';
     this.addChild(this.hud);
 
-    this.tip = new Text({
-      text: this.defaultTip(),
-      style: {
-        fontFamily: 'system-ui, sans-serif',
-        fontSize: 14,
-        fill: 0xe2f0dc,
-      },
-    });
-    this.hud.addChild(this.tip);
+    // Top Header 背景
+    this.topBarGfx = new Graphics();
+    this.hud.addChild(this.topBarGfx);
 
-    this.levelTitle = new Text({
+    // 底部 Toast 容器
+    this.toastContainer = new Container();
+    this.toastBg = new Graphics();
+    this.toastText = new Text({
       text: '',
       style: {
         fontFamily: 'system-ui, sans-serif',
-        fontSize: 13,
-        fontWeight: '700',
-        fill: 0xc8e0ff,
+        fontSize: 12,
+        fontWeight: '600',
+        fill: 0xdfede2,
       },
     });
-    this.hud.addChild(this.levelTitle);
+    this.toastText.anchor.set(0.5);
+    this.toastContainer.addChild(this.toastBg, this.toastText);
+    this.hud.addChild(this.toastContainer);
 
-    this.brushLabel = new Text({
-      text: this.brushText(),
+    this.buildUI();
+
+    // 绑定事件
+    this.on('pointerdown', this.onDown);
+    this.on('pointermove', this.onMove);
+    this.on('pointerup', this.onUp);
+    this.on('pointerupoutside', this.onUp);
+
+    this.fit();
+    this.paint();
+    this.layout();
+  }
+
+  private async loadEnemyTextures(): Promise<void> {
+    try {
+      const [spiderTex, flowerTex, dummyTex] = await Promise.all([
+        Assets.load<Texture>('/assets/spider/spider.png'),
+        Assets.load<Texture>('/assets/flame-flower/flame-flower.png'),
+        Assets.load<Texture>('/assets/wooden-dummy/wooden-dummy.png'),
+      ]);
+      if (spiderTex) this.enemyTextures.set('spider', spiderTex);
+      if (flowerTex) this.enemyTextures.set('flame-flower', flowerTex);
+      if (dummyTex) this.enemyTextures.set('wooden-dummy', dummyTex);
+      this.paint();
+    } catch (e) {
+      console.warn('MapEditScene: Failed to load enemy textures', e);
+    }
+  }
+
+  private createBtn(
+    label: string,
+    width: number,
+    baseColor: number,
+    textColor = 0xffffff,
+    onClick?: () => void,
+    fontSize = 13,
+  ): HudBtn {
+    const root = new Container() as HudBtn;
+    root.eventMode = 'static';
+    root.cursor = 'pointer';
+    root.__w = width;
+    root.__h = BTN_HEIGHT;
+    root.__baseColor = baseColor;
+
+    const bg = new Graphics();
+    bg.roundRect(0, 0, width, BTN_HEIGHT, BTN_RADIUS).fill({ color: baseColor });
+    root.__bg = bg;
+
+    const text = new Text({
+      text: label,
       style: {
         fontFamily: 'system-ui, sans-serif',
-        fontSize: 14,
+        fontSize,
         fontWeight: '700',
-        fill: 0xffffff,
+        fill: textColor,
       },
     });
-    this.brushLabel.anchor.set(0.5, 0.5);
-    this.hud.addChild(this.brushLabel);
+    text.anchor.set(0.5);
+    text.position.set(width / 2, BTN_HEIGHT / 2);
+    root.__label = text;
 
-    this.addBtn('涂抹', BTN_MODE, 0xffffff, () => this.setTool('brush'), 60, 'mode', 'brush');
-    this.addBtn('橡皮', BTN_MODE, 0xffffff, () => this.setTool('eraser'), 60, 'mode', 'eraser');
-    this.addBtn('框选', BTN_MODE, 0xffffff, () => this.setTool('box'), 60, 'mode', 'box');
-    this.addBtn('敌人', BTN_MODE, 0xffffff, () => this.setTool('enemy'), 60, 'mode', 'enemy');
-    this.addBtn('起点', BTN_MODE, 0xffffff, () => this.setTool('spawn'), 60, 'mode', 'spawn');
-    this.addBtn(
-      '蜘蛛',
-      ENEMY_COLORS.spider,
-      0xffffff,
-      () => this.setEnemyKind('spider'),
-      60,
-      'enemyKind',
-      'spider',
-    );
-    this.addBtn(
-      '火焰花',
-      ENEMY_COLORS['flame-flower'],
-      0xffffff,
-      () => this.setEnemyKind('flame-flower'),
-      72,
-      'enemyKind',
-      'flame-flower',
-    );
+    root.addChild(bg, text);
 
-    this.addBtn(
-      '−',
-      BTN_BRUSH,
-      0xffffff,
-      () => this.setBrushSize(this.brushSize - 1),
-      36,
-      'brush',
-    );
-    this.addBtn(
-      '+',
-      BTN_BRUSH,
-      0xffffff,
-      () => this.setBrushSize(this.brushSize + 1),
-      36,
-      'brush',
-    );
+    root.setActive = (active: boolean) => {
+      root.__active = active;
+      if (active) {
+        bg.clear()
+          .roundRect(0, 0, width, BTN_HEIGHT, BTN_RADIUS)
+          .fill({ color: 0xf0c040 });
+        text.style.fill = 0x181408;
+      } else {
+        bg.clear()
+          .roundRect(0, 0, width, BTN_HEIGHT, BTN_RADIUS)
+          .fill({ color: baseColor });
+        text.style.fill = textColor;
+      }
+    };
 
-    // 关卡切换（目录）
-    for (const map of getPlayableCatalog()) {
-      const idx = getLevelIndex(map.id);
-      const label = idx >= 0 ? levelDisplayName(idx) : map.id;
-      this.addBtn(
-        label,
-        BTN_LEVEL,
-        0xffffff,
-        () => this.switchLevel(map.id),
-        74,
-        'level',
-        map.id,
-      );
+    root.on('pointerdown', (e) => e.stopPropagation());
+    root.on('pointerover', () => {
+      if (root.__active) return;
+      bg.clear()
+        .roundRect(0, 0, width, BTN_HEIGHT, BTN_RADIUS)
+        .fill({ color: this.lightenColor(baseColor, 0.18) });
+    });
+    root.on('pointerout', () => {
+      if (root.__active) return;
+      bg.clear()
+        .roundRect(0, 0, width, BTN_HEIGHT, BTN_RADIUS)
+        .fill({ color: baseColor });
+    });
+    if (onClick) {
+      root.on('pointertap', (e) => {
+        e.stopPropagation();
+        onClick();
+      });
     }
 
-    this.addBtn('撤销', BTN, 0xffffff, () => this.undo());
-    this.addBtn('预览', BTN_PREVIEW, 0xffffff, () => this.preview());
-    this.addBtn('导出', BTN_MAIN, 0x222222, () => void this.exportCode());
-    this.addBtn('清空', BTN, 0xffffff, () => {
+    return root;
+  }
+
+  private lightenColor(col: number, percent: number): number {
+    let r = (col >> 16) & 0xff;
+    let g = (col >> 8) & 0xff;
+    let b = col & 0xff;
+    r = Math.min(255, Math.floor(r + (255 - r) * percent));
+    g = Math.min(255, Math.floor(g + (255 - g) * percent));
+    b = Math.min(255, Math.floor(b + (255 - b) * percent));
+    return (r << 16) | (g << 8) | b;
+  }
+
+  private buildUI(): void {
+    // 1. 返回按钮
+    this.backBtn = this.createBtn('❮', 34, 0x223326, 0xb8dec2, () => {
+      this.persistCurrentDraft();
+      this.onBack();
+    });
+    this.hud.addChild(this.backBtn);
+
+    // 2. 工具组 Segment
+    const tools: { id: EditTool; label: string; width: number }[] = [
+      { id: 'brush', label: '涂抹', width: 48 },
+      { id: 'eraser', label: '橡皮', width: 48 },
+      { id: 'box', label: '框选', width: 48 },
+      { id: 'enemy', label: '敌人', width: 48 },
+      { id: 'spawn', label: '起点', width: 48 },
+    ];
+
+    for (const t of tools) {
+      const btn = this.createBtn(
+        t.label,
+        t.width,
+        0x213025,
+        0xc4dbc9,
+        () => this.setTool(t.id),
+      );
+      this.toolBtns[t.id] = btn;
+      this.hud.addChild(btn);
+    }
+    this.toolBtns[this.tool].setActive?.(true);
+
+    // 3. 子参数组：画笔大小 (涂抹/橡皮时显示)
+    this.brushSubGroup = new Container();
+    this.brushMinusBtn = this.createBtn('−', 26, 0x2a3d30, 0xffffff, () =>
+      this.setBrushSize(this.brushSize - 1),
+    );
+    this.brushPlusBtn = this.createBtn('+', 26, 0x2a3d30, 0xffffff, () =>
+      this.setBrushSize(this.brushSize + 1),
+    );
+    this.brushLabel = new Text({
+      text: `${this.brushSize}×${this.brushSize}`,
+      style: {
+        fontFamily: 'system-ui, sans-serif',
+        fontSize: 12,
+        fontWeight: '700',
+        fill: 0xffd966,
+      },
+    });
+    this.brushLabel.anchor.set(0.5);
+    this.brushLabel.position.set(40, BTN_HEIGHT / 2);
+
+    this.brushMinusBtn.position.set(0, 0);
+    this.brushPlusBtn.position.set(64, 0);
+    this.brushSubGroup.addChild(
+      this.brushMinusBtn,
+      this.brushLabel,
+      this.brushPlusBtn,
+    );
+    this.hud.addChild(this.brushSubGroup);
+
+    // 4. 子参数组：敌人种类 (敌人模式下显示)
+    this.enemySubGroup = new Container();
+    const enemies: { id: EnemyKind; label: string; width: number; color: number }[] = [
+      { id: 'spider', label: '🕷️ 蜘蛛', width: 68, color: 0x3d284a },
+      { id: 'flame-flower', label: '🌸 火焰花', width: 78, color: 0x4a2a1a },
+      { id: 'wooden-dummy', label: '🪵 木桩', width: 68, color: 0x3a2e1a },
+    ];
+    for (const e of enemies) {
+      const btn = this.createBtn(
+        e.label,
+        e.width,
+        e.color,
+        0xffffff,
+        () => this.setEnemyKind(e.id),
+        12,
+      );
+      this.enemyBtns[e.id] = btn;
+      this.enemySubGroup.addChild(btn);
+    }
+    this.enemyBtns[this.enemyKind].setActive?.(true);
+    this.hud.addChild(this.enemySubGroup);
+
+    // 5. 右侧操作按键组
+    this.undoBtn = this.createBtn('↩ 撤销', 58, 0x243328, 0xd0e8d6, () => this.undo());
+    this.clearBtn = this.createBtn('🗑️ 清空', 58, 0x243328, 0xd0e8d6, () => {
       if (this.cells.size === 0 && this.enemies.length === 0) {
         this.flash('已经是空的');
         return;
@@ -273,26 +400,17 @@ export class MapEditScene extends Container implements GameScene {
       this.paint();
       this.flash('已清空可走区与敌人');
     });
-    this.addBtn('返回', BTN, 0xffffff, () => {
-      this.persistCurrentDraft();
-      this.onBack();
-    });
+    this.previewBtn = this.createBtn('▶ 预览', 62, 0x1b5e3a, 0x73ffaa, () => this.preview());
+    this.exportBtn = this.createBtn('💾 导出', 62, 0x8a6314, 0xffe89e, () => void this.exportCode());
 
-    this.on('pointerdown', this.onDown);
-    this.on('pointermove', this.onMove);
-    this.on('pointerup', this.onUp);
-    this.on('pointerupoutside', this.onUp);
-
-    this.refreshModeButtons();
-    this.refreshEnemyKindButtons();
-    this.refreshLevelButtons();
-    this.refreshLevelTitle();
-    this.fit();
-    this.paint();
-    this.layout();
+    this.hud.addChild(
+      this.undoBtn,
+      this.clearBtn,
+      this.previewBtn,
+      this.exportBtn,
+    );
   }
 
-  /** 把 LevelMapDef 写入编辑缓冲（不改 mapSize 时复用网格） */
   private applyDefData(src: LevelMapDef): void {
     this.levelId = src.id;
     this.mapSize = src.mapSize;
@@ -311,19 +429,10 @@ export class MapEditScene extends Container implements GameScene {
       }
     }
     this.spawn = { ...src.spawn };
-    // 旧关卡无 enemies 字段时，用出生点两侧默认蜘蛛，与 LevelScene 兼容逻辑一致
     if (src.enemies === undefined) {
       this.enemies = [
-        {
-          kind: 'spider',
-          x: src.spawn.x - 180,
-          y: src.spawn.y - 160,
-        },
-        {
-          kind: 'spider',
-          x: src.spawn.x + 180,
-          y: src.spawn.y - 160,
-        },
+        { kind: 'spider', x: src.spawn.x - 180, y: src.spawn.y - 160 },
+        { kind: 'spider', x: src.spawn.x + 180, y: src.spawn.y - 160 },
       ];
     } else {
       this.enemies = src.enemies.map((e) => ({ ...e }));
@@ -333,56 +442,6 @@ export class MapEditScene extends Container implements GameScene {
   private persistCurrentDraft(): LevelMapDef {
     const def = this.toDef();
     return saveMapDraft(def);
-  }
-
-  private switchLevel(id: string): void {
-    if (id === this.levelId) return;
-    // 先存当前关草稿，再加载目标关（草稿优先）
-    this.persistCurrentDraft();
-    const next = getPlayableLevelById(id);
-    if (!next) {
-      this.flash(`找不到关卡 ${id}`);
-      return;
-    }
-    this.painting = null;
-    this.lastCell = null;
-    this.boxStart = null;
-    this.boxEnd = null;
-    this.undoStack.length = 0;
-    this.applyDefData(next);
-    this.refreshLevelButtons();
-    this.refreshLevelTitle();
-    this.fit();
-    this.paint();
-    this.layout();
-    this.flash(
-      hasMapDraft(id)
-        ? `已切换 ${this.levelLabel()}（有草稿）`
-        : `已切换 ${this.levelLabel()}`,
-    );
-  }
-
-  private levelLabel(): string {
-    const idx = getLevelIndex(this.levelId);
-    return idx >= 0 ? levelDisplayName(idx) : this.levelId;
-  }
-
-  private refreshLevelTitle(): void {
-    const draft = hasMapDraft(this.levelId) ? ' · 草稿' : '';
-    this.levelTitle.text = `编辑：${this.levelLabel()}${draft}`;
-  }
-
-  private refreshLevelButtons(): void {
-    for (const b of this.actionBtns) {
-      if (b.__group !== 'level') continue;
-      const on = b.__id === this.levelId;
-      const color = on ? BTN_LEVEL_ON : b.__baseColor;
-      b.__bg
-        .clear()
-        .roundRect(0, 0, b.__w, BTN_HEIGHT, BTN_RADIUS)
-        .fill({ color });
-      b.__label.style.fill = on ? 0x1a1200 : 0xffffff;
-    }
   }
 
   private preview(): void {
@@ -396,12 +455,7 @@ export class MapEditScene extends Container implements GameScene {
       return;
     }
     const saved = saveMapDraft(def);
-    this.refreshLevelTitle();
     this.onPreview(saved);
-  }
-
-  private brushText(): string {
-    return `笔 ${this.brushSize}×${this.brushSize}`;
   }
 
   private defaultTip(): string {
@@ -412,12 +466,12 @@ export class MapEditScene extends Container implements GameScene {
       return '框选：拖矩形批量挖/擦格子 · 滚轮缩放';
     }
     if (this.tool === 'enemy') {
-      return `敌人（${this.enemyKindName(this.enemyKind)}）：左键放 · 右键删 · ${this.enemies.length} 只 · 滚轮缩放`;
+      return `敌人（${this.enemyKindName(this.enemyKind)}）：点击放置 / 再次点击删除 · 现有 ${this.enemies.length} 只 · 滚轮缩放`;
     }
     if (this.tool === 'spawn') {
       return '起点：点击地图放置玩家出生点 · 滚轮缩放';
     }
-    return `涂抹：左键挖 · 右键擦 · 笔 ${this.brushSize} · 滚轮缩放`;
+    return `涂抹：左键挖洞 · 右键擦除 · 笔 ${this.brushSize} · 滚轮缩放`;
   }
 
   private takeSnapshot(): EditSnapshot {
@@ -435,7 +489,6 @@ export class MapEditScene extends Container implements GameScene {
     this.enemies = s.enemies.map((e) => ({ ...e }));
   }
 
-  /** 在修改前压栈；同一次笔触只压一次 */
   private pushUndo(): void {
     this.undoStack.push(this.takeSnapshot());
     if (this.undoStack.length > UNDO_MAX) {
@@ -449,7 +502,6 @@ export class MapEditScene extends Container implements GameScene {
       this.flash('没有可撤销的操作');
       return;
     }
-    // 中断进行中的笔触
     this.painting = null;
     this.lastCell = null;
     this.boxStart = null;
@@ -461,7 +513,10 @@ export class MapEditScene extends Container implements GameScene {
 
   private setTool(tool: EditTool): void {
     if (this.tool === tool) return;
+    this.toolBtns[this.tool]?.setActive?.(false);
     this.tool = tool;
+    this.toolBtns[this.tool]?.setActive?.(true);
+
     this.painting = null;
     this.lastCell = null;
     this.boxStart = null;
@@ -472,8 +527,7 @@ export class MapEditScene extends Container implements GameScene {
         : tool === 'enemy' || tool === 'spawn'
           ? 'pointer'
           : 'cell';
-    this.refreshModeButtons();
-    this.refreshEnemyKindButtons();
+
     this.layout();
     this.flash(
       tool === 'eraser'
@@ -493,47 +547,24 @@ export class MapEditScene extends Container implements GameScene {
     const next = Math.min(BRUSH_MAX, Math.max(BRUSH_MIN, Math.round(n)));
     if (next === this.brushSize) return;
     this.brushSize = next;
-    this.brushLabel.text = this.brushText();
+    this.brushLabel.text = `${this.brushSize}×${this.brushSize}`;
     this.flash(`画笔 ${this.brushSize}×${this.brushSize} 格`);
     this.paint();
   }
 
   private setEnemyKind(kind: EnemyKind): void {
     if (this.enemyKind === kind) return;
+    this.enemyBtns[this.enemyKind]?.setActive?.(false);
     this.enemyKind = kind;
-    this.refreshEnemyKindButtons();
+    this.enemyBtns[this.enemyKind]?.setActive?.(true);
     this.paint();
     this.flash(`当前怪物：${this.enemyKindName(kind)}`);
   }
 
   private enemyKindName(kind: EnemyKind): string {
-    return kind === 'flame-flower' ? '火焰花' : '蜘蛛';
-  }
-
-  private refreshModeButtons(): void {
-    for (const b of this.actionBtns) {
-      if (b.__group !== 'mode') continue;
-      const on = b.__id === this.tool;
-      const color = on ? BTN_MODE_ON : b.__baseColor;
-      b.__bg
-        .clear()
-        .roundRect(0, 0, b.__w, BTN_HEIGHT, BTN_RADIUS)
-        .fill({ color });
-      b.__label.style.fill = on ? 0x1a1200 : 0xffffff;
-    }
-  }
-
-  private refreshEnemyKindButtons(): void {
-    for (const b of this.actionBtns) {
-      if (b.__group !== 'enemyKind') continue;
-      const on = b.__id === this.enemyKind;
-      const color = on ? BTN_MODE_ON : b.__baseColor;
-      b.__bg
-        .clear()
-        .roundRect(0, 0, b.__w, BTN_HEIGHT, BTN_RADIUS)
-        .fill({ color });
-      b.__label.style.fill = on ? 0x1a1200 : 0xffffff;
-    }
+    if (kind === 'flame-flower') return '火焰花';
+    if (kind === 'wooden-dummy') return '木桩';
+    return '蜘蛛';
   }
 
   private toDef(): LevelMapDef {
@@ -549,7 +580,6 @@ export class MapEditScene extends Container implements GameScene {
     );
   }
 
-  /** 找距离世界点最近的敌人索引；超出拾取半径返回 -1 */
   private nearestEnemyIndex(wx: number, wy: number): number {
     const maxDist = this.cellSize * ENEMY_PICK_CELLS;
     let best = -1;
@@ -565,15 +595,23 @@ export class MapEditScene extends Container implements GameScene {
     return best;
   }
 
-  private placeEnemyAtCell(c: number, r: number): void {
+  private placeEnemyAtCell(c: number, r: number, wx: number, wy: number): void {
     const pos = cellCenter(c, r, this.mapSize, this.cellSize);
-    const dup = this.enemies.some(
-      (e) => Math.hypot(e.x - pos.x, e.y - pos.y) < this.cellSize * 0.25,
+    // 检查当前格或点击位置附近是否有已有敌人 (若有，再次点击即删除)
+    const existingIdx = this.enemies.findIndex(
+      (e) =>
+        Math.hypot(e.x - pos.x, e.y - pos.y) < this.cellSize * 0.75 ||
+        Math.hypot(e.x - wx, e.y - wy) < this.cellSize * ENEMY_PICK_CELLS * 0.8,
     );
-    if (dup) {
-      this.flash('这一格已有敌人');
+
+    if (existingIdx >= 0) {
+      this.pushUndo();
+      const [removed] = this.enemies.splice(existingIdx, 1);
+      const name = removed ? this.enemyKindName(removed.kind) : '敌人';
+      this.flash(`已删除${name}（剩余 ${this.enemies.length}）`);
       return;
     }
+
     this.pushUndo();
     this.enemies.push({ kind: this.enemyKind, x: pos.x, y: pos.y });
     const name = this.enemyKindName(this.enemyKind);
@@ -585,98 +623,6 @@ export class MapEditScene extends Container implements GameScene {
     );
   }
 
-  private removeNearestEnemy(wx: number, wy: number): void {
-    const idx = this.nearestEnemyIndex(wx, wy);
-    if (idx < 0) {
-      this.flash('附近没有敌人');
-      return;
-    }
-    this.pushUndo();
-    const [removed] = this.enemies.splice(idx, 1);
-    this.flash(
-      `已删除${removed ? this.enemyKindName(removed.kind) : '敌人'}（剩余 ${this.enemies.length}）`,
-    );
-  }
-
-  private addBtn(
-    label: string,
-    color: number,
-    textColor: number,
-    onClick: () => void,
-    width = 74,
-    group: 'action' | 'brush' | 'mode' | 'enemyKind' | 'level' = 'action',
-    id?: string,
-  ): void {
-    const w = width;
-    const h = BTN_HEIGHT;
-    const root = new Container() as HudBtn;
-    root.eventMode = 'static';
-    root.cursor = 'pointer';
-    const bg = new Graphics();
-    bg.roundRect(0, 0, w, h, BTN_RADIUS).fill({ color });
-    const text = new Text({
-      text: label,
-      style: {
-        fontFamily: 'system-ui, sans-serif',
-        fontSize: 14,
-        fontWeight: '700',
-        fill: textColor,
-      },
-    });
-    text.anchor.set(0.5);
-    text.position.set(w / 2, h / 2);
-    root.addChild(bg, text);
-    root.__w = w;
-    root.__group = group;
-    root.__id = id;
-    root.__baseColor = color;
-    root.__bg = bg;
-    root.__label = text;
-
-    root.on('pointerdown', (e) => e.stopPropagation());
-    root.on('pointerover', () => {
-      if (group === 'mode' && root.__id === this.tool) return;
-      if (group === 'enemyKind' && root.__id === this.enemyKind) return;
-      if (group === 'level' && root.__id === this.levelId) return;
-      const hover =
-        color === BTN_MAIN
-          ? 0xffd86a
-          : color === BTN_PREVIEW
-            ? 0x52b08a
-            : color === BTN_BRUSH
-              ? 0x6a8aaa
-              : color === BTN_MODE
-                ? 0x5a6a7c
-                : color === BTN_LEVEL
-                  ? 0x6a7a9a
-                  : BTN_HOVER;
-      bg
-        .clear()
-        .roundRect(0, 0, w, h, BTN_RADIUS)
-        .fill({ color: hover });
-    });
-    root.on('pointerout', () => {
-      if (group === 'mode') {
-        this.refreshModeButtons();
-        return;
-      }
-      if (group === 'enemyKind') {
-        this.refreshEnemyKindButtons();
-        return;
-      }
-      if (group === 'level') {
-        this.refreshLevelButtons();
-        return;
-      }
-      bg.clear().roundRect(0, 0, w, h, BTN_RADIUS).fill({ color });
-    });
-    root.on('pointertap', (e) => {
-      e.stopPropagation();
-      onClick();
-    });
-    this.hud.addChild(root);
-    this.actionBtns.push(root);
-  }
 
   private fit(): void {
     this.zoom =
@@ -701,7 +647,6 @@ export class MapEditScene extends Container implements GameScene {
     };
   }
 
-  /** 映射到格子并 clamp 到地图内 */
   private cellAtScreenLoose(
     sx: number,
     sy: number,
@@ -759,7 +704,6 @@ export class MapEditScene extends Container implements GameScene {
     this.lastCell = { c, r };
   }
 
-  /** 轴对齐格子矩形（含端点） */
   private normalizeBox(
     a: { c: number; r: number },
     b: { c: number; r: number },
@@ -783,6 +727,23 @@ export class MapEditScene extends Container implements GameScene {
         this.stampCell(c, r, dig);
       }
     }
+  }
+
+  private removeEnemiesInBox(
+    a: { c: number; r: number },
+    b: { c: number; r: number },
+  ): number {
+    const { c0, r0, c1, r1 } = this.normalizeBox(a, b);
+    let count = 0;
+    for (let i = this.enemies.length - 1; i >= 0; i--) {
+      const e = this.enemies[i]!;
+      const cell = worldToCell(e.x, e.y, this.mapSize, this.cellSize);
+      if (cell.c >= c0 && cell.c <= c1 && cell.r >= r0 && cell.r <= r1) {
+        this.enemies.splice(i, 1);
+        count++;
+      }
+    }
+    return count;
   }
 
   private onDown = (e: {
@@ -809,11 +770,13 @@ export class MapEditScene extends Container implements GameScene {
     }
 
     if (this.tool === 'enemy') {
+      const w = this.toWorld(e.global.x, e.global.y);
       if (e.button === 0) {
-        this.placeEnemyAtCell(cell.c, cell.r);
+        this.placeEnemyAtCell(cell.c, cell.r, w.x, w.y);
       } else if (e.button === 2) {
-        const w = this.toWorld(e.global.x, e.global.y);
-        this.removeNearestEnemy(w.x, w.y);
+        this.painting = 'fill';
+        this.boxStart = { ...cell };
+        this.boxEnd = { ...cell };
       }
       this.paint();
       return;
@@ -832,7 +795,6 @@ export class MapEditScene extends Container implements GameScene {
       return;
     }
 
-    // 涂抹 / 橡皮擦：下笔前压栈（整段拖动算一步）
     this.pushUndo();
     this.painting = dig ? 'dig' : 'fill';
     this.lastCell = null;
@@ -844,7 +806,11 @@ export class MapEditScene extends Container implements GameScene {
     const cell = this.cellAtScreenLoose(e.global.x, e.global.y);
     this.hoverCell = cell;
 
-    if (this.painting && this.tool === 'box' && this.boxStart) {
+    if (
+      this.painting &&
+      (this.tool === 'box' || this.tool === 'enemy') &&
+      this.boxStart
+    ) {
       this.boxEnd = { ...cell };
       this.paint();
       return;
@@ -858,24 +824,54 @@ export class MapEditScene extends Container implements GameScene {
 
   private onUp = (): void => {
     if (
-      this.tool === 'box' &&
+      (this.tool === 'box' || this.tool === 'enemy') &&
       this.painting &&
       this.boxStart &&
       this.boxEnd
     ) {
-      const dig = this.painting === 'dig';
+      const isErase = this.painting === 'fill';
       this.pushUndo();
-      this.fillBox(this.boxStart, this.boxEnd, dig);
-      const box = this.normalizeBox(this.boxStart, this.boxEnd);
-      const w = box.c1 - box.c0 + 1;
-      const h = box.r1 - box.r0 + 1;
-      this.flash(
-        dig
-          ? `框选挖洞 ${w}×${h} 格`
-          : `框选修除 ${w}×${h} 格`,
-      );
+
+      if (this.tool === 'box') {
+        const dig = this.painting === 'dig';
+        this.fillBox(this.boxStart, this.boxEnd, dig);
+        const removed = isErase
+          ? this.removeEnemiesInBox(this.boxStart, this.boxEnd)
+          : 0;
+        const box = this.normalizeBox(this.boxStart, this.boxEnd);
+        const w = box.c1 - box.c0 + 1;
+        const h = box.r1 - box.r0 + 1;
+        const enemyMsg = removed > 0 ? ` · 清除 ${removed} 个敌人` : '';
+        this.flash(
+          dig
+            ? `框选挖洞 ${w}×${h} 格`
+            : `框选擦除 ${w}×${h} 格${enemyMsg}`,
+        );
+      } else if (this.tool === 'enemy') {
+        const removed = this.removeEnemiesInBox(this.boxStart, this.boxEnd);
+        if (removed > 0) {
+          this.flash(
+            `已框选删除 ${removed} 个敌人（剩余 ${this.enemies.length}）`,
+          );
+        } else {
+          const w = cellCenter(
+            this.boxStart.c,
+            this.boxStart.r,
+            this.mapSize,
+            this.cellSize,
+          );
+          const idx = this.nearestEnemyIndex(w.x, w.y);
+          if (idx >= 0) {
+            const [rem] = this.enemies.splice(idx, 1);
+            this.flash(
+              `已删除${rem ? this.enemyKindName(rem.kind) : '敌人'}（剩余 ${this.enemies.length}）`,
+            );
+          } else {
+            this.flash('框选区域内没有敌人');
+          }
+        }
+      }
     }
-    // 涂抹若完全没改到格子，去掉刚压的空步（可选简化：保留也行）
     this.painting = null;
     this.lastCell = null;
     this.boxStart = null;
@@ -883,10 +879,51 @@ export class MapEditScene extends Container implements GameScene {
     this.paint();
   };
 
+  private renderEnemyNode(
+    kind: EnemyKind,
+    x: number,
+    y: number,
+    _sw: number,
+    alpha = 1,
+  ): Container {
+    const node = new Container();
+    node.position.set(x, y);
+    node.alpha = alpha;
+
+    // 敌人真实图片标记
+    const tex = this.enemyTextures.get(kind);
+    if (tex) {
+      const sp = new Sprite(tex);
+      sp.anchor.set(0.5, 0.5);
+      const targetDim = this.cellSize * 3.0;
+      const scale = targetDim / Math.max(tex.width, tex.height);
+      sp.scale.set(scale);
+      node.addChild(sp);
+    } else {
+      // 兜底大号符号
+      const textLabel = new Text({
+        text:
+          kind === 'flame-flower'
+            ? '🌸'
+            : kind === 'wooden-dummy'
+              ? '🪵'
+              : '🕷️',
+        style: { fontSize: Math.round(this.cellSize * 1.1) },
+      });
+      textLabel.anchor.set(0.5);
+      node.addChild(textLabel);
+    }
+
+    return node;
+  }
+
   private paint(): void {
     const half = this.mapSize / 2;
     const sw = 1 / Math.max(this.zoom, 0.05);
     this.gfx.clear();
+    this.enemyLayer.removeChildren();
+
+    // 1. 背景与网格
     this.gfx.rect(-half, -half, this.mapSize, this.mapSize).fill({
       color: FOREST,
     });
@@ -908,6 +945,7 @@ export class MapEditScene extends Container implements GameScene {
       this.gfx.moveTo(-half, y).lineTo(half, y).stroke();
     }
 
+    // 2. 可走格子
     for (const k of this.cells) {
       const c = k % this.cols;
       const r = (k / this.cols) | 0;
@@ -917,7 +955,7 @@ export class MapEditScene extends Container implements GameScene {
         .fill({ color: HOLE, alpha: 0.55 });
     }
 
-    // 框选预览
+    // 3. 工具模式选框 / 涂抹 / 框选预览
     if (this.tool === 'box' && this.boxStart && this.boxEnd) {
       const { c0, r0, c1, r1 } = this.normalizeBox(this.boxStart, this.boxEnd);
       const o = cellOrigin(c0, r0, this.mapSize, this.cellSize);
@@ -936,7 +974,6 @@ export class MapEditScene extends Container implements GameScene {
           alpha: 0.95,
         });
     } else if ((this.tool === 'brush' || this.tool === 'eraser') && this.hoverCell) {
-      // 画笔 / 橡皮擦预览
       const s = this.brushSize;
       const halfB = Math.floor((s - 1) / 2);
       const o = cellOrigin(
@@ -951,11 +988,10 @@ export class MapEditScene extends Container implements GameScene {
         .fill({ color: isEraser ? 0xff4444 : 0xffffff, alpha: isEraser ? 0.2 : 0.12 })
         .stroke({ width: sw * 2, color: isEraser ? 0xff6666 : 0xffe14a, alpha: 0.9 });
     } else if (
-      (this.tool === 'box' || this.tool === 'enemy' || this.tool === 'spawn') &&
+      (this.tool === 'box' || this.tool === 'spawn') &&
       this.hoverCell &&
       !this.painting
     ) {
-      // 框选 / 敌人 / 出生点空闲时高亮当前格
       const o = cellOrigin(
         this.hoverCell.c,
         this.hoverCell.r,
@@ -966,50 +1002,36 @@ export class MapEditScene extends Container implements GameScene {
         .rect(o.x, o.y, this.cellSize, this.cellSize)
         .stroke({
           width: sw * 2,
-          color:
-            this.tool === 'enemy'
-              ? ENEMY_COLORS[this.enemyKind]
-              : this.tool === 'spawn'
-                ? SPAWN
-                : 0xffe14a,
+          color: this.tool === 'spawn' ? SPAWN : 0xffe14a,
           alpha: 0.7,
         });
     }
 
-    // 颜色和中心符号区分怪物类型。
-    const enemyR = this.cellSize * 0.5;
+    // 4. 渲染所有敌人真实图片标记描点
     for (const e of this.enemies) {
-      this.gfx.circle(e.x, e.y, enemyR).fill({
-        color: ENEMY_COLORS[e.kind],
-        alpha: 0.9,
-      });
-      this.gfx.circle(e.x, e.y, enemyR).stroke({
-        width: sw * 2.5,
-        color: 0xffffff,
-        alpha: 0.85,
-      });
-      const arm = enemyR * 0.45;
-      if (e.kind === 'flame-flower') {
-        this.gfx
-          .moveTo(e.x, e.y - arm)
-          .lineTo(e.x, e.y + arm)
-          .stroke({ width: sw * 2, color: 0xffffff, alpha: 0.95 });
-        this.gfx
-          .moveTo(e.x - arm, e.y)
-          .lineTo(e.x + arm, e.y)
-          .stroke({ width: sw * 2, color: 0xffffff, alpha: 0.95 });
-      } else {
-        this.gfx
-          .moveTo(e.x - arm, e.y - arm)
-          .lineTo(e.x + arm, e.y + arm)
-          .stroke({ width: sw * 2, color: 0xffffff, alpha: 0.95 });
-        this.gfx
-          .moveTo(e.x + arm, e.y - arm)
-          .lineTo(e.x - arm, e.y + arm)
-          .stroke({ width: sw * 2, color: 0xffffff, alpha: 0.95 });
-      }
+      const node = this.renderEnemyNode(e.kind, e.x, e.y, sw, 1);
+      this.enemyLayer.addChild(node);
     }
 
+    // 5. 如果正处于【敌人】模式且鼠标悬停格子上，绘制敌人真实图片半透明放置预览
+    if (this.tool === 'enemy' && this.hoverCell && !this.painting) {
+      const pos = cellCenter(
+        this.hoverCell.c,
+        this.hoverCell.r,
+        this.mapSize,
+        this.cellSize,
+      );
+      const ghostNode = this.renderEnemyNode(
+        this.enemyKind,
+        pos.x,
+        pos.y,
+        sw,
+        0.5,
+      );
+      this.enemyLayer.addChild(ghostNode);
+    }
+
+    // 6. 出生点标记
     this.gfx.circle(this.spawn.x, this.spawn.y, this.cellSize * 0.7).fill({
       color: SPAWN,
       alpha: 0.95,
@@ -1026,7 +1048,7 @@ export class MapEditScene extends Container implements GameScene {
       return;
     }
     if (!isSpawnValid(def)) {
-      this.flash('请把出生点放到洞里（Shift+点击）');
+      this.flash('请把出生点放到洞里');
       return;
     }
     const exportName =
@@ -1045,71 +1067,103 @@ export class MapEditScene extends Container implements GameScene {
   }
 
   private flash(msg: string): void {
-    this.tip.text = msg;
+    this.toastText.text = msg;
     this.tipTimer = 2.8;
+    this.updateToastLayout();
+  }
+
+  private updateToastLayout(): void {
+    const textW = this.toastText.width;
+    const paddingX = 16;
+    const toastW = Math.max(120, textW + paddingX * 2);
+    const toastH = 26;
+
+    this.toastBg
+      .clear()
+      .roundRect(-toastW / 2, -toastH / 2, toastW, toastH, 13)
+      .fill({ color: 0x0f1c13, alpha: 0.88 })
+      .stroke({ color: 0x36543e, width: 1 });
+
+    this.toastContainer.position.set(this.viewW / 2, this.viewH - 24);
   }
 
   private layout(): void {
-    // 右上：预览 / 导出 / 清空 / 返回 …
-    let x = this.viewW - 8;
-    for (let i = this.actionBtns.length - 1; i >= 0; i--) {
-      const b = this.actionBtns[i]!;
-      if (b.__group !== 'action') continue;
-      x -= b.__w;
-      b.position.set(x, 8);
-      x -= 6;
+    const btnY = (HEADER_HEIGHT - BTN_HEIGHT) / 2;
+    const gap = 6;
+
+    // 1. Top Header 背景线
+    this.topBarGfx
+      .clear()
+      .rect(0, 0, this.viewW, HEADER_HEIGHT)
+      .fill({ color: 0x0f1712, alpha: 0.9 })
+      .moveTo(0, HEADER_HEIGHT)
+      .lineTo(this.viewW, HEADER_HEIGHT)
+      .stroke({ color: 0x273d2d, width: 1 });
+
+    // 2. 左侧组：[返回]
+    let leftX = 10;
+    this.backBtn.position.set(leftX, btnY);
+    leftX += this.backBtn.__w + gap + 4;
+
+    // 3. 中间组：工具按钮 Segment
+    let toolX = leftX;
+    const toolOrder: EditTool[] = ['brush', 'eraser', 'box', 'enemy', 'spawn'];
+    for (const id of toolOrder) {
+      const btn = this.toolBtns[id];
+      if (btn) {
+        btn.position.set(toolX, btnY);
+        toolX += btn.__w + 2;
+      }
     }
+    toolX += gap + 4;
 
-    // 左上：提示 + 关卡标题
-    this.tip.position.set(10, 8);
-    this.levelTitle.position.set(10, 28);
-
-    // 第二行：工具 + 笔粗
-    let bx = 10;
-    const by = 48;
-    for (const b of this.actionBtns) {
-      if (b.__group !== 'mode') continue;
-      b.position.set(bx, by);
-      bx += b.__w + 6;
-    }
-    bx += 6;
-
+    // 4. 动态子参数组挂接在工具右边
     const showBrush = this.tool === 'brush' || this.tool === 'eraser';
-    this.brushLabel.visible = showBrush;
-    const brushBtns = this.actionBtns.filter((b) => b.__group === 'brush');
-    for (const b of brushBtns) b.visible = showBrush;
-
+    this.brushSubGroup.visible = showBrush;
     if (showBrush) {
-      if (brushBtns[0]) {
-        brushBtns[0].position.set(bx, by);
-        bx += brushBtns[0].__w + 6;
-      }
-      this.brushLabel.position.set(bx + 32, by + BTN_HEIGHT / 2);
-      bx += 70;
-      if (brushBtns[1]) {
-        brushBtns[1].position.set(bx, by);
-      }
+      this.brushSubGroup.position.set(toolX, btnY);
+      toolX += 94 + gap;
     }
 
-    const showEnemyKinds = this.tool === 'enemy';
-    const enemyKindBtns = this.actionBtns.filter(
-      (b) => b.__group === 'enemyKind',
-    );
-    for (const b of enemyKindBtns) {
-      b.visible = showEnemyKinds;
-      if (!showEnemyKinds) continue;
-      b.position.set(bx, by);
-      bx += b.__w + 6;
+    const showEnemy = this.tool === 'enemy';
+    this.enemySubGroup.visible = showEnemy;
+    if (showEnemy) {
+      let enemyX = 0;
+      const enemyOrder: EnemyKind[] = [
+        'spider',
+        'flame-flower',
+        'wooden-dummy',
+      ];
+      for (const k of enemyOrder) {
+        const btn = this.enemyBtns[k];
+        if (btn) {
+          btn.position.set(enemyX, 0);
+          enemyX += btn.__w + 4;
+        }
+      }
+      this.enemySubGroup.position.set(toolX, btnY);
+      toolX += enemyX + gap;
     }
 
-    // 第三行：关卡切换
-    let lx = 10;
-    const ly = 88;
-    for (const b of this.actionBtns) {
-      if (b.__group !== 'level') continue;
-      b.position.set(lx, ly);
-      lx += b.__w + 6;
+    // 5. 右侧组：操作按钮逆序靠右对齐
+    let rightX = this.viewW - 10;
+    const rightGroup = [
+      this.exportBtn,
+      this.previewBtn,
+      this.clearBtn,
+      this.undoBtn,
+    ];
+    for (const btn of rightGroup) {
+      rightX -= btn.__w;
+      btn.position.set(rightX, btnY);
+      rightX -= gap;
     }
+
+    // 6. Toast 布局更新
+    if (this.tipTimer <= 0) {
+      this.toastText.text = this.defaultTip();
+    }
+    this.updateToastLayout();
   }
 
   private readonly onWheel = (e: WheelEvent): void => {
@@ -1133,12 +1187,16 @@ export class MapEditScene extends Container implements GameScene {
     this.onBackground?.(BG);
     window.addEventListener('wheel', this.onWheel, { passive: false });
     window.addEventListener('contextmenu', this.onContext);
+    void this.loadEnemyTextures();
   }
 
   update(deltaMS: number): void {
     if (this.tipTimer > 0) {
       this.tipTimer -= deltaMS / 1000;
-      if (this.tipTimer <= 0) this.tip.text = this.defaultTip();
+      if (this.tipTimer <= 0) {
+        this.toastText.text = this.defaultTip();
+        this.updateToastLayout();
+      }
     }
   }
 
