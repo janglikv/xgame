@@ -237,9 +237,15 @@ export abstract class PlayerCharacterBase
   /**
    * Q 键特技：默认无；子类覆盖。
    * @param combat 远程战斗服务（剑阵等免费投射物）
+   * @param ctx 出场/特效上下文（残影等世界 FX）
+   * @param aim 指针相对脚底的世界瞄准向量（未归一化）；缺省时角色自定 fallback
    * @returns 是否成功发动
    */
-  trySpecialAbility(_combat?: RangedCombatServices): boolean {
+  trySpecialAbility(
+    _combat?: RangedCombatServices,
+    _ctx?: EntranceContext,
+    _aim?: RangedAim,
+  ): boolean {
     return false;
   }
 

@@ -37,7 +37,21 @@ const STUCK_LIFE = 0.2;
 /** 每帧最大步进（避免高速穿模） */
 const MAX_STEP = 18;
 
+/** 剑阵：径向减速就位时长（秒） */
+const FORMATION_DEPLOY_DURATION = 0.32;
+/** 剑阵：就位后停顿再发射（秒） */
+const FORMATION_HOLD_DURATION = 0.1;
+/** 剑阵：加速发射初速（像素/秒） */
+const FORMATION_LAUNCH_START_SPEED = 60;
+/** 剑阵：加速发射最大速度（像素/秒） */
+const FORMATION_LAUNCH_MAX_SPEED = 900;
+/** 剑阵：发射加速度（像素/秒²） */
+const FORMATION_LAUNCH_ACCEL = 3200;
+
 export type SpearPhase = 'flying' | 'holding' | 'stuck' | 'done';
+
+/** 内部运动模式：普攻直线 / 剑阵就位 / 剑阵发射 */
+type SpearMotion = 'linear' | 'deploy' | 'launch';
 
 export type SpearHitResult = {
   damage: number;
@@ -62,8 +76,20 @@ export type SpearProjectileOptions = {
   holdAtRange?: boolean;
   /** 贴图缩放，默认 SPEAR_SCALE */
   scale?: number;
-  /** 剑阵矛：可被 Q 重发 / 切角色时批量清掉 */
+  /** 剑阵矛：可被 Q 重发 / 切角色时批量清掉；启用减速就位→加速发射 */
   formation?: boolean;
+  /**
+   * 贴图朝向 / 发射目标的世界落点。
+   * 剑阵就位时矛尖指向该点；发射时飞向该点。
+   */
+  faceWorldX?: number;
+  faceWorldY?: number;
+  /** 就位时长（秒），仅 formation */
+  deployDuration?: number;
+  /** 就位后停顿（秒），仅 formation */
+  holdDuration?: number;
+  /** 发射最大速度，仅 formation */
+  launchSpeed?: number;
 };
 
 let sharedSpear: Texture | null = null;
@@ -80,13 +106,14 @@ export function getSpearTexture(): Texture | null {
 }
 
 /**
- * 直线长矛投射物：沿固定方向匀速飞行，
- * 碰到敌人 / 树墙 / 地图边界后钉住并销毁。
+ * 直线长矛投射物。
+ * - 普攻：沿固定方向匀速飞行，撞敌/墙钉住。
+ * - 剑阵：减速就位 → 短暂停顿 → 朝目标加速发射。
  */
 export class SpearProjectile extends Container {
   private readonly sprite: Sprite;
-  private readonly dirX: number;
-  private readonly dirY: number;
+  private dirX: number;
+  private dirY: number;
   private readonly speed: number;
   private readonly originHeight: number;
   private readonly maxRange: number;
@@ -94,11 +121,23 @@ export class SpearProjectile extends Container {
   private readonly visualScale: number;
   /** 剑阵矛标记（供战斗系统批量清理） */
   readonly isFormation: boolean;
+  /** 贴图朝向 / 发射落点；null = 跟飞行方向 */
+  private faceWorld: { x: number; y: number } | null;
+
+  private motion: SpearMotion;
+  private readonly spawnX: number;
+  private readonly spawnY: number;
+  private readonly deployDuration: number;
+  private readonly holdDuration: number;
+  private readonly launchMaxSpeed: number;
+  private deployElapsed = 0;
+  private holdElapsed = 0;
+  private currentSpeed = 0;
 
   private phase: SpearPhase = 'flying';
   private stuckElapsed = 0;
   private hitResolved = false;
-  /** 已飞行路程（世界像素） */
+  /** 已飞行路程（世界像素）；linear / launch 用 */
   private traveled = 0;
 
   /** 地面投影坐标 */
@@ -139,16 +178,46 @@ export class SpearProjectile extends Container {
     this.holdAtRange = options.holdAtRange === true;
     this.visualScale = options.scale ?? SPEAR_SCALE;
     this.isFormation = options.formation === true;
+    this.faceWorld =
+      options.faceWorldX !== undefined && options.faceWorldY !== undefined
+        ? { x: options.faceWorldX, y: options.faceWorldY }
+        : null;
+
+    this.spawnX = startX;
+    this.spawnY = startY;
     this.groundX = startX;
     this.groundY = startY;
     this.flightHeight = this.originHeight;
 
+    // 剑阵 + 就位：减速展开；否则普攻匀速
+    if (this.isFormation && this.holdAtRange && this.maxRange < Number.POSITIVE_INFINITY) {
+      this.motion = 'deploy';
+      this.deployDuration = Math.max(
+        0.05,
+        options.deployDuration ?? FORMATION_DEPLOY_DURATION,
+      );
+      this.holdDuration = Math.max(
+        0,
+        options.holdDuration ?? FORMATION_HOLD_DURATION,
+      );
+      this.launchMaxSpeed = Math.max(
+        80,
+        options.launchSpeed ?? FORMATION_LAUNCH_MAX_SPEED,
+      );
+    } else {
+      this.motion = 'linear';
+      this.deployDuration = FORMATION_DEPLOY_DURATION;
+      this.holdDuration = FORMATION_HOLD_DURATION;
+      this.launchMaxSpeed = this.speed;
+      this.currentSpeed = this.speed;
+    }
+
     this.sprite = new Sprite(sharedSpear);
     this.sprite.anchor.set(0.5, 0.5);
     this.sprite.scale.set(this.visualScale);
-    this.sprite.rotation = Math.atan2(this.dirY, this.dirX) - SPEAR_TEX_ANGLE;
     this.sprite.label = 'SpearSprite';
     this.addChild(this.sprite);
+    this.applyFacingRotation();
   }
 
   getPhase(): SpearPhase {
@@ -214,46 +283,15 @@ export class SpearProjectile extends Container {
     const dt = deltaMS / 1000;
 
     if (this.phase === 'flying') {
-      let remain = this.speed * dt;
-      while (remain > 1e-4 && this.phase === 'flying') {
-        const step = Math.min(MAX_STEP, remain);
-        remain -= step;
-
-        // 到达最大射程：悬停成阵
-        if (this.holdAtRange && this.traveled + step >= this.maxRange) {
-          const left = this.maxRange - this.traveled;
-          if (left > 1e-4) {
-            const nx = this.groundX + this.dirX * left;
-            const ny = this.groundY + this.dirY * left;
-            if (this.isBlocked(nx, ny)) {
-              this.phase = 'stuck';
-              this.stuckElapsed = 0;
-              break;
-            }
-            this.groundX = nx;
-            this.groundY = ny;
-          }
-          this.traveled = this.maxRange;
-          this.phase = 'holding';
-          break;
-        }
-
-        const nx = this.groundX + this.dirX * step;
-        const ny = this.groundY + this.dirY * step;
-
-        if (this.isBlocked(nx, ny)) {
-          // 贴到障碍前最后一格可走点
-          this.phase = 'stuck';
-          this.stuckElapsed = 0;
-          break;
-        }
-
-        this.groundX = nx;
-        this.groundY = ny;
-        this.traveled += step;
+      if (this.motion === 'deploy') {
+        this.updateDeploy(dt);
+      } else if (this.motion === 'launch') {
+        this.updateLaunch(dt);
+      } else {
+        this.updateLinear(dt);
       }
     } else if (this.phase === 'holding') {
-      // 悬停成阵：静止，可继续被命中检测
+      this.updateHolding(dt);
     } else if (this.phase === 'stuck') {
       this.stuckElapsed += dt;
       const p = Math.min(1, this.stuckElapsed / STUCK_LIFE);
@@ -264,12 +302,151 @@ export class SpearProjectile extends Container {
       }
     }
 
+    // 飞行/悬停：刷新矛尖朝向
+    if (this.phase === 'flying' || this.phase === 'holding') {
+      this.applyFacingRotation();
+    }
+
     return this.phase;
   }
 
   syncToWorld(): void {
     this.position.set(this.groundX, this.groundY - this.flightHeight);
     this.zIndex = this.groundY + this.flightHeight * 0.01;
+  }
+
+  /**
+   * 剑阵就位：ease-out 减速落到阵位（快出慢停）。
+   */
+  private updateDeploy(dt: number): void {
+    this.deployElapsed += dt;
+    const u = Math.min(1, this.deployElapsed / this.deployDuration);
+    // ease-out cubic：初速快、到位时接近 0
+    const eased = 1 - (1 - u) * (1 - u) * (1 - u);
+    const dist = this.maxRange * eased;
+    const nx = this.spawnX + this.dirX * dist;
+    const ny = this.spawnY + this.dirY * dist;
+
+    if (this.isBlocked(nx, ny)) {
+      this.phase = 'stuck';
+      this.stuckElapsed = 0;
+      return;
+    }
+
+    this.groundX = nx;
+    this.groundY = ny;
+    this.traveled = dist;
+
+    if (u >= 1) {
+      // 精确钉在阵位
+      this.groundX = this.spawnX + this.dirX * this.maxRange;
+      this.groundY = this.spawnY + this.dirY * this.maxRange;
+      this.traveled = this.maxRange;
+      this.phase = 'holding';
+      this.holdElapsed = 0;
+    }
+  }
+
+  /** 阵位停顿，结束后朝目标加速发射 */
+  private updateHolding(dt: number): void {
+    this.holdElapsed += dt;
+    if (this.holdElapsed < this.holdDuration) return;
+    this.beginLaunch();
+  }
+
+  /** 从阵位转向目标，进入加速飞行 */
+  private beginLaunch(): void {
+    let lx = this.dirX;
+    let ly = this.dirY;
+    if (this.faceWorld) {
+      const dx = this.faceWorld.x - this.groundX;
+      const dy = this.faceWorld.y - this.groundY;
+      const len = Math.hypot(dx, dy);
+      if (len > 1e-4) {
+        lx = dx / len;
+        ly = dy / len;
+      }
+    }
+    this.dirX = lx;
+    this.dirY = ly;
+    // 发射后沿飞行方向朝向（不再每帧锁死施法时指针点，避免飞过目标后倒转）
+    this.faceWorld = null;
+    this.motion = 'launch';
+    this.phase = 'flying';
+    this.traveled = 0;
+    this.currentSpeed = FORMATION_LAUNCH_START_SPEED;
+  }
+
+  /** 加速直线飞行（发射段） */
+  private updateLaunch(dt: number): void {
+    this.currentSpeed = Math.min(
+      this.launchMaxSpeed,
+      this.currentSpeed + FORMATION_LAUNCH_ACCEL * dt,
+    );
+    this.advanceAlongDir(this.currentSpeed * dt, false);
+  }
+
+  /** 普攻：匀速直线，可 holdAtRange 悬停 */
+  private updateLinear(dt: number): void {
+    this.advanceAlongDir(this.speed * dt, this.holdAtRange);
+  }
+
+  /**
+   * 沿 dir 推进距离 remain；可选用 maxRange 悬停。
+   * @param canHold 是否在 maxRange 处进入 holding（仅普攻旧逻辑）
+   */
+  private advanceAlongDir(remain: number, canHold: boolean): void {
+    while (remain > 1e-4 && this.phase === 'flying') {
+      const step = Math.min(MAX_STEP, remain);
+      remain -= step;
+
+      if (canHold && this.traveled + step >= this.maxRange) {
+        const left = this.maxRange - this.traveled;
+        if (left > 1e-4) {
+          const nx = this.groundX + this.dirX * left;
+          const ny = this.groundY + this.dirY * left;
+          if (this.isBlocked(nx, ny)) {
+            this.phase = 'stuck';
+            this.stuckElapsed = 0;
+            break;
+          }
+          this.groundX = nx;
+          this.groundY = ny;
+        }
+        this.traveled = this.maxRange;
+        this.phase = 'holding';
+        break;
+      }
+
+      const nx = this.groundX + this.dirX * step;
+      const ny = this.groundY + this.dirY * step;
+
+      if (this.isBlocked(nx, ny)) {
+        this.phase = 'stuck';
+        this.stuckElapsed = 0;
+        break;
+      }
+
+      this.groundX = nx;
+      this.groundY = ny;
+      this.traveled += step;
+    }
+  }
+
+  /** 矛尖旋转：优先指向 faceWorld，否则沿飞行方向 */
+  private applyFacingRotation(): void {
+    let fx = this.dirX;
+    let fy = this.dirY;
+    if (this.faceWorld) {
+      const dx = this.faceWorld.x - this.groundX;
+      const dy = this.faceWorld.y - this.groundY;
+      const len = Math.hypot(dx, dy);
+      if (len > 1e-4) {
+        fx = dx / len;
+        fy = dy / len;
+      }
+    }
+    this.sprite.rotation = Math.atan2(fy, fx) - SPEAR_TEX_ANGLE;
   }
 
   private isBlocked(x: number, y: number): boolean {

@@ -6,6 +6,7 @@ import type {
 import { ENTRANCE_UNLOCKED } from './CharacterEntrance';
 import type { AmmoHudModel } from './CharacterResources';
 import type {
+  RadialSpearFormationOptions,
   RangedAim,
   RangedCombatServices,
 } from './CharacterRanged';
@@ -86,6 +87,16 @@ const SWORD_ARRAY = {
   /** 飞出后悬停距离（世界像素） */
   maxRange: 100,
   speed: 560,
+} as const;
+
+/**
+ * Q：反向瞬移（与朝向相反的水平大位移）+ 路径残影。
+ * 距离约 0.8s 走路，体感「一大段」。
+ */
+const Q_BLINK = {
+  distance: 180,
+  /** 路径上残影数量（起点→终点均匀分布，不含终点本体） */
+  afterimageCount: 6,
 } as const;
 
 /**
@@ -445,21 +456,92 @@ export class IceRanger extends PlayerCharacterBase {
   }
 
   /**
-   * Q：一次性向 12 个均分方向齐射飞剑，飞出后悬停成十二角阵。
-   * 不消耗弹药；再次 Q 会顶替上一组剑阵。
+   * Q：原地释放十二角剑阵（减速就位 → 朝指针加速齐射），再沿指针反方向瞬移。
+   * 剑阵锚定施法时脚底，不跟随闪现；不消耗弹药；再次 Q 会顶替上一组剑阵。
+   * @param aim 指针相对脚底的世界向量；过近/缺省时回退为朝向反方向水平闪
    */
-  override trySpecialAbility(combat?: RangedCombatServices): boolean {
+  override trySpecialAbility(
+    combat?: RangedCombatServices,
+    ctx?: EntranceContext,
+    aim?: RangedAim,
+  ): boolean {
     if (!combat) return false;
 
-    const origin = this.getThrowOrigin(this.worldX, this.worldY);
-    combat.spawnRadialSpearFormation(origin.x, origin.y, {
+    const fromX = this.worldX;
+    const fromY = this.worldY;
+    // 剑阵先在原地放出，原点取闪现前出手点；十二剑均朝向指针世界落点
+    const origin = this.getThrowOrigin(fromX, fromY);
+    const formationOpts: RadialSpearFormationOptions = {
       count: SWORD_ARRAY.count,
       maxRange: SWORD_ARRAY.maxRange,
       speed: SWORD_ARRAY.speed,
       originHeight: origin.height,
-    });
+    };
+    if (aim && Math.hypot(aim.dx, aim.dy) > 1e-4) {
+      // aim 是相对脚底的世界向量 → 指针世界坐标
+      formationOpts.faceWorldX = fromX + aim.dx;
+      formationOpts.faceWorldY = fromY + aim.dy;
+    }
+    combat.spawnRadialSpearFormation(origin.x, origin.y, formationOpts);
+
+    // 闪现 = 指针方向的反向（相对脚底）；无有效瞄准时回退朝向反水平
+    let nx = -this.facingDir;
+    let ny = 0;
+    if (aim) {
+      const len = Math.hypot(aim.dx, aim.dy);
+      if (len > 1e-4) {
+        nx = -aim.dx / len;
+        ny = -aim.dy / len;
+      }
+    }
+    const toX = fromX + nx * Q_BLINK.distance;
+    const toY = fromY + ny * Q_BLINK.distance;
+
+    if (ctx) {
+      this.spawnBlinkAfterimages(ctx, fromX, fromY, toX, toY);
+    }
+
+    this.worldX = toX;
+    this.worldY = toY;
+    // 掐断击飞/后坐残留，避免闪身后继续滑
+    this.knock.velX = 0;
+    this.knock.velY = 0;
+
     this.playThrowRecoil();
     return true;
+  }
+
+  /**
+   * 沿闪现路径铺残影（与入场同款冰色淡出）。
+   * 起点更淡、靠终点更实，拖尾感更明显。
+   */
+  private spawnBlinkAfterimages(
+    ctx: EntranceContext,
+    fromX: number,
+    fromY: number,
+    toX: number,
+    toY: number,
+  ): void {
+    const n = Q_BLINK.afterimageCount;
+    if (n <= 0) return;
+
+    const savedX = this.worldX;
+    const savedY = this.worldY;
+    for (let i = 0; i < n; i++) {
+      // t=0 在起点，t 接近 1 靠近终点（不与本体重叠）
+      const t = i / n;
+      this.worldX = fromX + (toX - fromX) * t;
+      this.worldY = fromY + (toY - fromY) * t;
+      this.spawnEntranceAfterimage(ctx);
+      // 靠起点的残影先淡一点，错开消失节奏
+      const last = this.entranceAfterimages[this.entranceAfterimages.length - 1];
+      if (last) {
+        last.elapsed = (n - 1 - i) * (ICE_AFTERIMAGE_DURATION * 0.12);
+        last.sprite.alpha = 0.42 * (0.35 + 0.65 * t);
+      }
+    }
+    this.worldX = savedX;
+    this.worldY = savedY;
   }
 
   override update(deltaMS: number, moving: boolean): void {

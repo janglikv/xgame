@@ -21,6 +21,12 @@ export type RadialSpearFormationOptions = {
   speed?: number;
   /** 贴图缩放 */
   scale?: number;
+  /**
+   * 全部飞剑矛尖朝向的世界落点（通常为指针位置）。
+   * 与径向飞出方向独立；缺省时朝向各自飞出方向。
+   */
+  faceWorldX?: number;
+  faceWorldY?: number;
 };
 
 /**
@@ -43,7 +49,7 @@ export type RangedCombatServices = {
     options?: SpearProjectileOptions,
   ) => void;
   /**
-   * 免费径向剑阵：各方向同时射出，飞到 maxRange 悬停成阵。
+   * 免费径向剑阵：减速就位 → 停顿 → 朝 faceWorld 加速齐射。
    * 不扣弹药；再次调用会顶替上一组剑阵。
    */
   spawnRadialSpearFormation: (

@@ -128,7 +128,7 @@ export class CombatSystem {
     screenY: number,
     camera: CombatCameraView,
   ): void {
-    const aim = this.screenAimWorldDelta(
+    const aim = this.aimFromScreen(
       player.worldX,
       player.worldY,
       screenX,
@@ -137,6 +137,26 @@ export class CombatSystem {
     );
     if (!aim) return;
     player.tryRangedAttack(aim, this.rangedServices());
+  }
+
+  /**
+   * 屏幕指针 → 相对脚底的世界瞄准向量（未归一化）。
+   * 过近返回 null（与投掷过滤同一阈值）。
+   */
+  aimFromScreen(
+    playerWorldX: number,
+    playerWorldY: number,
+    screenX: number,
+    screenY: number,
+    camera: CombatCameraView,
+  ): { dx: number; dy: number } | null {
+    return this.screenAimWorldDelta(
+      playerWorldX,
+      playerWorldY,
+      screenX,
+      screenY,
+      camera,
+    );
   }
 
   /** 供角色远程出手的生成 / HUD 服务 */
@@ -188,8 +208,8 @@ export class CombatSystem {
   }
 
   /**
-   * 免费十二角剑阵：一次性向 count 个均分方向射出，
-   * 飞到 maxRange 后悬停；不扣弹药。再次施放会清掉上一组。
+   * 免费十二角剑阵：径向减速就位 → 短暂停顿 → 朝 faceWorld（指针）加速齐射。
+   * 不扣弹药；再次施放会清掉上一组。
    */
   private spawnRadialSpearFormation(
     originX: number,
@@ -203,6 +223,8 @@ export class CombatSystem {
     const speed = options.speed ?? FORMATION_SPEED;
     const scale = options.scale ?? FORMATION_SCALE;
     const originHeight = options.originHeight;
+    const faceWorldX = options.faceWorldX;
+    const faceWorldY = options.faceWorldY;
     const step = (Math.PI * 2) / count;
 
     for (let i = 0; i < count; i++) {
@@ -215,6 +237,8 @@ export class CombatSystem {
         holdAtRange: true,
         scale,
         formation: true,
+        faceWorldX,
+        faceWorldY,
       });
     }
   }

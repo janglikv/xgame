@@ -130,6 +130,10 @@ export class LevelScene extends Container implements GameScene {
   private treesMounted = false;
   /** 切换角色剩余冷却（秒）；0 表示可切换 */
   private switchCooldownRemaining = 0;
+  /** 最近指针屏幕坐标（供 Q 等按键技取瞄准方向） */
+  private pointerScreenX = 0;
+  private pointerScreenY = 0;
+  private pointerSeen = false;
 
   constructor(width: number, height: number, options: LevelSceneOptions) {
     super();
@@ -143,11 +147,12 @@ export class LevelScene extends Container implements GameScene {
       options.getLastCharacter ?? (() => 'bomb-girl' as CharacterId);
     this.setLastCharacter = options.setLastCharacter;
 
-    // 全屏可点：点击落点远程攻击
+    // 全屏可点：点击落点远程攻击；持续跟踪指针供 Q 等瞄准
     this.eventMode = 'static';
     this.cursor = 'default';
     this.hitArea = new Rectangle(0, 0, width, height);
     this.on('pointertap', this.onPointerTap);
+    this.on('pointermove', this.onPointerMove);
 
     this.worldRoot = new Container();
     this.worldRoot.label = 'WorldRoot';
@@ -591,6 +596,7 @@ export class LevelScene extends Container implements GameScene {
 
   destroy(options?: Parameters<Container['destroy']>[0]): void {
     this.off('pointertap', this.onPointerTap);
+    this.off('pointermove', this.onPointerMove);
     window.removeEventListener('wheel', this.onWheel);
     this.keyboard.unbind();
     super.destroy(options);
@@ -611,12 +617,39 @@ export class LevelScene extends Container implements GameScene {
     }
     this.tabWasDown = tabDown;
 
-    // Q：角色特技（冰冰 = 十二角剑阵，免费齐射）
+    // Q：角色特技（冰冰 = 指针反向闪现 + 残影 + 十二角剑阵）
     const qDown = this.keyboard.isDown('KeyQ');
     if (qDown && !this.qWasDown && !this.paused) {
       const p = this.player;
       if (p && !p.entranceLocks.attack) {
-        p.trySpecialAbility(this.combat.rangedServices());
+        const fromX = p.worldX;
+        const fromY = p.worldY;
+        const aim = this.pointerSeen
+          ? this.combat.aimFromScreen(
+              p.worldX,
+              p.worldY,
+              this.pointerScreenX,
+              this.pointerScreenY,
+              {
+                x: this.camera.x,
+                y: this.camera.y,
+                zoom: this.camera.currentZoom,
+                width: this.camera.width,
+                height: this.camera.height,
+              },
+            )
+          : null;
+        if (
+          p.trySpecialAbility(
+            this.combat.rangedServices(),
+            this.entranceContext(),
+            aim ?? undefined,
+          )
+        ) {
+          // 闪现落点走 solid，避免穿进树区；from 用施法前脚底做轴分离
+          this.applyPlayerSolid(fromX, fromY);
+          this.syncWorldActors();
+        }
       }
     }
     this.qWasDown = qDown;
@@ -784,9 +817,20 @@ export class LevelScene extends Container implements GameScene {
     this.camera.applyZoomKeyHold(zoomIn, zoomOut, dt);
   }
 
+  private readonly onPointerMove = (e: {
+    global: { x: number; y: number };
+  }): void => {
+    this.pointerScreenX = e.global.x;
+    this.pointerScreenY = e.global.y;
+    this.pointerSeen = true;
+  };
+
   private readonly onPointerTap = (e: {
     global: { x: number; y: number };
   }): void => {
+    this.pointerScreenX = e.global.x;
+    this.pointerScreenY = e.global.y;
+    this.pointerSeen = true;
     if (this.paused) return;
     const player = this.player;
     if (!player) return;
