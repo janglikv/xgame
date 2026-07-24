@@ -9,6 +9,10 @@ import {
   AMMO_HUD_NONE,
   type AmmoHudModel,
 } from './CharacterResources';
+import type {
+  RangedAim,
+  RangedCombatServices,
+} from './CharacterRanged';
 import { createKnockArcState, type KnockArcState } from './knockArc';
 import {
   PLAYER_BODY_R,
@@ -195,6 +199,17 @@ export abstract class PlayerCharacterBase
    */
   getAmmoHud(): AmmoHudModel {
     return AMMO_HUD_NONE;
+  }
+
+  /**
+   * 远程攻击：角色决定打什么，经 combat 服务生成投射物。
+   * 默认无远程；子类覆盖。返回是否成功发起（含进入前摇）。
+   */
+  tryRangedAttack(
+    _aim: RangedAim,
+    _combat: RangedCombatServices,
+  ): boolean {
+    return false;
   }
 
   async load(): Promise<void> {

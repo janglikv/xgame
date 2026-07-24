@@ -5,6 +5,11 @@ import type {
 } from './CharacterEntrance';
 import { ENTRANCE_UNLOCKED } from './CharacterEntrance';
 import type { AmmoHudModel } from './CharacterResources';
+import type {
+  RangedAim,
+  RangedCombatServices,
+} from './CharacterRanged';
+import { applyRecoilHop } from './knockArc';
 import { PlayerCharacterBase } from './PlayerCharacterBase';
 import {
   DEFAULT_SPEAR_AMMO,
@@ -398,6 +403,37 @@ export class IceRanger extends PlayerCharacterBase {
 
   override getAmmoHud(): AmmoHudModel {
     return { kind: 'spear', snap: this.spearAmmo };
+  }
+
+  /**
+   * 投矛：前摇甩剑 → 脱手瞬间后坐 + 生成直线矛（扣弹在 launch 结束时）。
+   */
+  override tryRangedAttack(
+    aim: RangedAim,
+    combat: RangedCombatServices,
+  ): boolean {
+    const aimLen = Math.hypot(aim.dx, aim.dy);
+    if (aimLen < 1e-4) return false;
+    const inv = 1 / aimLen;
+    const dirX = aim.dx * inv;
+    const dirY = aim.dy * inv;
+
+    this.setFacingFromMoveX(aim.dx);
+
+    return this.launchSpear(dirX, dirY, () => {
+      applyRecoilHop(
+        this.knock,
+        -dirX,
+        -dirY,
+        SPEAR_THROW_RECOIL_SPEED,
+      );
+      // 脱手瞬间再取脚底，与前摇期间位移一致
+      const origin = this.getThrowOrigin(this.worldX, this.worldY);
+      combat.spawnSpear(origin.x, origin.y, dirX, dirY, {
+        originHeight: origin.height,
+      });
+      combat.notifyAmmoHud(this);
+    });
   }
 
   override update(deltaMS: number, moving: boolean): void {

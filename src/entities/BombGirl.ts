@@ -4,6 +4,10 @@ import type {
 } from './CharacterEntrance';
 import { ENTRANCE_UNLOCKED } from './CharacterEntrance';
 import type { AmmoHudModel } from './CharacterResources';
+import type {
+  RangedAim,
+  RangedCombatServices,
+} from './CharacterRanged';
 import { PlayerCharacterBase } from './PlayerCharacterBase';
 import {
   DEFAULT_BOMB_AMMO,
@@ -11,6 +15,7 @@ import {
   type BombAmmoSnapshot,
   type BombAmmoStats,
 } from './BombAmmo';
+import { BOMB_MAX_RANGE } from './BombProjectile';
 
 /** 出场三枚小炸弹落点半径（世界像素） */
 const BOMB_ENTRANCE_RADIUS = 34;
@@ -101,6 +106,38 @@ export class BombGirl extends PlayerCharacterBase {
 
   override getAmmoHud(): AmmoHudModel {
     return { kind: 'bomb', snap: this.bombAmmo };
+  }
+
+  /**
+   * 扔炸弹：clamp 最远距离 → 扣弹 → 后仰 → 生成抛物线炸弹。
+   */
+  override tryRangedAttack(
+    aim: RangedAim,
+    combat: RangedCombatServices,
+  ): boolean {
+    let landDx = aim.dx;
+    let landDy = aim.dy;
+    const worldDist = Math.hypot(landDx, landDy);
+    if (worldDist > BOMB_MAX_RANGE) {
+      const s = BOMB_MAX_RANGE / worldDist;
+      landDx *= s;
+      landDy *= s;
+    }
+
+    // 有效瞄准后再扣弹，避免点太近空耗（过近已在 Combat 过滤）
+    if (!this.tryConsumeBomb()) return false;
+
+    const endX = this.worldX + landDx;
+    const endY = this.worldY + landDy;
+    this.setFacingFromMoveX(endX - this.worldX);
+    this.playThrowRecoil();
+
+    const origin = this.getThrowOrigin(this.worldX, this.worldY);
+    combat.spawnBomb(origin.x, origin.y, endX, endY, {
+      originHeight: origin.height,
+    });
+    combat.notifyAmmoHud(this);
+    return true;
   }
 
   /**

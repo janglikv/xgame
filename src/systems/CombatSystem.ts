@@ -1,17 +1,16 @@
 import type { Container } from 'pixi.js';
 import type { EntranceAimTarget } from '../entities/CharacterEntrance';
+import type { RangedCombatServices } from '../entities/CharacterRanged';
 import {
   BombProjectile,
-  BOMB_MAX_RANGE,
   type BombProjectileOptions,
 } from '../entities/BombProjectile';
 import { BombGirl } from '../entities/BombGirl';
-import { IceRanger, SPEAR_THROW_RECOIL_SPEED } from '../entities/IceRanger';
+import { IceRanger } from '../entities/IceRanger';
 import type { PlayerCharacterBase } from '../entities/PlayerCharacterBase';
 import { SpearProjectile } from '../entities/SpearProjectile';
 import type { SpearAmmoSnapshot } from '../entities/SpearAmmo';
 import type { BombAmmoSnapshot } from '../entities/BombAmmo';
-import { applyRecoilHop } from '../entities/knockArc';
 import type { Spider } from '../entities/Spider';
 import {
   PLAYER_HURT_R,
@@ -107,9 +106,9 @@ export class CombatSystem {
   }
 
   /**
-   * 屏幕点击远程攻击（炸弹妹 / 冰霜游侠）。
-   * 脚底从 `player.worldX/Y` 读取；投矛脱手瞬间再读，避免前摇位移错位。
-   * 非对应角色或瞄准过近则 no-op。
+   * 屏幕点击远程攻击。
+   * 换算世界瞄准向量后交给角色 `tryRangedAttack`；不识别具体角色类。
+   * 瞄准过近则 no-op。
    */
   tryRangedAtScreen(
     player: PlayerCharacterBase,
@@ -117,19 +116,68 @@ export class CombatSystem {
     screenY: number,
     camera: CombatCameraView,
   ): void {
-    if (player instanceof BombGirl) {
-      this.throwBombAtScreen(
-        player,
-        player.worldX,
-        player.worldY,
-        screenX,
-        screenY,
-        camera,
-      );
-      return;
-    }
-    if (player instanceof IceRanger) {
-      this.throwSpearAtScreen(player, screenX, screenY, camera);
+    const aim = this.screenAimWorldDelta(
+      player.worldX,
+      player.worldY,
+      screenX,
+      screenY,
+      camera,
+    );
+    if (!aim) return;
+    player.tryRangedAttack(aim, this.rangedServices());
+  }
+
+  /** 供角色远程出手的生成 / HUD 服务 */
+  private rangedServices(): RangedCombatServices {
+    return {
+      spawnBomb: (startX, startY, endX, endY, options) => {
+        this.spawnBomb(startX, startY, endX, endY, options);
+      },
+      spawnSpear: (originX, originY, dirX, dirY, options) => {
+        this.spawnSpear(originX, originY, dirX, dirY, options);
+      },
+      notifyAmmoHud: (p) => {
+        this.notifyAmmoHud(p);
+      },
+    };
+  }
+
+  private spawnBomb(
+    startX: number,
+    startY: number,
+    endX: number,
+    endY: number,
+    options: BombProjectileOptions = {},
+  ): void {
+    const bomb = new BombProjectile(startX, startY, endX, endY, options);
+    this.sortLayer.addChild(bomb);
+    this.bombs.push(bomb);
+    bomb.syncToWorld();
+    this.hooks.sortDepth();
+  }
+
+  private spawnSpear(
+    originX: number,
+    originY: number,
+    dirX: number,
+    dirY: number,
+    options: { originHeight?: number } = {},
+  ): void {
+    const spear = new SpearProjectile(originX, originY, dirX, dirY, {
+      originHeight: options.originHeight,
+    });
+    this.sortLayer.addChild(spear);
+    this.spears.push(spear);
+    spear.syncToWorld();
+    this.hooks.sortDepth();
+  }
+
+  private notifyAmmoHud(player: PlayerCharacterBase): void {
+    const model = player.getAmmoHud();
+    if (model.kind === 'spear') {
+      this.hooks.onSpearAmmoChanged?.(model.snap);
+    } else if (model.kind === 'bomb') {
+      this.hooks.onBombAmmoChanged?.(model.snap);
     }
   }
 
@@ -246,17 +294,13 @@ export class CombatSystem {
       volley.player.worldX,
       volley.player.worldY,
     );
-    const spear = new SpearProjectile(
+    this.spawnSpear(
       origin.x,
       origin.y,
       target.worldX - origin.x,
       target.worldY - origin.y,
       { originHeight: origin.height },
     );
-    this.sortLayer.addChild(spear);
-    this.spears.push(spear);
-    spear.syncToWorld();
-    this.hooks.sortDepth();
 
     volley.remaining -= 1;
     volley.targetIndex += 1;
@@ -281,105 +325,6 @@ export class CombatSystem {
     const screenDy = screenY - playerSy;
     if (Math.hypot(screenDx, screenDy) < THROW_MIN_DIST) return null;
     return { dx: screenDx / z, dy: screenDy / z };
-  }
-
-  private throwBombAtScreen(
-    player: BombGirl,
-    worldX: number,
-    worldY: number,
-    screenX: number,
-    screenY: number,
-    camera: CombatCameraView,
-  ): void {
-    const aim = this.screenAimWorldDelta(
-      worldX,
-      worldY,
-      screenX,
-      screenY,
-      camera,
-    );
-    if (!aim) return;
-
-    let landDx = aim.dx;
-    let landDy = aim.dy;
-    const worldDist = Math.hypot(landDx, landDy);
-    if (worldDist > BOMB_MAX_RANGE) {
-      const s = BOMB_MAX_RANGE / worldDist;
-      landDx *= s;
-      landDy *= s;
-    }
-
-    // 有效瞄准后再扣弹，避免点太近空耗
-    if (!player.tryConsumeBomb()) return;
-
-    const endX = worldX + landDx;
-    const endY = worldY + landDy;
-
-    player.setFacingFromMoveX(endX - worldX);
-    player.playThrowRecoil();
-
-    const origin = player.getThrowOrigin(worldX, worldY);
-    const bombOptions: BombProjectileOptions = {
-      originHeight: origin.height,
-    };
-    const bomb = new BombProjectile(
-      origin.x,
-      origin.y,
-      endX,
-      endY,
-      bombOptions,
-    );
-    this.sortLayer.addChild(bomb);
-    this.bombs.push(bomb);
-    bomb.syncToWorld();
-    this.hooks.sortDepth();
-    this.hooks.onBombAmmoChanged?.(player.bombAmmo);
-  }
-
-  private throwSpearAtScreen(
-    player: IceRanger,
-    screenX: number,
-    screenY: number,
-    camera: CombatCameraView,
-  ): void {
-    const aim = this.screenAimWorldDelta(
-      player.worldX,
-      player.worldY,
-      screenX,
-      screenY,
-      camera,
-    );
-    if (!aim) return;
-
-    const aimLen = Math.hypot(aim.dx, aim.dy);
-    if (aimLen < 1e-4) return;
-    const inv = 1 / aimLen;
-    const dirX = aim.dx * inv;
-    const dirY = aim.dy * inv;
-
-    player.setFacingFromMoveX(aim.dx);
-
-    const launched = player.launchSpear(dirX, dirY, () => {
-      applyRecoilHop(
-        player.knock,
-        -dirX,
-        -dirY,
-        SPEAR_THROW_RECOIL_SPEED,
-      );
-
-      // 脱手瞬间再取脚底，与前摇期间位移一致
-      const origin = player.getThrowOrigin(player.worldX, player.worldY);
-      const spear = new SpearProjectile(origin.x, origin.y, dirX, dirY, {
-        originHeight: origin.height,
-      });
-      this.sortLayer.addChild(spear);
-      this.spears.push(spear);
-      spear.syncToWorld();
-      this.hooks.sortDepth();
-      this.hooks.onSpearAmmoChanged?.(player.spearAmmo);
-    });
-
-    if (!launched) return;
   }
 
   private updateBombs(deltaMS: number, world: CombatWorld): void {
