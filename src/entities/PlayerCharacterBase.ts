@@ -5,6 +5,10 @@ import {
   type EntranceContext,
   type EntranceLocks,
 } from './CharacterEntrance';
+import {
+  AMMO_HUD_NONE,
+  type AmmoHudModel,
+} from './CharacterResources';
 import { createKnockArcState, type KnockArcState } from './knockArc';
 import {
   PLAYER_BODY_R,
@@ -176,6 +180,21 @@ export abstract class PlayerCharacterBase
   /** 出场期间输入锁；默认全开 */
   get entranceLocks(): EntranceLocks {
     return ENTRANCE_UNLOCKED;
+  }
+
+  /**
+   * 推进弹药 / 能量等资源（仅非暂停时由场景调用）。
+   * 默认无资源；子类覆盖。
+   */
+  tickResources(_deltaMS: number): void {
+    // no-op
+  }
+
+  /**
+   * 当前弹药 HUD 模型。场景按 kind 显示对应组件，避免 instanceof 角色类。
+   */
+  getAmmoHud(): AmmoHudModel {
+    return AMMO_HUD_NONE;
   }
 
   async load(): Promise<void> {

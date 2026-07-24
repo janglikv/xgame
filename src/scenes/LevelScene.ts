@@ -280,13 +280,7 @@ export class LevelScene extends Container implements GameScene {
     }
 
     this.player = next;
-    this.spearAmmoHud.visible = next instanceof IceRanger;
-    this.bombAmmoHud.visible = next instanceof BombGirl;
-    if (next instanceof IceRanger) {
-      this.spearAmmoHud.setAmmo(next.spearAmmo);
-    } else if (next instanceof BombGirl) {
-      this.bombAmmoHud.setAmmo(next.bombAmmo);
-    }
+    this.syncAmmoHud(next);
     this.cursor = next.canRangedAttack ? 'crosshair' : 'default';
 
     if (options.persist) {
@@ -321,6 +315,21 @@ export class LevelScene extends Container implements GameScene {
     this.camera.boostFollow();
     this.syncWorldActors();
     this.sortDepth();
+  }
+
+  /**
+   * 按角色 getAmmoHud() 切换飞剑 / 炸药 HUD。
+   * 只认数据 kind，不 instanceof 角色类。
+   */
+  private syncAmmoHud(player: PlayerCharacterBase): void {
+    const model = player.getAmmoHud();
+    this.spearAmmoHud.visible = model.kind === 'spear';
+    this.bombAmmoHud.visible = model.kind === 'bomb';
+    if (model.kind === 'spear') {
+      this.spearAmmoHud.setAmmo(model.snap);
+    } else if (model.kind === 'bomb') {
+      this.bombAmmoHud.setAmmo(model.snap);
+    }
   }
 
   /**
@@ -667,13 +676,8 @@ export class LevelScene extends Container implements GameScene {
       moving && !locks.move && !airborne && knockSpeed < 80,
     );
     this.healthBar.update(deltaMS);
-    if (player instanceof IceRanger) {
-      player.tickSpearAmmo(deltaMS);
-      this.spearAmmoHud.setAmmo(player.spearAmmo);
-    } else if (player instanceof BombGirl) {
-      player.tickBombAmmo(deltaMS);
-      this.bombAmmoHud.setAmmo(player.bombAmmo);
-    }
+    player.tickResources(deltaMS);
+    this.syncAmmoHud(player);
 
     for (let si = 0; si < this.spiders.length; si++) {
       const spider = this.spiders[si]!;

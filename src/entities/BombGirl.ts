@@ -3,6 +3,7 @@ import type {
   EntranceLocks,
 } from './CharacterEntrance';
 import { ENTRANCE_UNLOCKED } from './CharacterEntrance';
+import type { AmmoHudModel } from './CharacterResources';
 import { PlayerCharacterBase } from './PlayerCharacterBase';
 import {
   DEFAULT_BOMB_AMMO,
@@ -91,11 +92,15 @@ export class BombGirl extends PlayerCharacterBase {
   }
 
   /**
-   * 炸药自动恢复（由场景在非暂停时调用）。
+   * 炸药自动恢复（由场景在非暂停时经 tickResources 调用）。
    * 与 update 分离，避免暂停阶段偷回弹。
    */
-  tickBombAmmo(deltaMS: number): void {
+  override tickResources(deltaMS: number): void {
     this.ammo.update(deltaMS / 1000);
+  }
+
+  override getAmmoHud(): AmmoHudModel {
+    return { kind: 'bomb', snap: this.bombAmmo };
   }
 
   /**
