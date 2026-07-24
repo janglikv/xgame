@@ -1,5 +1,10 @@
 import { Container, Sprite } from 'pixi.js';
 import type { CharacterId } from './types';
+import {
+  ENTRANCE_UNLOCKED,
+  type EntranceContext,
+  type EntranceLocks,
+} from './CharacterEntrance';
 import { createKnockArcState, type KnockArcState } from './knockArc';
 import {
   PLAYER_BODY_R,
@@ -136,6 +141,41 @@ export abstract class PlayerCharacterBase
   /** 是否有点击瞄准的远程攻击（炸弹 / 矛） */
   get canRangedAttack(): boolean {
     return this.canThrowBomb || this.canThrowSpear;
+  }
+
+  /**
+   * 出场演出：默认无。子类覆盖实现角色专属登场。
+   * 场景只负责注入 EntranceContext 并每帧 updateEntrance。
+   */
+  startEntrance(_ctx: EntranceContext): void {
+    // no-op
+  }
+
+  /**
+   * 推进出场演出与短命世界特效。
+   * @param justLanded 本帧 knock 是否刚落地（冰空降用）
+   */
+  updateEntrance(
+    _dt: number,
+    _ctx: EntranceContext,
+    _justLanded: boolean,
+  ): void {
+    // no-op
+  }
+
+  /** 中断出场（切换角色等）；默认无状态可清 */
+  cancelEntrance(): void {
+    // no-op
+  }
+
+  /** 出场是否进行中（含等待炸弹首爆等） */
+  get isEntranceActive(): boolean {
+    return false;
+  }
+
+  /** 出场期间输入锁；默认全开 */
+  get entranceLocks(): EntranceLocks {
+    return ENTRANCE_UNLOCKED;
   }
 
   async load(): Promise<void> {

@@ -1,4 +1,9 @@
-import { Container, Sprite } from 'pixi.js';
+import { Container, Graphics, Sprite } from 'pixi.js';
+import type {
+  EntranceContext,
+  EntranceLocks,
+} from './CharacterEntrance';
+import { ENTRANCE_UNLOCKED } from './CharacterEntrance';
 import { PlayerCharacterBase } from './PlayerCharacterBase';
 import {
   DEFAULT_SPEAR_AMMO,
@@ -12,6 +17,17 @@ import {
   SPEAR_SCALE,
   SPEAR_TEX_ANGLE,
 } from './SpearProjectile';
+
+/** 空降初始离地高度（世界像素） */
+const ICE_ENTRANCE_HEIGHT = 90;
+/** 初始向下速度，使空降约 0.13 秒完成 */
+const ICE_ENTRANCE_DROP_SPEED = 600;
+const ICE_ENTRANCE_START_ALPHA = 0;
+const ICE_LANDING_FX_DURATION = 0.32;
+const ICE_AFTERIMAGE_INTERVAL = 0.035;
+const ICE_AFTERIMAGE_DURATION = 0.24;
+/** 落地后免费三连射发数 */
+const ICE_ENTRANCE_VOLLEY_COUNT = 3;
 
 /**
  * 投矛后仰（sprite 局部）。
@@ -86,6 +102,18 @@ export class IceRanger extends PlayerCharacterBase {
   private launchStartRot = 0;
   private launchTargetRot = 0;
   private launchOnRelease: (() => void) | null = null;
+
+  /** 出场：空降中 */
+  private entranceDropping = false;
+  private iceAfterimageElapsed = 0;
+  private readonly entranceAfterimages: Array<{
+    sprite: Sprite;
+    elapsed: number;
+  }> = [];
+  private readonly landingEffects: Array<{
+    gfx: Graphics;
+    elapsed: number;
+  }> = [];
 
   constructor(scale = 1, ammoStats: SpearAmmoStats = DEFAULT_SPEAR_AMMO) {
     super(
@@ -199,10 +227,79 @@ export class IceRanger extends PlayerCharacterBase {
     };
   }
 
-  /** 空降时复制当前角色轮廓，交给场景作为短暂残影。 */
-  createEntranceAfterimage(): Sprite | null {
+  /**
+   * 冰冰出场：当前位置上空垂直落下，残影拖尾，落地冲击环 + 免费三连矛。
+   */
+  override startEntrance(ctx: EntranceContext): void {
+    this.cancelEntrance();
+    this.knock.velX = 0;
+    this.knock.velY = 0;
+    this.knock.velZ = -ICE_ENTRANCE_DROP_SPEED;
+    this.knock.height = ICE_ENTRANCE_HEIGHT;
+    this.alpha = ICE_ENTRANCE_START_ALPHA;
+    this.entranceDropping = true;
+    this.iceAfterimageElapsed = ICE_AFTERIMAGE_INTERVAL;
+    this.spawnEntranceAfterimage(ctx);
+  }
+
+  override updateEntrance(
+    dt: number,
+    ctx: EntranceContext,
+    justLanded: boolean,
+  ): void {
+    this.updateEntranceAfterimages(dt);
+    this.updateLandingEffects(dt);
+
+    if (!this.entranceDropping) return;
+
+    const appearProgress = 1 - this.knock.height / ICE_ENTRANCE_HEIGHT;
+    this.alpha =
+      ICE_ENTRANCE_START_ALPHA +
+      (1 - ICE_ENTRANCE_START_ALPHA) * appearProgress;
+    this.iceAfterimageElapsed += dt;
+    if (this.iceAfterimageElapsed >= ICE_AFTERIMAGE_INTERVAL) {
+      this.iceAfterimageElapsed -= ICE_AFTERIMAGE_INTERVAL;
+      this.spawnEntranceAfterimage(ctx);
+    }
+    if (justLanded) {
+      this.finishEntrance(ctx);
+    }
+  }
+
+  override cancelEntrance(): void {
+    this.entranceDropping = false;
+    this.alpha = 1;
+    this.clearEntranceAfterimages();
+    // 离场后不再 tick updateEntrance，落地环一并清掉避免残留
+    this.clearLandingEffects();
+  }
+
+  override get isEntranceActive(): boolean {
+    return this.entranceDropping;
+  }
+
+  override get entranceLocks(): EntranceLocks {
+    if (!this.entranceDropping) return ENTRANCE_UNLOCKED;
+    // 空降中锁移动/攻击，允许切换（场景会 cancel）
+    return { move: true, attack: true, switch: false };
+  }
+
+  /** 落地：冲击环 + 自动瞄准三连发 */
+  private finishEntrance(ctx: EntranceContext): void {
+    if (!this.entranceDropping) return;
+    this.entranceDropping = false;
+    this.alpha = 1;
+    this.spawnLandingEffect(ctx);
+    ctx.combat.fireFreeAutoAimSpearVolley(
+      this,
+      ctx.getTargets(),
+      ICE_ENTRANCE_VOLLEY_COUNT,
+    );
+  }
+
+  private spawnEntranceAfterimage(ctx: EntranceContext): void {
     const body = this.sprite;
-    if (!body) return null;
+    if (!body) return;
 
     const ghost = new Sprite(body.texture);
     ghost.label = 'IceEntranceAfterimage';
@@ -219,7 +316,66 @@ export class IceRanger extends PlayerCharacterBase {
     ghost.tint = 0xa9e7ff;
     ghost.alpha = 0.42;
     ghost.eventMode = 'none';
-    return ghost;
+
+    ctx.addWorldFx(ghost, this.worldY - 2);
+    this.entranceAfterimages.push({ sprite: ghost, elapsed: 0 });
+  }
+
+  private updateEntranceAfterimages(dt: number): void {
+    for (let i = this.entranceAfterimages.length - 1; i >= 0; i--) {
+      const effect = this.entranceAfterimages[i]!;
+      effect.elapsed += dt;
+      const progress = Math.min(1, effect.elapsed / ICE_AFTERIMAGE_DURATION);
+      effect.sprite.alpha = 0.42 * (1 - progress);
+      if (progress < 1) continue;
+
+      effect.sprite.parent?.removeChild(effect.sprite);
+      effect.sprite.destroy();
+      this.entranceAfterimages.splice(i, 1);
+    }
+  }
+
+  private clearEntranceAfterimages(): void {
+    for (const effect of this.entranceAfterimages) {
+      effect.sprite.parent?.removeChild(effect.sprite);
+      effect.sprite.destroy();
+    }
+    this.entranceAfterimages.length = 0;
+  }
+
+  private spawnLandingEffect(ctx: EntranceContext): void {
+    const gfx = new Graphics();
+    gfx.label = 'IceEntranceLandingFx';
+    gfx
+      .ellipse(0, 0, 34, 13)
+      .fill({ color: 0xa9e7ff, alpha: 0.2 })
+      .stroke({ width: 4, color: 0x8bdcff, alpha: 0.95 });
+    gfx.position.set(this.worldX, this.worldY);
+    ctx.addWorldFx(gfx, this.worldY - 1);
+    this.landingEffects.push({ gfx, elapsed: 0 });
+  }
+
+  private updateLandingEffects(dt: number): void {
+    for (let i = this.landingEffects.length - 1; i >= 0; i--) {
+      const effect = this.landingEffects[i]!;
+      effect.elapsed += dt;
+      const progress = Math.min(1, effect.elapsed / ICE_LANDING_FX_DURATION);
+      effect.gfx.scale.set(1 + progress * 1.8);
+      effect.gfx.alpha = 1 - progress;
+      if (progress < 1) continue;
+
+      effect.gfx.parent?.removeChild(effect.gfx);
+      effect.gfx.destroy();
+      this.landingEffects.splice(i, 1);
+    }
+  }
+
+  private clearLandingEffects(): void {
+    for (const effect of this.landingEffects) {
+      effect.gfx.parent?.removeChild(effect.gfx);
+      effect.gfx.destroy();
+    }
+    this.landingEffects.length = 0;
   }
 
   /** 投矛瞬间：身体后仰（手上矛由 tryConsumeSpear 处理） */

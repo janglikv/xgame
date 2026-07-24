@@ -1,5 +1,6 @@
-import { Container, Graphics, Rectangle, Sprite } from 'pixi.js';
+import { Container, Rectangle } from 'pixi.js';
 import { preloadLevelAssets } from '../assets/preload';
+import type { EntranceContext } from '../entities/CharacterEntrance';
 import { BombGirl } from '../entities/BombGirl';
 import { IceRanger } from '../entities/IceRanger';
 import type { PlayerCharacterBase } from '../entities/PlayerCharacterBase';
@@ -32,14 +33,6 @@ import { DebugOverlay } from '../systems/DebugOverlay';
 
 /** 黑夜松树冷色 tint（环境变暗，不盖角色） */
 const NIGHT_TREE_TINT = 0x40516b;
-/** 冰冰切换登场时的初始离地高度（世界像素） */
-const ICE_ENTRANCE_HEIGHT = 90;
-/** 初始向下速度，使空降约 0.13 秒完成 */
-const ICE_ENTRANCE_DROP_SPEED = 600;
-const ICE_ENTRANCE_START_ALPHA = 0;
-const ICE_LANDING_FX_DURATION = 0.32;
-const ICE_AFTERIMAGE_INTERVAL = 0.035;
-const ICE_AFTERIMAGE_DURATION = 0.24;
 
 const MOVE_SPEED = 220;
 /** 玩家 HUD 血条尺寸 / 底边边距（屏幕像素） */
@@ -124,18 +117,6 @@ export class LevelScene extends Container implements GameScene {
   private readonly onEditMap?: () => void;
   private readonly getLastCharacter: () => CharacterId;
   private readonly setLastCharacter?: (id: CharacterId) => void;
-  /** 冰冰空降与炸炸自爆出场的进行状态 */
-  private iceEntrancePending = false;
-  private bombEntrancePending = false;
-  private readonly landingEffects: Array<{
-    gfx: Graphics;
-    elapsed: number;
-  }> = [];
-  private readonly iceEntranceAfterimages: Array<{
-    sprite: Sprite;
-    elapsed: number;
-  }> = [];
-  private iceAfterimageElapsed = 0;
 
   private paused = false;
   private escWasDown = false;
@@ -320,20 +301,17 @@ export class LevelScene extends Container implements GameScene {
     const current = this.player;
     if (!current || current.characterId === id) return;
     if (!this.roster.has(id)) return;
-    if (this.bombEntrancePending) return;
+    if (current.entranceLocks.switch) return;
 
-    this.cancelIceEntrance();
+    current.cancelEntrance();
+    this.combat.cancelScriptedAttacks(current);
     this.activateCharacter(id, {
       worldX: current.worldX,
       worldY: current.worldY,
       facing: current.facingDir,
       persist: true,
     });
-    if (this.player instanceof IceRanger) {
-      this.startIceEntrance(this.player);
-    } else if (this.player instanceof BombGirl) {
-      this.startBombEntrance(this.player);
-    }
+    this.player?.startEntrance(this.entranceContext());
     this.characterHud.setActive(id);
     this.switchCooldownRemaining = CHAR_SWITCH_COOLDOWN;
     this.characterHud.setSwitchCooldown(
@@ -343,6 +321,36 @@ export class LevelScene extends Container implements GameScene {
     this.camera.boostFollow();
     this.syncWorldActors();
     this.sortDepth();
+  }
+
+  /**
+   * 注入给角色出场的上下文：挂特效、战斗能力、索敌。
+   * 角色不依赖 LevelScene 类型。
+   */
+  private entranceContext(): EntranceContext {
+    return {
+      addWorldFx: (node, zIndex) => {
+        node.zIndex = zIndex;
+        this.sortLayer.addChild(node);
+      },
+      combat: {
+        fireFreeAutoAimSpearVolley: (player, targets, count) => {
+          this.combat.fireFreeAutoAimSpearVolley(player, targets, count);
+        },
+        throwBombBurst: (player, landings, options, onFirstBlast) => {
+          this.combat.throwBombBurst(
+            player,
+            landings,
+            options,
+            onFirstBlast,
+          );
+        },
+        cancelScriptedAttacks: (player) => {
+          this.combat.cancelScriptedAttacks(player);
+        },
+      },
+      getTargets: () => this.spiders,
+    };
   }
 
   /** 推进切换冷却并同步 HUD 遮罩 */
@@ -356,94 +364,6 @@ export class LevelScene extends Container implements GameScene {
       this.switchCooldownRemaining,
       CHAR_SWITCH_COOLDOWN,
     );
-  }
-
-  /** 冰冰从当前位置上空垂直落下，落地后触发免费三剑齐射。 */
-  private startIceEntrance(player: IceRanger): void {
-    player.knock.velX = 0;
-    player.knock.velY = 0;
-    player.knock.velZ = -ICE_ENTRANCE_DROP_SPEED;
-    player.knock.height = ICE_ENTRANCE_HEIGHT;
-    player.alpha = ICE_ENTRANCE_START_ALPHA;
-    this.iceEntrancePending = true;
-    this.iceAfterimageElapsed = ICE_AFTERIMAGE_INTERVAL;
-    this.spawnIceEntranceAfterimage(player);
-  }
-
-  private finishIceEntrance(player: IceRanger): void {
-    if (!this.iceEntrancePending) return;
-    this.cancelIceEntrance();
-    this.spawnIceLandingEffect(player.worldX, player.worldY);
-    this.combat.fireFreeAutoAimSpearVolley(player, this.spiders, 3);
-  }
-
-  private spawnIceEntranceAfterimage(player: IceRanger): void {
-    const sprite = player.createEntranceAfterimage();
-    if (!sprite) return;
-    sprite.zIndex = player.worldY - 2;
-    this.sortLayer.addChild(sprite);
-    this.iceEntranceAfterimages.push({ sprite, elapsed: 0 });
-  }
-
-  private updateIceEntranceAfterimages(dt: number): void {
-    for (let i = this.iceEntranceAfterimages.length - 1; i >= 0; i--) {
-      const effect = this.iceEntranceAfterimages[i]!;
-      effect.elapsed += dt;
-      const progress = Math.min(1, effect.elapsed / ICE_AFTERIMAGE_DURATION);
-      effect.sprite.alpha = 0.42 * (1 - progress);
-      if (progress < 1) continue;
-
-      this.sortLayer.removeChild(effect.sprite);
-      effect.sprite.destroy();
-      this.iceEntranceAfterimages.splice(i, 1);
-    }
-  }
-
-  private cancelIceEntrance(): void {
-    this.iceEntrancePending = false;
-    if (this.player instanceof IceRanger) {
-      this.player.alpha = 1;
-    }
-  }
-
-  /** 炸炸先隐藏，原地三枚炸弹首次爆炸时再显现。 */
-  private startBombEntrance(player: BombGirl): void {
-    player.alpha = 0;
-    this.bombEntrancePending = true;
-    this.combat.throwBombEntranceBurst(player, () => {
-      if (this.player !== player || !this.bombEntrancePending) return;
-      this.bombEntrancePending = false;
-      player.alpha = 1;
-    });
-  }
-
-  /** 落地瞬间的冰蓝冲击环，短暂扩散后消失。 */
-  private spawnIceLandingEffect(worldX: number, worldY: number): void {
-    const gfx = new Graphics();
-    gfx.label = 'IceEntranceLandingFx';
-    gfx
-      .ellipse(0, 0, 34, 13)
-      .fill({ color: 0xa9e7ff, alpha: 0.2 })
-      .stroke({ width: 4, color: 0x8bdcff, alpha: 0.95 });
-    gfx.position.set(worldX, worldY);
-    gfx.zIndex = worldY - 1;
-    this.sortLayer.addChild(gfx);
-    this.landingEffects.push({ gfx, elapsed: 0 });
-  }
-
-  private updateLandingEffects(dt: number): void {
-    for (let i = this.landingEffects.length - 1; i >= 0; i--) {
-      const effect = this.landingEffects[i]!;
-      effect.elapsed += dt;
-      const progress = Math.min(1, effect.elapsed / ICE_LANDING_FX_DURATION);
-      effect.gfx.scale.set(1 + progress * 1.8);
-      effect.gfx.alpha = 1 - progress;
-      if (progress < 1) continue;
-
-      this.sortLayer.removeChild(effect.gfx);
-      effect.gfx.destroy();
-      this.landingEffects.splice(i, 1);
-    }
   }
 
   async init(): Promise<void> {
@@ -467,12 +387,8 @@ export class LevelScene extends Container implements GameScene {
     this.mountTrees();
     this.stepCamera(0, true);
     await Promise.all(this.spiders.map((s) => s.load()));
-    // 初始角色资源加载完成后再播放对应出场特效。
-    if (this.player instanceof IceRanger) {
-      this.startIceEntrance(this.player);
-    } else if (this.player instanceof BombGirl) {
-      this.startBombEntrance(this.player);
-    }
+    // 初始角色资源加载完成后再播放出场（逻辑在角色类内）。
+    this.player?.startEntrance(this.entranceContext());
     this.syncWorldActors();
     this.cullTrees();
     this.sortDepth();
@@ -715,13 +631,11 @@ export class LevelScene extends Container implements GameScene {
     }
     const knockSpeed = Math.hypot(player.knock.velX, player.knock.velY);
     const airborne = knockStep.airborne;
-    const entering =
-      this.iceEntrancePending && player instanceof IceRanger;
-    const entranceLocked = entering || this.bombEntrancePending;
+    const locks = player.entranceLocks;
 
-    // 切换登场保持垂直落点；普通空中状态仍保留少量操控。
+    // 出场锁移动时保持垂直落点；普通空中状态仍保留少量操控。
     const moving = x !== 0 || y !== 0;
-    if (moving && !entranceLocked) {
+    if (moving && !locks.move) {
       player.setFacingFromMoveX(x);
       let control = 1;
       if (airborne) {
@@ -736,20 +650,11 @@ export class LevelScene extends Container implements GameScene {
 
     // 树区 + 脚底圆互挡（即使本帧没位移，也可能被怪挤占，统一走 solid）
     this.applyPlayerSolid(fromX, fromY);
-    if (entering && player instanceof IceRanger) {
-      const appearProgress = 1 - player.knock.height / ICE_ENTRANCE_HEIGHT;
-      player.alpha =
-        ICE_ENTRANCE_START_ALPHA +
-        (1 - ICE_ENTRANCE_START_ALPHA) * appearProgress;
-      this.iceAfterimageElapsed += dt;
-      if (this.iceAfterimageElapsed >= ICE_AFTERIMAGE_INTERVAL) {
-        this.iceAfterimageElapsed -= ICE_AFTERIMAGE_INTERVAL;
-        this.spawnIceEntranceAfterimage(player);
-      }
-    }
-    if (knockStep.justLanded && player instanceof IceRanger) {
-      this.finishIceEntrance(player);
-    }
+    player.updateEntrance(
+      dt,
+      this.entranceContext(),
+      knockStep.justLanded,
+    );
 
     const camMoved = this.stepCamera(dt);
     if (moved || camMoved) {
@@ -759,7 +664,7 @@ export class LevelScene extends Container implements GameScene {
     this.syncWorldActors();
     player.update(
       deltaMS,
-      moving && !entranceLocked && !airborne && knockSpeed < 80,
+      moving && !locks.move && !airborne && knockSpeed < 80,
     );
     this.healthBar.update(deltaMS);
     if (player instanceof IceRanger) {
@@ -792,8 +697,6 @@ export class LevelScene extends Container implements GameScene {
     }
 
     this.combat.update(deltaMS, this.combatWorld());
-    this.updateIceEntranceAfterimages(dt);
-    this.updateLandingEffects(dt);
     this.sortDepth();
   }
 
@@ -862,7 +765,7 @@ export class LevelScene extends Container implements GameScene {
     if (this.paused) return;
     const player = this.player;
     if (!player) return;
-    if (this.iceEntrancePending || this.bombEntrancePending) return;
+    if (player.entranceLocks.attack) return;
     this.combat.tryRangedAtScreen(player, e.global.x, e.global.y, {
       x: this.camera.x,
       y: this.camera.y,

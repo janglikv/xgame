@@ -1,3 +1,8 @@
+import type {
+  EntranceContext,
+  EntranceLocks,
+} from './CharacterEntrance';
+import { ENTRANCE_UNLOCKED } from './CharacterEntrance';
 import { PlayerCharacterBase } from './PlayerCharacterBase';
 import {
   DEFAULT_BOMB_AMMO,
@@ -5,6 +10,12 @@ import {
   type BombAmmoSnapshot,
   type BombAmmoStats,
 } from './BombAmmo';
+
+/** 出场三枚小炸弹落点半径（世界像素） */
+const BOMB_ENTRANCE_RADIUS = 34;
+const BOMB_ENTRANCE_COUNT = 3;
+const BOMB_ENTRANCE_SIZE_SCALE = 0.7;
+const BOMB_ENTRANCE_ORIGIN_HEIGHT = 24;
 
 /**
  * 扔炸弹后仰（sprite 局部）。
@@ -43,6 +54,8 @@ export class BombGirl extends PlayerCharacterBase {
    */
   private throwRecoil = 0;
   private readonly ammo: BombAmmo;
+  /** 出场：隐身等待首枚炸弹爆炸 */
+  private entrancePending = false;
 
   constructor(scale = 1, ammoStats: BombAmmoStats = DEFAULT_BOMB_AMMO) {
     super(
@@ -109,6 +122,65 @@ export class BombGirl extends PlayerCharacterBase {
   /** 扔炸弹瞬间触发：身体后仰一下再回正 */
   playThrowRecoil(): void {
     this.throwRecoil = 1;
+  }
+
+  /**
+   * 炸炸出场：先隐身，原地抛三枚小炸弹，首次爆炸时显现。
+   * 出场期间锁移动 / 攻击 / 切换。
+   */
+  override startEntrance(ctx: EntranceContext): void {
+    this.cancelEntrance();
+    this.alpha = 0;
+    this.entrancePending = true;
+
+    const landings: Array<{ endX: number; endY: number }> = [];
+    for (let i = 0; i < BOMB_ENTRANCE_COUNT; i++) {
+      const angle = -Math.PI / 2 + (i * Math.PI * 2) / BOMB_ENTRANCE_COUNT;
+      landings.push({
+        endX: this.worldX + Math.cos(angle) * BOMB_ENTRANCE_RADIUS,
+        endY: this.worldY + Math.sin(angle) * BOMB_ENTRANCE_RADIUS,
+      });
+    }
+
+    ctx.combat.throwBombBurst(
+      this,
+      landings,
+      {
+        originHeight: BOMB_ENTRANCE_ORIGIN_HEIGHT,
+        sizeScale: BOMB_ENTRANCE_SIZE_SCALE,
+        blast: {
+          maxDamage: 12,
+          minDamage: 4,
+        },
+      },
+      () => {
+        if (!this.entrancePending) return;
+        this.entrancePending = false;
+        this.alpha = 1;
+      },
+    );
+  }
+
+  override updateEntrance(
+    _dt: number,
+    _ctx: EntranceContext,
+    _justLanded: boolean,
+  ): void {
+    // 显现由首爆回调驱动；无每帧演出
+  }
+
+  override cancelEntrance(): void {
+    this.entrancePending = false;
+    this.alpha = 1;
+  }
+
+  override get isEntranceActive(): boolean {
+    return this.entrancePending;
+  }
+
+  override get entranceLocks(): EntranceLocks {
+    if (!this.entrancePending) return ENTRANCE_UNLOCKED;
+    return { move: true, attack: true, switch: true };
   }
 
   protected override applyExtraPose(dt: number): {

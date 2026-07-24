@@ -1,4 +1,5 @@
 import type { Container } from 'pixi.js';
+import type { EntranceAimTarget } from '../entities/CharacterEntrance';
 import {
   BombProjectile,
   BOMB_MAX_RANGE,
@@ -24,12 +25,10 @@ export { PLAYER_HURT_R, SPIDER_HURT_R };
 export const SPIDER_KNOCK_SCALE = 0.85;
 /** 点太近不扔（屏幕像素） */
 const THROW_MIN_DIST = 12;
-/** 冰冰登场三连发的单发间隔（秒） */
-const ENTRANCE_SPEAR_INTERVAL = 0.12;
-/** 冰冰登场自动攻击的索敌半径（世界像素） */
-const ENTRANCE_AUTO_AIM_RANGE = 520;
-/** 炸炸出场时三枚炸弹围绕角色的落点半径 */
-const BOMB_ENTRANCE_RADIUS = 34;
+/** 脚本化自动瞄准连射：单发间隔（秒） */
+const AUTO_AIM_SPEAR_INTERVAL = 0.12;
+/** 脚本化自动瞄准连射：索敌半径（世界像素） */
+const AUTO_AIM_RANGE = 520;
 
 /** 镜头参数：屏幕点击 → 世界瞄准 */
 export type CombatCameraView = {
@@ -68,14 +67,16 @@ export class CombatSystem {
   private readonly spears: SpearProjectile[] = [];
   private readonly sortLayer: Container;
   private readonly hooks: CombatSystemHooks;
-  private entranceVolley: {
+  /** 脚本化免费自动瞄准连射（出场等调用，非普攻） */
+  private autoAimVolley: {
     player: IceRanger;
-    spiders: readonly Spider[];
+    targets: readonly EntranceAimTarget[];
     remaining: number;
     targetIndex: number;
     elapsed: number;
   } | null = null;
-  private readonly entranceBombBlasts = new Map<
+  /** 炸弹首次爆炸回调（如出场显现）；与「出场」语义无关的通用钩子 */
+  private readonly bombFirstBlastHooks = new Map<
     BombProjectile,
     () => void
   >();
@@ -132,93 +133,100 @@ export class CombatSystem {
     }
   }
 
-  /** 冰冰落地时开始自动瞄准三连发，不走手持飞剑与弹药流程。 */
+  /**
+   * 免费自动瞄准连射：不走手持飞剑与弹药。
+   * 供角色出场等脚本调用；战斗系统不感知「出场」语义。
+   */
   fireFreeAutoAimSpearVolley(
     player: IceRanger,
-    spiders: readonly Spider[],
+    targets: readonly EntranceAimTarget[],
     count = 3,
   ): void {
     if (count <= 0) return;
-    this.entranceVolley = {
+    this.autoAimVolley = {
       player,
-      spiders,
+      targets,
       remaining: count,
       targetIndex: 0,
       elapsed: 0,
     };
-    this.fireNextEntranceSpear();
+    this.fireNextAutoAimSpear();
   }
 
   /**
-   * 炸炸出场时从原地同时抛出三枚小炸弹。
-   * 三枚炸弹共用一次回调，首次爆炸时让角色显现。
+   * 从角色位置同时抛向多个落点（不扣弹药）。
+   * `onFirstBlast` 在本组任一枚首次爆炸时调用一次。
    */
-  throwBombEntranceBurst(player: BombGirl, onFirstBlast: () => void): void {
-    let revealed = false;
-    const revealOnce = (): void => {
-      if (revealed) return;
-      revealed = true;
-      onFirstBlast();
-    };
+  throwBombBurst(
+    player: BombGirl,
+    landings: ReadonlyArray<{ endX: number; endY: number }>,
+    options: BombProjectileOptions = {},
+    onFirstBlast?: () => void,
+  ): void {
+    let blasted = false;
+    const firstBlastOnce = onFirstBlast
+      ? (): void => {
+          if (blasted) return;
+          blasted = true;
+          onFirstBlast();
+        }
+      : null;
 
-    for (let i = 0; i < 3; i++) {
-      const angle = -Math.PI / 2 + (i * Math.PI * 2) / 3;
-      const endX =
-        player.worldX + Math.cos(angle) * BOMB_ENTRANCE_RADIUS;
-      const endY =
-        player.worldY + Math.sin(angle) * BOMB_ENTRANCE_RADIUS;
+    for (const land of landings) {
       const bomb = new BombProjectile(
         player.worldX,
         player.worldY,
-        endX,
-        endY,
-        {
-          originHeight: 24,
-          sizeScale: 0.7,
-          blast: {
-            maxDamage: 12,
-            minDamage: 4,
-          },
-        },
+        land.endX,
+        land.endY,
+        options,
       );
       this.sortLayer.addChild(bomb);
       this.bombs.push(bomb);
-      this.entranceBombBlasts.set(bomb, revealOnce);
+      if (firstBlastOnce) {
+        this.bombFirstBlastHooks.set(bomb, firstBlastOnce);
+      }
       bomb.syncToWorld();
     }
     this.hooks.sortDepth();
   }
 
+  /** 取消该角色相关的脚本化攻击（切换角色时调用） */
+  cancelScriptedAttacks(player: PlayerCharacterBase): void {
+    if (this.autoAimVolley?.player === player) {
+      this.autoAimVolley = null;
+    }
+  }
+
   /** 推进所有投射物；结算爆炸 / 矛命中；清理 done */
   update(deltaMS: number, world: CombatWorld): void {
-    this.updateEntranceVolley(deltaMS / 1000);
+    this.updateAutoAimVolley(deltaMS / 1000);
     this.updateBombs(deltaMS, world);
     this.updateSpears(deltaMS, world);
   }
 
-  private updateEntranceVolley(dt: number): void {
-    const volley = this.entranceVolley;
+  private updateAutoAimVolley(dt: number): void {
+    const volley = this.autoAimVolley;
     if (!volley) return;
 
     volley.elapsed += dt;
-    if (volley.elapsed < ENTRANCE_SPEAR_INTERVAL) return;
-    volley.elapsed -= ENTRANCE_SPEAR_INTERVAL;
-    this.fireNextEntranceSpear();
+    if (volley.elapsed < AUTO_AIM_SPEAR_INTERVAL) return;
+    volley.elapsed -= AUTO_AIM_SPEAR_INTERVAL;
+    this.fireNextAutoAimSpear();
   }
 
-  private fireNextEntranceSpear(): void {
-    const volley = this.entranceVolley;
+  private fireNextAutoAimSpear(): void {
+    const volley = this.autoAimVolley;
     if (!volley || volley.remaining <= 0) {
-      this.entranceVolley = null;
+      this.autoAimVolley = null;
       return;
     }
 
-    const targets = volley.spiders
-      .filter((spider) => {
-        if (!spider.isAlive) return false;
-        const dx = spider.worldX - volley.player.worldX;
-        const dy = spider.worldY - volley.player.worldY;
-        return dx * dx + dy * dy <= ENTRANCE_AUTO_AIM_RANGE ** 2;
+    const targets = volley.targets
+      .filter((t) => {
+        if (!t.isAlive) return false;
+        const dx = t.worldX - volley.player.worldX;
+        const dy = t.worldY - volley.player.worldY;
+        return dx * dx + dy * dy <= AUTO_AIM_RANGE ** 2;
       })
       .sort((a, b) => {
         const adx = a.worldX - volley.player.worldX;
@@ -228,7 +236,7 @@ export class CombatSystem {
         return adx * adx + ady * ady - (bdx * bdx + bdy * bdy);
       });
     if (targets.length === 0) {
-      this.entranceVolley = null;
+      this.autoAimVolley = null;
       return;
     }
 
@@ -253,7 +261,7 @@ export class CombatSystem {
     volley.remaining -= 1;
     volley.targetIndex += 1;
     if (volley.remaining <= 0) {
-      this.entranceVolley = null;
+      this.autoAimVolley = null;
     }
   }
 
@@ -381,12 +389,12 @@ export class CombatSystem {
       bomb.syncToWorld();
 
       if (bomb.consumeBlastResolve()) {
-        this.entranceBombBlasts.get(bomb)?.();
+        this.bombFirstBlastHooks.get(bomb)?.();
         this.applyBombBlast(bomb, world);
       }
 
       if (phase === 'done') {
-        this.entranceBombBlasts.delete(bomb);
+        this.bombFirstBlastHooks.delete(bomb);
         this.sortLayer.removeChild(bomb);
         bomb.destroy({ children: true });
         this.bombs.splice(i, 1);
