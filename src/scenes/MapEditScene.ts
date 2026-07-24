@@ -41,6 +41,8 @@ const BTN_MODE_ON = 0xf0c040;
 const BTN_PREVIEW = 0x3d8a6a;
 const BTN_LEVEL = 0x4a5a7a;
 const BTN_LEVEL_ON = 0xf0c040;
+const BTN_HEIGHT = 32;
+const BTN_RADIUS = 8;
 
 /** 画笔边长（格），1 = 单格，最大 11 */
 const BRUSH_MIN = 1;
@@ -172,7 +174,7 @@ export class MapEditScene extends Container implements GameScene {
       text: this.defaultTip(),
       style: {
         fontFamily: 'system-ui, sans-serif',
-        fontSize: 15,
+        fontSize: 14,
         fill: 0xe2f0dc,
       },
     });
@@ -182,7 +184,7 @@ export class MapEditScene extends Container implements GameScene {
       text: '',
       style: {
         fontFamily: 'system-ui, sans-serif',
-        fontSize: 14,
+        fontSize: 13,
         fontWeight: '700',
         fill: 0xc8e0ff,
       },
@@ -193,7 +195,7 @@ export class MapEditScene extends Container implements GameScene {
       text: this.brushText(),
       style: {
         fontFamily: 'system-ui, sans-serif',
-        fontSize: 15,
+        fontSize: 14,
         fontWeight: '700',
         fill: 0xffffff,
       },
@@ -201,17 +203,17 @@ export class MapEditScene extends Container implements GameScene {
     this.brushLabel.anchor.set(0.5, 0.5);
     this.hud.addChild(this.brushLabel);
 
-    this.addBtn('涂抹', BTN_MODE, 0xffffff, () => this.setTool('brush'), 72, 'mode', 'brush');
-    this.addBtn('橡皮', BTN_MODE, 0xffffff, () => this.setTool('eraser'), 72, 'mode', 'eraser');
-    this.addBtn('框选', BTN_MODE, 0xffffff, () => this.setTool('box'), 72, 'mode', 'box');
-    this.addBtn('敌人', BTN_MODE, 0xffffff, () => this.setTool('enemy'), 72, 'mode', 'enemy');
-    this.addBtn('起点', BTN_MODE, 0xffffff, () => this.setTool('spawn'), 72, 'mode', 'spawn');
+    this.addBtn('涂抹', BTN_MODE, 0xffffff, () => this.setTool('brush'), 60, 'mode', 'brush');
+    this.addBtn('橡皮', BTN_MODE, 0xffffff, () => this.setTool('eraser'), 60, 'mode', 'eraser');
+    this.addBtn('框选', BTN_MODE, 0xffffff, () => this.setTool('box'), 60, 'mode', 'box');
+    this.addBtn('敌人', BTN_MODE, 0xffffff, () => this.setTool('enemy'), 60, 'mode', 'enemy');
+    this.addBtn('起点', BTN_MODE, 0xffffff, () => this.setTool('spawn'), 60, 'mode', 'spawn');
     this.addBtn(
       '蜘蛛',
       ENEMY_COLORS.spider,
       0xffffff,
       () => this.setEnemyKind('spider'),
-      72,
+      60,
       'enemyKind',
       'spider',
     );
@@ -220,7 +222,7 @@ export class MapEditScene extends Container implements GameScene {
       ENEMY_COLORS['flame-flower'],
       0xffffff,
       () => this.setEnemyKind('flame-flower'),
-      88,
+      72,
       'enemyKind',
       'flame-flower',
     );
@@ -230,7 +232,7 @@ export class MapEditScene extends Container implements GameScene {
       BTN_BRUSH,
       0xffffff,
       () => this.setBrushSize(this.brushSize - 1),
-      44,
+      36,
       'brush',
     );
     this.addBtn(
@@ -238,7 +240,7 @@ export class MapEditScene extends Container implements GameScene {
       BTN_BRUSH,
       0xffffff,
       () => this.setBrushSize(this.brushSize + 1),
-      44,
+      36,
       'brush',
     );
 
@@ -251,7 +253,7 @@ export class MapEditScene extends Container implements GameScene {
         BTN_LEVEL,
         0xffffff,
         () => this.switchLevel(map.id),
-        88,
+        74,
         'level',
         map.id,
       );
@@ -375,7 +377,10 @@ export class MapEditScene extends Container implements GameScene {
       if (b.__group !== 'level') continue;
       const on = b.__id === this.levelId;
       const color = on ? BTN_LEVEL_ON : b.__baseColor;
-      b.__bg.clear().roundRect(0, 0, b.__w, 40, 10).fill({ color });
+      b.__bg
+        .clear()
+        .roundRect(0, 0, b.__w, BTN_HEIGHT, BTN_RADIUS)
+        .fill({ color });
       b.__label.style.fill = on ? 0x1a1200 : 0xffffff;
     }
   }
@@ -510,7 +515,10 @@ export class MapEditScene extends Container implements GameScene {
       if (b.__group !== 'mode') continue;
       const on = b.__id === this.tool;
       const color = on ? BTN_MODE_ON : b.__baseColor;
-      b.__bg.clear().roundRect(0, 0, b.__w, 40, 10).fill({ color });
+      b.__bg
+        .clear()
+        .roundRect(0, 0, b.__w, BTN_HEIGHT, BTN_RADIUS)
+        .fill({ color });
       b.__label.style.fill = on ? 0x1a1200 : 0xffffff;
     }
   }
@@ -520,7 +528,10 @@ export class MapEditScene extends Container implements GameScene {
       if (b.__group !== 'enemyKind') continue;
       const on = b.__id === this.enemyKind;
       const color = on ? BTN_MODE_ON : b.__baseColor;
-      b.__bg.clear().roundRect(0, 0, b.__w, 40, 10).fill({ color });
+      b.__bg
+        .clear()
+        .roundRect(0, 0, b.__w, BTN_HEIGHT, BTN_RADIUS)
+        .fill({ color });
       b.__label.style.fill = on ? 0x1a1200 : 0xffffff;
     }
   }
@@ -592,22 +603,22 @@ export class MapEditScene extends Container implements GameScene {
     color: number,
     textColor: number,
     onClick: () => void,
-    width = 88,
+    width = 74,
     group: 'action' | 'brush' | 'mode' | 'enemyKind' | 'level' = 'action',
     id?: string,
   ): void {
     const w = width;
-    const h = 40;
+    const h = BTN_HEIGHT;
     const root = new Container() as HudBtn;
     root.eventMode = 'static';
     root.cursor = 'pointer';
     const bg = new Graphics();
-    bg.roundRect(0, 0, w, h, 10).fill({ color });
+    bg.roundRect(0, 0, w, h, BTN_RADIUS).fill({ color });
     const text = new Text({
       text: label,
       style: {
         fontFamily: 'system-ui, sans-serif',
-        fontSize: 16,
+        fontSize: 14,
         fontWeight: '700',
         fill: textColor,
       },
@@ -639,7 +650,10 @@ export class MapEditScene extends Container implements GameScene {
                 : color === BTN_LEVEL
                   ? 0x6a7a9a
                   : BTN_HOVER;
-      bg.clear().roundRect(0, 0, w, h, 10).fill({ color: hover });
+      bg
+        .clear()
+        .roundRect(0, 0, w, h, BTN_RADIUS)
+        .fill({ color: hover });
     });
     root.on('pointerout', () => {
       if (group === 'mode') {
@@ -654,7 +668,7 @@ export class MapEditScene extends Container implements GameScene {
         this.refreshLevelButtons();
         return;
       }
-      bg.clear().roundRect(0, 0, w, h, 10).fill({ color });
+      bg.clear().roundRect(0, 0, w, h, BTN_RADIUS).fill({ color });
     });
     root.on('pointertap', (e) => {
       e.stopPropagation();
@@ -1037,28 +1051,28 @@ export class MapEditScene extends Container implements GameScene {
 
   private layout(): void {
     // 右上：预览 / 导出 / 清空 / 返回 …
-    let x = this.viewW - 12;
+    let x = this.viewW - 8;
     for (let i = this.actionBtns.length - 1; i >= 0; i--) {
       const b = this.actionBtns[i]!;
       if (b.__group !== 'action') continue;
       x -= b.__w;
-      b.position.set(x, 12);
-      x -= 10;
+      b.position.set(x, 8);
+      x -= 6;
     }
 
     // 左上：提示 + 关卡标题
-    this.tip.position.set(14, 14);
-    this.levelTitle.position.set(14, 36);
+    this.tip.position.set(10, 8);
+    this.levelTitle.position.set(10, 28);
 
     // 第二行：工具 + 笔粗
-    let bx = 14;
-    const by = 62;
+    let bx = 10;
+    const by = 48;
     for (const b of this.actionBtns) {
       if (b.__group !== 'mode') continue;
       b.position.set(bx, by);
-      bx += b.__w + 8;
+      bx += b.__w + 6;
     }
-    bx += 12;
+    bx += 6;
 
     const showBrush = this.tool === 'brush' || this.tool === 'eraser';
     this.brushLabel.visible = showBrush;
@@ -1068,10 +1082,10 @@ export class MapEditScene extends Container implements GameScene {
     if (showBrush) {
       if (brushBtns[0]) {
         brushBtns[0].position.set(bx, by);
-        bx += brushBtns[0].__w + 8;
+        bx += brushBtns[0].__w + 6;
       }
-      this.brushLabel.position.set(bx + 40, by + 20);
-      bx += 88;
+      this.brushLabel.position.set(bx + 32, by + BTN_HEIGHT / 2);
+      bx += 70;
       if (brushBtns[1]) {
         brushBtns[1].position.set(bx, by);
       }
@@ -1085,16 +1099,16 @@ export class MapEditScene extends Container implements GameScene {
       b.visible = showEnemyKinds;
       if (!showEnemyKinds) continue;
       b.position.set(bx, by);
-      bx += b.__w + 8;
+      bx += b.__w + 6;
     }
 
     // 第三行：关卡切换
-    let lx = 14;
-    const ly = 112;
+    let lx = 10;
+    const ly = 88;
     for (const b of this.actionBtns) {
       if (b.__group !== 'level') continue;
       b.position.set(lx, ly);
-      lx += b.__w + 8;
+      lx += b.__w + 6;
     }
   }
 
