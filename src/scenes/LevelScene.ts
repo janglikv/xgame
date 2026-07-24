@@ -53,6 +53,10 @@ const PLAYER_MAX_HP = 100;
 const CHAR_SWITCH_COOLDOWN = 0.3;
 /** 击退很强时削弱 WASD 控制（水平速度） */
 const KNOCK_CONTROL_SOFTEN = 220;
+/** 镜头朝指针方向偏移的比例 */
+const CAMERA_POINTER_LEAD = 0.5;
+/** 镜头指针偏移上限（世界像素） */
+const CAMERA_POINTER_LEAD_MAX = 320;
 
 const SPIDER_SCALE = 0.1;
 
@@ -476,9 +480,7 @@ export class LevelScene extends Container implements GameScene {
     }
   }
 
-  /**
-   * 镜头焦点：顺带把玩家脚底钉在合法 solid 上。
-   */
+  /** 镜头焦点：以玩家为主，适度朝指针方向前置。 */
   private getCameraFocus(): { x: number; y: number } {
     const player = this.player;
     if (player) {
@@ -491,7 +493,28 @@ export class LevelScene extends Container implements GameScene {
       );
       player.worldX = solid.x;
       player.worldY = solid.y;
-      return { x: player.worldX, y: player.worldY };
+
+      if (!this.pointerSeen) {
+        return { x: player.worldX, y: player.worldY };
+      }
+
+      const zoom = Math.max(this.camera.currentZoom, 1e-4);
+      let offsetX =
+        ((this.pointerScreenX - this.camera.width / 2) / zoom) *
+        CAMERA_POINTER_LEAD;
+      let offsetY =
+        ((this.pointerScreenY - this.camera.height / 2) / zoom) *
+        CAMERA_POINTER_LEAD;
+      const offsetLength = Math.hypot(offsetX, offsetY);
+      if (offsetLength > CAMERA_POINTER_LEAD_MAX) {
+        const scale = CAMERA_POINTER_LEAD_MAX / offsetLength;
+        offsetX *= scale;
+        offsetY *= scale;
+      }
+      return {
+        x: player.worldX + offsetX,
+        y: player.worldY + offsetY,
+      };
     }
     return { x: this.spawn.x, y: this.spawn.y };
   }

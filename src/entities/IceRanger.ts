@@ -457,7 +457,7 @@ export class IceRanger extends PlayerCharacterBase {
 
   /**
    * Q：原地释放十二角剑阵（减速就位 → 朝指针加速齐射），再沿指针反方向瞬移。
-   * 剑阵锚定施法时脚底，不跟随闪现；不消耗弹药；再次 Q 会顶替上一组剑阵。
+   * 剑阵锚定施法时脚底，不跟随闪现；不消耗弹药；连续施放的剑阵互不影响。
    * @param aim 指针相对脚底的世界向量；过近/缺省时回退为朝向反方向水平闪
    */
   override trySpecialAbility(

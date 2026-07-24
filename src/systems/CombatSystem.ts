@@ -209,15 +209,13 @@ export class CombatSystem {
 
   /**
    * 免费十二角剑阵：径向减速就位 → 短暂停顿 → 朝 faceWorld（指针）加速齐射。
-   * 不扣弹药；再次施放会清掉上一组。
+   * 不扣弹药；多次施放的剑阵各自完成生命周期。
    */
   private spawnRadialSpearFormation(
     originX: number,
     originY: number,
     options: RadialSpearFormationOptions = {},
   ): void {
-    this.clearFormationSpears();
-
     const count = Math.max(1, Math.floor(options.count ?? FORMATION_COUNT));
     const maxRange = options.maxRange ?? FORMATION_RANGE;
     const speed = options.speed ?? FORMATION_SPEED;

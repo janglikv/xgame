@@ -78,7 +78,7 @@ export type SpearProjectileOptions = {
   holdAtRange?: boolean;
   /** 贴图缩放，默认 SPEAR_SCALE */
   scale?: number;
-  /** 剑阵矛：可被 Q 重发 / 切角色时批量清掉；启用减速就位→加速发射 */
+  /** 剑阵矛：切角色时可批量清掉；启用减速就位→加速发射 */
   formation?: boolean;
   /**
    * 贴图朝向 / 发射目标的世界落点。
@@ -276,7 +276,7 @@ export class SpearProjectile extends Container {
     this.stuckElapsed = 0;
   }
 
-  /** 强制结束（剑阵被顶替 / 切角色） */
+  /** 强制结束（切角色时清理剑阵） */
   forceDone(): void {
     this.phase = 'done';
   }

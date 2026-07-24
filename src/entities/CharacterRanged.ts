@@ -50,7 +50,7 @@ export type RangedCombatServices = {
   ) => void;
   /**
    * 免费径向剑阵：减速就位 → 停顿 → 朝 faceWorld 加速齐射。
-   * 不扣弹药；再次调用会顶替上一组剑阵。
+   * 不扣弹药；多次调用生成的剑阵互不影响。
    */
   spawnRadialSpearFormation: (
     originX: number,
