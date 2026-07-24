@@ -11,12 +11,24 @@ import {
   type BombProjectileOptions,
 } from '../entities/BombProjectile';
 import type { PlayerCharacterBase } from '../entities/PlayerCharacterBase';
-import { SPEAR_HIT_R, SpearProjectile } from '../entities/SpearProjectile';
+import {
+  SPEAR_HIT_R,
+  SPEAR_SCALE,
+  SpearProjectile,
+  type SpearProjectileOptions,
+} from '../entities/SpearProjectile';
+import type { RadialSpearFormationOptions } from '../entities/CharacterRanged';
 import type { Spider } from '../entities/Spider';
 import {
   circleHitsHurt,
   distancePastHurt,
 } from '../data/bodyProfiles';
+
+/** 剑阵默认：12 向、飞出距离、半尺寸 */
+const FORMATION_COUNT = 12;
+const FORMATION_RANGE = 100;
+const FORMATION_SPEED = 560;
+const FORMATION_SCALE = SPEAR_SCALE * 0.5;
 
 /** 蜘蛛对击飞的接收倍率（目标抗性，非炸弹属性） */
 export const SPIDER_KNOCK_SCALE = 0.85;
@@ -128,13 +140,16 @@ export class CombatSystem {
   }
 
   /** 供角色远程出手的生成 / HUD 服务 */
-  private rangedServices(): RangedCombatServices {
+  rangedServices(): RangedCombatServices {
     return {
       spawnBomb: (startX, startY, endX, endY, options) => {
         this.spawnBomb(startX, startY, endX, endY, options);
       },
       spawnSpear: (originX, originY, dirX, dirY, options) => {
         this.spawnSpear(originX, originY, dirX, dirY, options);
+      },
+      spawnRadialSpearFormation: (originX, originY, options) => {
+        this.spawnRadialSpearFormation(originX, originY, options);
       },
       notifyAmmoHud: (model) => {
         this.hooks.onAmmoHudChanged?.(model);
@@ -162,15 +177,58 @@ export class CombatSystem {
     originY: number,
     dirX: number,
     dirY: number,
-    options: { originHeight?: number } = {},
-  ): void {
-    const spear = new SpearProjectile(originX, originY, dirX, dirY, {
-      originHeight: options.originHeight,
-    });
+    options: SpearProjectileOptions = {},
+  ): SpearProjectile {
+    const spear = new SpearProjectile(originX, originY, dirX, dirY, options);
     this.sortLayer.addChild(spear);
     this.spears.push(spear);
     spear.syncToWorld();
     this.hooks.sortDepth();
+    return spear;
+  }
+
+  /**
+   * 免费十二角剑阵：一次性向 count 个均分方向射出，
+   * 飞到 maxRange 后悬停；不扣弹药。再次施放会清掉上一组。
+   */
+  private spawnRadialSpearFormation(
+    originX: number,
+    originY: number,
+    options: RadialSpearFormationOptions = {},
+  ): void {
+    this.clearFormationSpears();
+
+    const count = Math.max(1, Math.floor(options.count ?? FORMATION_COUNT));
+    const maxRange = options.maxRange ?? FORMATION_RANGE;
+    const speed = options.speed ?? FORMATION_SPEED;
+    const scale = options.scale ?? FORMATION_SCALE;
+    const originHeight = options.originHeight;
+    const step = (Math.PI * 2) / count;
+
+    for (let i = 0; i < count; i++) {
+      // 从 12 点起顺时针均分（屏幕 Y 向下：-π/2 为上）
+      const angle = -Math.PI / 2 + i * step;
+      this.spawnSpear(originX, originY, Math.cos(angle), Math.sin(angle), {
+        originHeight,
+        speed,
+        maxRange,
+        holdAtRange: true,
+        scale,
+        formation: true,
+      });
+    }
+  }
+
+  /** 清掉所有剑阵矛（悬停 / 飞行中） */
+  private clearFormationSpears(): void {
+    for (let i = this.spears.length - 1; i >= 0; i--) {
+      const spear = this.spears[i]!;
+      if (!spear.isFormation) continue;
+      spear.forceDone();
+      this.sortLayer.removeChild(spear);
+      spear.destroy({ children: true });
+      this.spears.splice(i, 1);
+    }
   }
 
   /**
@@ -231,6 +289,8 @@ export class CombatSystem {
     if (this.autoAimVolley?.caster === owner) {
       this.autoAimVolley = null;
     }
+    // 切角色时收掉剑阵悬停矛
+    this.clearFormationSpears();
   }
 
   /** 推进所有投射物；结算爆炸 / 矛命中；清理 done */
@@ -343,7 +403,8 @@ export class CombatSystem {
       const spear = this.spears[i]!;
       let phase = spear.update(deltaMS);
 
-      if (phase === 'flying') {
+      // 飞行与剑阵悬停均可命中
+      if (phase === 'flying' || phase === 'holding') {
         for (let s = world.spiders.length - 1; s >= 0; s--) {
           const spider = world.spiders[s]!;
           if (!spider.isAlive) continue;

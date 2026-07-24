@@ -124,6 +124,7 @@ export class LevelScene extends Container implements GameScene {
   private paused = false;
   private escWasDown = false;
   private tabWasDown = false;
+  private qWasDown = false;
   private fitWasDown = false;
   private resetZoomWasDown = false;
   private treesMounted = false;
@@ -609,6 +610,16 @@ export class LevelScene extends Container implements GameScene {
       this.switchCharacter(this.characterHud.getNextCharacterId());
     }
     this.tabWasDown = tabDown;
+
+    // Q：角色特技（冰冰 = 十二角剑阵，免费齐射）
+    const qDown = this.keyboard.isDown('KeyQ');
+    if (qDown && !this.qWasDown && !this.paused) {
+      const p = this.player;
+      if (p && !p.entranceLocks.attack) {
+        p.trySpecialAbility(this.combat.rangedServices());
+      }
+    }
+    this.qWasDown = qDown;
 
     // 缩放快捷键在暂停时也可用（方便看全景）
     this.handleZoomKeys(dt);

@@ -37,7 +37,7 @@ const STUCK_LIFE = 0.2;
 /** 每帧最大步进（避免高速穿模） */
 const MAX_STEP = 18;
 
-export type SpearPhase = 'flying' | 'stuck' | 'done';
+export type SpearPhase = 'flying' | 'holding' | 'stuck' | 'done';
 
 export type SpearHitResult = {
   damage: number;
@@ -47,6 +47,23 @@ export type SpearHitResult = {
   dirY: number;
   poseStrength: number;
   airSpinTurns: number;
+};
+
+/** 生成直线矛时的可选参数 */
+export type SpearProjectileOptions = {
+  originHeight?: number;
+  speed?: number;
+  /**
+   * 最远飞行距离（世界像素）。
+   * 与 holdAtRange 合用：飞到此距离后悬停成阵，不钉墙消散。
+   */
+  maxRange?: number;
+  /** 到达 maxRange 后进入 holding（悬停），默认 false */
+  holdAtRange?: boolean;
+  /** 贴图缩放，默认 SPEAR_SCALE */
+  scale?: number;
+  /** 剑阵矛：可被 Q 重发 / 切角色时批量清掉 */
+  formation?: boolean;
 };
 
 let sharedSpear: Texture | null = null;
@@ -72,10 +89,17 @@ export class SpearProjectile extends Container {
   private readonly dirY: number;
   private readonly speed: number;
   private readonly originHeight: number;
+  private readonly maxRange: number;
+  private readonly holdAtRange: boolean;
+  private readonly visualScale: number;
+  /** 剑阵矛标记（供战斗系统批量清理） */
+  readonly isFormation: boolean;
 
   private phase: SpearPhase = 'flying';
   private stuckElapsed = 0;
   private hitResolved = false;
+  /** 已飞行路程（世界像素） */
+  private traveled = 0;
 
   /** 地面投影坐标 */
   groundX: number;
@@ -88,7 +112,7 @@ export class SpearProjectile extends Container {
     startY: number,
     dirX: number,
     dirY: number,
-    options: { originHeight?: number; speed?: number } = {},
+    options: SpearProjectileOptions = {},
   ) {
     super();
     this.label = 'SpearProjectile';
@@ -108,13 +132,20 @@ export class SpearProjectile extends Container {
 
     this.speed = options.speed ?? SPEAR_SPEED;
     this.originHeight = Math.max(4, options.originHeight ?? 28);
+    this.maxRange =
+      options.maxRange !== undefined && options.maxRange > 0
+        ? options.maxRange
+        : Number.POSITIVE_INFINITY;
+    this.holdAtRange = options.holdAtRange === true;
+    this.visualScale = options.scale ?? SPEAR_SCALE;
+    this.isFormation = options.formation === true;
     this.groundX = startX;
     this.groundY = startY;
     this.flightHeight = this.originHeight;
 
     this.sprite = new Sprite(sharedSpear);
     this.sprite.anchor.set(0.5, 0.5);
-    this.sprite.scale.set(SPEAR_SCALE);
+    this.sprite.scale.set(this.visualScale);
     this.sprite.rotation = Math.atan2(this.dirY, this.dirX) - SPEAR_TEX_ANGLE;
     this.sprite.label = 'SpearSprite';
     this.addChild(this.sprite);
@@ -134,7 +165,8 @@ export class SpearProjectile extends Container {
    * @param targetHurtR 目标受击半径（hurtbox），勿传 solid BODY
    */
   hitsTarget(targetX: number, targetY: number, targetHurtR: number): boolean {
-    if (this.phase !== 'flying') return false;
+    // 飞行与悬停阵型均可命中
+    if (this.phase !== 'flying' && this.phase !== 'holding') return false;
     const dx = targetX - this.groundX;
     const dy = targetY - this.groundY;
     const r = SPEAR_HIT_R + Math.max(0, targetHurtR);
@@ -168,9 +200,14 @@ export class SpearProjectile extends Container {
 
   /** 外部在命中敌人后调用，进入钉住消散 */
   stick(): void {
-    if (this.phase !== 'flying') return;
+    if (this.phase !== 'flying' && this.phase !== 'holding') return;
     this.phase = 'stuck';
     this.stuckElapsed = 0;
+  }
+
+  /** 强制结束（剑阵被顶替 / 切角色） */
+  forceDone(): void {
+    this.phase = 'done';
   }
 
   update(deltaMS: number): SpearPhase {
@@ -181,6 +218,26 @@ export class SpearProjectile extends Container {
       while (remain > 1e-4 && this.phase === 'flying') {
         const step = Math.min(MAX_STEP, remain);
         remain -= step;
+
+        // 到达最大射程：悬停成阵
+        if (this.holdAtRange && this.traveled + step >= this.maxRange) {
+          const left = this.maxRange - this.traveled;
+          if (left > 1e-4) {
+            const nx = this.groundX + this.dirX * left;
+            const ny = this.groundY + this.dirY * left;
+            if (this.isBlocked(nx, ny)) {
+              this.phase = 'stuck';
+              this.stuckElapsed = 0;
+              break;
+            }
+            this.groundX = nx;
+            this.groundY = ny;
+          }
+          this.traveled = this.maxRange;
+          this.phase = 'holding';
+          break;
+        }
+
         const nx = this.groundX + this.dirX * step;
         const ny = this.groundY + this.dirY * step;
 
@@ -193,12 +250,15 @@ export class SpearProjectile extends Container {
 
         this.groundX = nx;
         this.groundY = ny;
+        this.traveled += step;
       }
+    } else if (this.phase === 'holding') {
+      // 悬停成阵：静止，可继续被命中检测
     } else if (this.phase === 'stuck') {
       this.stuckElapsed += dt;
       const p = Math.min(1, this.stuckElapsed / STUCK_LIFE);
       this.sprite.alpha = 1 - p;
-      this.sprite.scale.set(SPEAR_SCALE * (1 - 0.15 * p));
+      this.sprite.scale.set(this.visualScale * (1 - 0.15 * p));
       if (p >= 1) {
         this.phase = 'done';
       }

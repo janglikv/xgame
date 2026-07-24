@@ -80,6 +80,14 @@ const HAND_SPEAR = {
   startScale: 0.15,
 } as const;
 
+/** Q：十二角剑阵（免费齐射，不耗弹） */
+const SWORD_ARRAY = {
+  count: 12,
+  /** 飞出后悬停距离（世界像素） */
+  maxRange: 100,
+  speed: 560,
+} as const;
+
 /**
  * 玩家角色「冰冰」：冰霜游侠，直线投矛。
  * 原点在脚底中心附近。
@@ -436,6 +444,24 @@ export class IceRanger extends PlayerCharacterBase {
     });
   }
 
+  /**
+   * Q：一次性向 12 个均分方向齐射飞剑，飞出后悬停成十二角阵。
+   * 不消耗弹药；再次 Q 会顶替上一组剑阵。
+   */
+  override trySpecialAbility(combat?: RangedCombatServices): boolean {
+    if (!combat) return false;
+
+    const origin = this.getThrowOrigin(this.worldX, this.worldY);
+    combat.spawnRadialSpearFormation(origin.x, origin.y, {
+      count: SWORD_ARRAY.count,
+      maxRange: SWORD_ARRAY.maxRange,
+      speed: SWORD_ARRAY.speed,
+      originHeight: origin.height,
+    });
+    this.playThrowRecoil();
+    return true;
+  }
+
   override update(deltaMS: number, moving: boolean): void {
     super.update(deltaMS, moving);
     this.syncHandAttach();
@@ -611,4 +637,5 @@ export class IceRanger extends PlayerCharacterBase {
       HAND_SPEAR.restRot - (1 - eased) * HAND_SPEAR.spins * Math.PI * 2;
     spear.visible = true;
   }
+
 }

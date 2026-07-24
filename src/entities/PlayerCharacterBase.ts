@@ -234,6 +234,15 @@ export abstract class PlayerCharacterBase
     return false;
   }
 
+  /**
+   * Q 键特技：默认无；子类覆盖。
+   * @param combat 远程战斗服务（剑阵等免费投射物）
+   * @returns 是否成功发动
+   */
+  trySpecialAbility(_combat?: RangedCombatServices): boolean {
+    return false;
+  }
+
   async load(): Promise<void> {
     if (this.sprite) return;
 
