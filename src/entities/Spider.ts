@@ -96,24 +96,52 @@ const AIR_SPIN = {
 const ANCHOR_FOOT_Y = 0.88;
 const ANCHOR_CENTER_Y = 0.5;
 
-let sharedTexture: Texture | null = null;
-/** 描边外扩后的脚底锚点 Y */
-let sharedFootAnchorY = ANCHOR_FOOT_Y;
+type MonsterAppearance = {
+  textureUrl: string;
+  label: string;
+  spriteLabel: string;
+  footAnchorY: number;
+  hpBarOffsetY: number;
+};
+
+type LoadedMonsterTexture = {
+  texture: Texture;
+  footAnchorY: number;
+};
+
+const textureCache = new Map<string, Promise<LoadedMonsterTexture>>();
+
+async function loadMonsterTexture(
+  textureUrl: string,
+  footAnchorY: number,
+): Promise<LoadedMonsterTexture> {
+  const cached = textureCache.get(textureUrl);
+  if (cached) return cached;
+
+  const pending = loadOutlinedTexture(
+    textureUrl,
+    OUTLINE_PX_CHARACTER,
+  ).then((outlined) => ({
+    texture: outlined.texture,
+    footAnchorY: paddedFootAnchorY(
+      footAnchorY,
+      outlined.contentHeight,
+      outlined.pad,
+    ),
+  }));
+  textureCache.set(textureUrl, pending);
+  return pending;
+}
 
 export async function loadSpiderTexture(): Promise<void> {
-  if (sharedTexture) return;
-  const outlined = await loadOutlinedTexture(SPIDER_URL, OUTLINE_PX_CHARACTER);
-  sharedTexture = outlined.texture;
-  sharedFootAnchorY = paddedFootAnchorY(
-    ANCHOR_FOOT_Y,
-    outlined.contentHeight,
-    outlined.pad,
-  );
+  await loadMonsterTexture(SPIDER_URL, ANCHOR_FOOT_Y);
 }
 
 export type SpiderOptions = {
   scale?: number;
   maxHp?: number;
+  /** 子类只覆盖外观，沿用蜘蛛的战斗与移动逻辑。 */
+  appearance?: Partial<MonsterAppearance>;
 };
 
 /** 蜘蛛 AI 状态 */
@@ -147,6 +175,9 @@ export class Spider extends Container implements WorldActor {
   private readonly baseScale: number;
   private readonly healthBar: HealthBar;
   private readonly maxHp: number;
+  private readonly appearance: MonsterAppearance;
+  /** 描边外扩后换算出的实际脚底锚点。 */
+  private footAnchorY: number;
   readonly bodyR = SPIDER_BODY_R;
   readonly hurtR = SPIDER_HURT_R;
   /** 1 = 朝右，-1 = 朝左 */
@@ -190,7 +221,16 @@ export class Spider extends Container implements WorldActor {
 
   constructor(worldX: number, worldY: number, options: SpiderOptions = {}) {
     super();
-    this.label = 'Spider';
+    this.appearance = {
+      textureUrl: SPIDER_URL,
+      label: 'Spider',
+      spriteLabel: 'SpiderSprite',
+      footAnchorY: ANCHOR_FOOT_Y,
+      hpBarOffsetY: HP_BAR_OFFSET_Y,
+      ...options.appearance,
+    };
+    this.footAnchorY = this.appearance.footAnchorY;
+    this.label = this.appearance.label;
     this.worldX = worldX;
     this.worldY = worldY;
     this.homeX = worldX;
@@ -209,7 +249,10 @@ export class Spider extends Container implements WorldActor {
     });
     this.healthBar.setHealth(this.maxHp);
     // 屏幕像素尺寸；贴图缩放只作用在 sprite 上
-    this.healthBar.position.set(0, -HP_BAR_OFFSET_Y * this.baseScale);
+    this.healthBar.position.set(
+      0,
+      -this.appearance.hpBarOffsetY * this.baseScale,
+    );
     this.addChild(this.healthBar);
 
     // 开局错开：先短停再走向随机航点，避免四角同步齐步
@@ -247,17 +290,16 @@ export class Spider extends Container implements WorldActor {
 
   async load(): Promise<void> {
     if (this.sprite) return;
-    if (!sharedTexture) {
-      await loadSpiderTexture();
-    }
-    if (!sharedTexture) {
-      throw new Error('Spider texture failed to load');
-    }
+    const loaded = await loadMonsterTexture(
+      this.appearance.textureUrl,
+      this.appearance.footAnchorY,
+    );
+    this.footAnchorY = loaded.footAnchorY;
 
-    const sprite = new Sprite(sharedTexture);
-    // 脚底略偏下：蜘蛛图主体在中部，腿向下伸（描边后用 sharedFootAnchorY）
-    sprite.anchor.set(0.5, sharedFootAnchorY);
-    sprite.label = 'SpiderSprite';
+    // 脚底略偏下，描边外扩后需重新换算锚点。
+    const sprite = new Sprite(loaded.texture);
+    sprite.anchor.set(0.5, loaded.footAnchorY);
+    sprite.label = this.appearance.spriteLabel;
     this.sprite = sprite;
     this.applyFacingToSprite();
     // 先画蜘蛛，血条在上
@@ -633,12 +675,12 @@ export class Spider extends Container implements WorldActor {
     if (spinning) {
       const sy = Math.abs(sprite.scale.y) || 1;
       const toCenterY =
-        (ANCHOR_CENTER_Y - sharedFootAnchorY) * sprite.texture.height * sy;
+        (ANCHOR_CENTER_Y - this.footAnchorY) * sprite.texture.height * sy;
       sprite.anchor.set(0.5, ANCHOR_CENTER_Y);
       sprite.x = ox;
       sprite.y = oy + toCenterY;
     } else {
-      sprite.anchor.set(0.5, sharedFootAnchorY);
+      sprite.anchor.set(0.5, this.footAnchorY);
       sprite.x = ox;
       sprite.y = oy;
     }

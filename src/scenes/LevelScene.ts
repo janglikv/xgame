@@ -11,6 +11,7 @@ import {
   stepKnockArc,
 } from '../entities/knockArc';
 import { Spider } from '../entities/Spider';
+import { FlameFlower } from '../entities/FlameFlower';
 import { Keyboard } from '../input/Keyboard';
 import {
   CombatSystem,
@@ -432,9 +433,11 @@ export class LevelScene extends Container implements GameScene {
       return;
     }
     for (const e of list) {
-      if (e.kind !== 'spider') continue;
       const solid = WorldMap.resolveSolid(e.x, e.y, e.x, e.y, 16);
-      const spider = new Spider(solid.x, solid.y, { scale: SPIDER_SCALE });
+      const spider =
+        e.kind === 'flame-flower'
+          ? new FlameFlower(solid.x, solid.y)
+          : new Spider(solid.x, solid.y, { scale: SPIDER_SCALE });
       spider.faceToward(this.spawn.x, this.spawn.y);
       this.sortLayer.addChild(spider);
       this.spiders.push(spider);

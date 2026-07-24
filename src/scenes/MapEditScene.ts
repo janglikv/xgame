@@ -15,6 +15,7 @@ import {
   getLevelIndex,
   saveMapDraft,
   worldToCell,
+  type EnemyKind,
   type EnemySpawn,
   type LevelMapDef,
 } from '../data/maps';
@@ -27,7 +28,10 @@ const FOREST = 0x243d22;
 const GRID_LINE = 0x1a3018;
 const HOLE = 0x8fe05a;
 const SPAWN = 0xff4d4d;
-const ENEMY = 0xc45cff;
+const ENEMY_COLORS: Record<EnemyKind, number> = {
+  spider: 0xc45cff,
+  'flame-flower': 0xff7a32,
+};
 const BTN = 0x3d5c3d;
 const BTN_HOVER = 0x527a52;
 const BTN_MAIN = 0xf0c040;
@@ -57,7 +61,7 @@ type EditSnapshot = {
 
 type HudBtn = Container & {
   __w: number;
-  __group: 'action' | 'brush' | 'mode' | 'level';
+  __group: 'action' | 'brush' | 'mode' | 'enemyKind' | 'level';
   __id?: string;
   __baseColor: number;
   __bg: Graphics;
@@ -104,6 +108,7 @@ export class MapEditScene extends Container implements GameScene {
   private camY = 0;
 
   private tool: EditTool = 'brush';
+  private enemyKind: EnemyKind = 'spider';
   private brushSize = 3;
   private painting: 'dig' | 'fill' | null = null;
   private lastCell: { c: number; r: number } | null = null;
@@ -201,6 +206,24 @@ export class MapEditScene extends Container implements GameScene {
     this.addBtn('框选', BTN_MODE, 0xffffff, () => this.setTool('box'), 72, 'mode', 'box');
     this.addBtn('敌人', BTN_MODE, 0xffffff, () => this.setTool('enemy'), 72, 'mode', 'enemy');
     this.addBtn('起点', BTN_MODE, 0xffffff, () => this.setTool('spawn'), 72, 'mode', 'spawn');
+    this.addBtn(
+      '蜘蛛',
+      ENEMY_COLORS.spider,
+      0xffffff,
+      () => this.setEnemyKind('spider'),
+      72,
+      'enemyKind',
+      'spider',
+    );
+    this.addBtn(
+      '火焰花',
+      ENEMY_COLORS['flame-flower'],
+      0xffffff,
+      () => this.setEnemyKind('flame-flower'),
+      88,
+      'enemyKind',
+      'flame-flower',
+    );
 
     this.addBtn(
       '−',
@@ -259,6 +282,7 @@ export class MapEditScene extends Container implements GameScene {
     this.on('pointerupoutside', this.onUp);
 
     this.refreshModeButtons();
+    this.refreshEnemyKindButtons();
     this.refreshLevelButtons();
     this.refreshLevelTitle();
     this.fit();
@@ -383,7 +407,7 @@ export class MapEditScene extends Container implements GameScene {
       return '框选：拖矩形批量挖/擦格子 · 滚轮缩放';
     }
     if (this.tool === 'enemy') {
-      return `敌人：左键放 · 右键删 · ${this.enemies.length} 只 · 滚轮缩放`;
+      return `敌人（${this.enemyKindName(this.enemyKind)}）：左键放 · 右键删 · ${this.enemies.length} 只 · 滚轮缩放`;
     }
     if (this.tool === 'spawn') {
       return '起点：点击地图放置玩家出生点 · 滚轮缩放';
@@ -444,6 +468,7 @@ export class MapEditScene extends Container implements GameScene {
           ? 'pointer'
           : 'cell';
     this.refreshModeButtons();
+    this.refreshEnemyKindButtons();
     this.layout();
     this.flash(
       tool === 'eraser'
@@ -468,10 +493,32 @@ export class MapEditScene extends Container implements GameScene {
     this.paint();
   }
 
+  private setEnemyKind(kind: EnemyKind): void {
+    if (this.enemyKind === kind) return;
+    this.enemyKind = kind;
+    this.refreshEnemyKindButtons();
+    this.paint();
+    this.flash(`当前怪物：${this.enemyKindName(kind)}`);
+  }
+
+  private enemyKindName(kind: EnemyKind): string {
+    return kind === 'flame-flower' ? '火焰花' : '蜘蛛';
+  }
+
   private refreshModeButtons(): void {
     for (const b of this.actionBtns) {
       if (b.__group !== 'mode') continue;
       const on = b.__id === this.tool;
+      const color = on ? BTN_MODE_ON : b.__baseColor;
+      b.__bg.clear().roundRect(0, 0, b.__w, 40, 10).fill({ color });
+      b.__label.style.fill = on ? 0x1a1200 : 0xffffff;
+    }
+  }
+
+  private refreshEnemyKindButtons(): void {
+    for (const b of this.actionBtns) {
+      if (b.__group !== 'enemyKind') continue;
+      const on = b.__id === this.enemyKind;
       const color = on ? BTN_MODE_ON : b.__baseColor;
       b.__bg.clear().roundRect(0, 0, b.__w, 40, 10).fill({ color });
       b.__label.style.fill = on ? 0x1a1200 : 0xffffff;
@@ -517,12 +564,13 @@ export class MapEditScene extends Container implements GameScene {
       return;
     }
     this.pushUndo();
-    this.enemies.push({ kind: 'spider', x: pos.x, y: pos.y });
+    this.enemies.push({ kind: this.enemyKind, x: pos.x, y: pos.y });
+    const name = this.enemyKindName(this.enemyKind);
     const onWalk = this.cells.has(cellKey(c, r, this.cols));
     this.flash(
       onWalk
-        ? `已放蜘蛛（共 ${this.enemies.length}）`
-        : `已放蜘蛛（不在洞里，共 ${this.enemies.length}）`,
+        ? `已放${name}（共 ${this.enemies.length}）`
+        : `已放${name}（不在洞里，共 ${this.enemies.length}）`,
     );
   }
 
@@ -533,8 +581,10 @@ export class MapEditScene extends Container implements GameScene {
       return;
     }
     this.pushUndo();
-    this.enemies.splice(idx, 1);
-    this.flash(`已删除（剩余 ${this.enemies.length}）`);
+    const [removed] = this.enemies.splice(idx, 1);
+    this.flash(
+      `已删除${removed ? this.enemyKindName(removed.kind) : '敌人'}（剩余 ${this.enemies.length}）`,
+    );
   }
 
   private addBtn(
@@ -543,7 +593,7 @@ export class MapEditScene extends Container implements GameScene {
     textColor: number,
     onClick: () => void,
     width = 88,
-    group: 'action' | 'brush' | 'mode' | 'level' = 'action',
+    group: 'action' | 'brush' | 'mode' | 'enemyKind' | 'level' = 'action',
     id?: string,
   ): void {
     const w = width;
@@ -575,6 +625,7 @@ export class MapEditScene extends Container implements GameScene {
     root.on('pointerdown', (e) => e.stopPropagation());
     root.on('pointerover', () => {
       if (group === 'mode' && root.__id === this.tool) return;
+      if (group === 'enemyKind' && root.__id === this.enemyKind) return;
       if (group === 'level' && root.__id === this.levelId) return;
       const hover =
         color === BTN_MAIN
@@ -593,6 +644,10 @@ export class MapEditScene extends Container implements GameScene {
     root.on('pointerout', () => {
       if (group === 'mode') {
         this.refreshModeButtons();
+        return;
+      }
+      if (group === 'enemyKind') {
+        this.refreshEnemyKindButtons();
         return;
       }
       if (group === 'level') {
@@ -897,16 +952,21 @@ export class MapEditScene extends Container implements GameScene {
         .rect(o.x, o.y, this.cellSize, this.cellSize)
         .stroke({
           width: sw * 2,
-          color: this.tool === 'enemy' ? ENEMY : this.tool === 'spawn' ? SPAWN : 0xffe14a,
+          color:
+            this.tool === 'enemy'
+              ? ENEMY_COLORS[this.enemyKind]
+              : this.tool === 'spawn'
+                ? SPAWN
+                : 0xffe14a,
           alpha: 0.7,
         });
     }
 
-    // 敌人标记（紫点 + 外圈）
+    // 颜色和中心符号区分怪物类型。
     const enemyR = this.cellSize * 0.5;
     for (const e of this.enemies) {
       this.gfx.circle(e.x, e.y, enemyR).fill({
-        color: ENEMY,
+        color: ENEMY_COLORS[e.kind],
         alpha: 0.9,
       });
       this.gfx.circle(e.x, e.y, enemyR).stroke({
@@ -914,16 +974,26 @@ export class MapEditScene extends Container implements GameScene {
         color: 0xffffff,
         alpha: 0.85,
       });
-      // 简易「X」示意怪物
       const arm = enemyR * 0.45;
-      this.gfx
-        .moveTo(e.x - arm, e.y - arm)
-        .lineTo(e.x + arm, e.y + arm)
-        .stroke({ width: sw * 2, color: 0xffffff, alpha: 0.95 });
-      this.gfx
-        .moveTo(e.x + arm, e.y - arm)
-        .lineTo(e.x - arm, e.y + arm)
-        .stroke({ width: sw * 2, color: 0xffffff, alpha: 0.95 });
+      if (e.kind === 'flame-flower') {
+        this.gfx
+          .moveTo(e.x, e.y - arm)
+          .lineTo(e.x, e.y + arm)
+          .stroke({ width: sw * 2, color: 0xffffff, alpha: 0.95 });
+        this.gfx
+          .moveTo(e.x - arm, e.y)
+          .lineTo(e.x + arm, e.y)
+          .stroke({ width: sw * 2, color: 0xffffff, alpha: 0.95 });
+      } else {
+        this.gfx
+          .moveTo(e.x - arm, e.y - arm)
+          .lineTo(e.x + arm, e.y + arm)
+          .stroke({ width: sw * 2, color: 0xffffff, alpha: 0.95 });
+        this.gfx
+          .moveTo(e.x + arm, e.y - arm)
+          .lineTo(e.x - arm, e.y + arm)
+          .stroke({ width: sw * 2, color: 0xffffff, alpha: 0.95 });
+      }
     }
 
     this.gfx.circle(this.spawn.x, this.spawn.y, this.cellSize * 0.7).fill({
@@ -1005,6 +1075,17 @@ export class MapEditScene extends Container implements GameScene {
       if (brushBtns[1]) {
         brushBtns[1].position.set(bx, by);
       }
+    }
+
+    const showEnemyKinds = this.tool === 'enemy';
+    const enemyKindBtns = this.actionBtns.filter(
+      (b) => b.__group === 'enemyKind',
+    );
+    for (const b of enemyKindBtns) {
+      b.visible = showEnemyKinds;
+      if (!showEnemyKinds) continue;
+      b.position.set(bx, by);
+      bx += b.__w + 8;
     }
 
     // 第三行：关卡切换

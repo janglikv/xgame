@@ -10,7 +10,7 @@ export type CellRect = {
 };
 
 /** 当前支持的敌人种类（编辑器放置 / 关卡刷怪） */
-export type EnemyKind = 'spider';
+export type EnemyKind = 'spider' | 'flame-flower';
 
 /** 敌人出生点（世界坐标，建议放在可走格内） */
 export type EnemySpawn = {
