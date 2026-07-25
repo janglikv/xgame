@@ -29,6 +29,7 @@ import type { GameScene } from './types';
 const BG = 0x152018;
 const FOREST = 0x243d22;
 const GRID_LINE = 0x1a3018;
+const NINE_GRID_LINE = 0xf0c040;
 const HOLE = 0x8fe05a;
 const SPAWN = 0xff4d4d;
 
@@ -953,6 +954,19 @@ export class MapEditScene extends Container implements GameScene {
       this.gfx
         .rect(o.x, o.y, this.cellSize, this.cellSize)
         .fill({ color: HOLE, alpha: 0.55 });
+    }
+
+    // 九宫格辅助线覆盖在地形色块上，便于按画面区域规划地图
+    for (let i = 1; i < 3; i++) {
+      const offset = -half + (this.mapSize * i) / 3;
+      this.gfx
+        .moveTo(offset, -half)
+        .lineTo(offset, half)
+        .stroke({ width: sw * 2, color: NINE_GRID_LINE, alpha: 0.7 });
+      this.gfx
+        .moveTo(-half, offset)
+        .lineTo(half, offset)
+        .stroke({ width: sw * 2, color: NINE_GRID_LINE, alpha: 0.7 });
     }
 
     // 3. 工具模式选框 / 涂抹 / 框选预览
