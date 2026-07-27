@@ -1,15 +1,4 @@
-/**
- * 可走格子矩形（格子坐标）。
- * c/r 从地图左上角 (0,0) 起；一格边长 = cellSize。
- */
-export type CellRect = {
-  c: number;
-  r: number;
-  w: number;
-  h: number;
-};
-
-/** 当前支持的敌人种类（编辑器放置 / 关卡刷怪） */
+/** 当前支持的敌人种类（上帝模式放置 / 关卡刷怪） */
 export type EnemyKind = 'spider' | 'flame-flower' | 'wooden-dummy';
 
 /** 敌人出生点（世界坐标，须在陆地上） */
@@ -26,32 +15,35 @@ export type EnemySpawn = {
  */
 export type TreeKind = 'pine' | 'harvest';
 
-/** 编辑器摆放的一棵树（格子坐标） */
+/**
+ * 摆放的一棵树（世界坐标，脚底）。
+ * 不再绑定网格；id 用于砍伐 / 上帝模式删除 solid。
+ */
 export type MapTree = {
-  c: number;
-  r: number;
+  x: number;
+  y: number;
   /** 缺省 harvest */
   kind?: TreeKind;
+  /** 稳定 id；缺省由 normalize 生成 */
+  id?: string;
 };
 
 /**
  * 关卡地图（海岛模型）：
  * - mapSize 方框内是绿地岛屿（可走），方框外全是海（不可走）
- * - seaMarginCells 可选：再从方框内侧缩一圈海（默认 0 = 整框都是陆）
+ * - seaMargin 可选：再从方框内侧缩一圈海（像素，默认 0）
  * - 阻挡来自海 + 显式 trees
- * - 不再使用 walk 涂抹挖洞
+ * - 摆放均为世界坐标，无网格
  */
 export type LevelMapDef = {
   id: string;
   /** 陆地岛屿边长（世界像素）；岛外全是海 */
   mapSize: number;
-  /** 基本单元 = 一棵树占位宽度 */
-  cellSize: number;
   /**
-   * 可选：岛屿内侧再挖一圈海（格数）。默认 0。
-   * 陆地 = mapSize 方框去掉四周各 seaMarginCells 格。
+   * 可选：岛屿内侧再挖一圈海（像素）。默认 0。
+   * 陆地 = mapSize 方框去掉四周各 seaMargin。
    */
-  seaMarginCells: number;
+  seaMargin?: number;
   /** 玩家出生点（世界坐标，须在陆地上） */
   spawn: { x: number; y: number };
   /** 摆放的树 */

@@ -2,13 +2,13 @@ import { Container, Graphics } from 'pixi.js';
 import { NightConfig } from '../utils/NightConfig';
 
 /**
- * 环境夜晚效果遮罩（全局无硬边月夜幽蓝蒙版）：
- * 当【夜晚模式】开关开启时全屏通透压暗，关闭时完全隐藏恢复白天明亮。
+ * 屏幕空间夜晚遮罩：始终铺满当前视口（与地图尺寸 / 镜头缩放无关）。
+ * 挂在 LevelScene 上、worldRoot 之上 / HUD 之下，随窗口 resize 更新。
  */
 export class NightOverlay extends Container {
   private readonly shade: Graphics;
-  private extentW = 4000;
-  private extentH = 4000;
+  private viewW = 1;
+  private viewH = 1;
   private unsubscribe: (() => void) | null = null;
 
   constructor() {
@@ -20,27 +20,24 @@ export class NightOverlay extends Container {
     this.shade.label = 'NightShade';
     this.addChild(this.shade);
 
-    // 订阅夜晚模式全局状态变动
     this.unsubscribe = NightConfig.onChange(() => {
-      this.updateState();
+      this.redraw();
     });
 
-    this.updateState();
+    this.redraw();
   }
 
   /**
-   * 扩展布局范围（覆盖整片视野与海域）
+   * 按屏幕像素铺满视口（左上角原点，与 HUD 同坐标系）。
    */
   layout(width: number, height: number): void {
-    this.extentW = Math.max(width * 2, 4000);
-    this.extentH = Math.max(height * 2, 4000);
-    this.updateState();
+    this.viewW = Math.max(1, width);
+    this.viewH = Math.max(1, height);
+    this.position.set(0, 0);
+    this.redraw();
   }
 
-  /**
-   * 刷新夜晚遮罩显示与调色
-   */
-  private updateState(): void {
+  private redraw(): void {
     const isNight = NightConfig.isNightEnabled();
     this.visible = isNight;
 
@@ -49,13 +46,10 @@ export class NightOverlay extends Container {
       return;
     }
 
-    const hw = this.extentW / 2;
-    const hh = this.extentH / 2;
-
-    // 极其漆黑浓重的深夜黑影蒙版 (Pitch Black Midnight)
+    // 深夜黑影蒙版：固定盖住整个屏幕
     this.shade
       .clear()
-      .rect(-hw, -hh, this.extentW, this.extentH)
+      .rect(0, 0, this.viewW, this.viewH)
       .fill({ color: 0x01040a, alpha: 0.88 });
   }
 

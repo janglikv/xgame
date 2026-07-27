@@ -21,9 +21,8 @@ export type HarvestableTreeOptions = {
   woodDrop?: number;
   /** 视觉色调（夜景偏冷） */
   tint?: number;
-  /** 地图格子（砍伐后移除 solid） */
-  cellC?: number;
-  cellR?: number;
+  /** 树 id（砍伐后移除 solid） */
+  treeId?: string;
 };
 
 /**
@@ -35,9 +34,8 @@ export class HarvestableTree extends Container {
   worldY: number;
   readonly hurtR = HURT_R;
   readonly woodDrop: number;
-  /** 地图格坐标；无则 -1 */
-  readonly cellC: number;
-  readonly cellR: number;
+  /** 树 id；空串表示无 solid 绑定 */
+  readonly treeId: string;
 
   private readonly maxHp: number;
   private hp: number;
@@ -59,8 +57,7 @@ export class HarvestableTree extends Container {
     this.maxHp = options.maxHp ?? DEFAULT_MAX_HP;
     this.hp = this.maxHp;
     this.woodDrop = Math.max(1, options.woodDrop ?? 2);
-    this.cellC = options.cellC ?? -1;
-    this.cellR = options.cellR ?? -1;
+    this.treeId = options.treeId ?? '';
 
     this.gfx = new Graphics();
     this.gfx.label = 'HarvestTreeGfx';

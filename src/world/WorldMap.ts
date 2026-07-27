@@ -2,19 +2,18 @@ import { Container, Graphics } from 'pixi.js';
 import { getActiveMapDef, setActiveMapDef } from '../data/maps/activeMap';
 import type { LevelMapDef } from '../data/maps/types';
 import {
-  cellCenter,
   clampToWalkableWorld,
-  getMapGrid,
   hitsTreeObstacle,
   isOcean,
+  landRectOf,
   normalizeTrees,
   syncRuntimeTreesFromDef,
+  treeIdOf,
   treeKindOf,
 } from '../data/maps/walkMask';
 import type { Vec2 } from '../utils/math';
 import { generateOrganicContour, OceanLayer } from './OceanLayer';
 import {
-  TREE_CHUNK_CELLS,
   TreeRowChunk,
   type TreePlant,
 } from './TreeRowChunk';
@@ -70,7 +69,7 @@ export function isTreeBlocked(x: number, y: number): boolean {
   return hitsTreeObstacle(x, y, 0);
 }
 
-/** 实体圆是否碰到海 / 树干 */
+/** 实体圆是否碰到海 / 树干（闪现射线等需要「硬阻挡」的场合） */
 export function bodyHitsTrees(
   x: number,
   y: number,
@@ -82,8 +81,18 @@ export function bodyHitsTrees(
   return hitsTreeObstacle(x, y, r);
 }
 
+/** 仅树干 solid（不含海）——走路用，避免海岸被当轴对齐硬墙卡脚 */
+function bodyHitsTrunk(
+  x: number,
+  y: number,
+  radius = DEFAULT_BODY_RADIUS,
+): boolean {
+  return hitsTreeObstacle(x, y, Math.max(0, radius));
+}
+
 /**
- * 从 from 移向 to 时做轴分离滑动，避免穿进海 / 树。
+ * 从 from 移向 to：树用轴分离滑动；海不在这里硬挡。
+ * 海岸由 resolveSolid → clampWorld 做法线钳制，可沿岸滑行不卡脚。
  */
 export function resolveTreeCollision(
   fromX: number,
@@ -92,12 +101,12 @@ export function resolveTreeCollision(
   toY: number,
   radius = DEFAULT_BODY_RADIUS,
 ): Vec2 {
-  if (!bodyHitsTrees(toX, toY, radius)) {
+  if (!bodyHitsTrunk(toX, toY, radius)) {
     return { x: toX, y: toY };
   }
 
-  const canX = !bodyHitsTrees(toX, fromY, radius);
-  const canY = !bodyHitsTrees(fromX, toY, radius);
+  const canX = !bodyHitsTrunk(toX, fromY, radius);
+  const canY = !bodyHitsTrunk(fromX, toY, radius);
 
   if (canX && !canY) return { x: toX, y: fromY };
   if (canY && !canX) return { x: fromX, y: toY };
@@ -107,7 +116,7 @@ export function resolveTreeCollision(
     return dx >= dy ? { x: toX, y: fromY } : { x: fromX, y: toY };
   }
 
-  if (bodyHitsTrees(fromX, fromY, radius)) {
+  if (bodyHitsTrunk(fromX, fromY, radius)) {
     const escaped = tryEscapeTrees(fromX, fromY, radius);
     if (escaped) return escaped;
   }
@@ -259,7 +268,7 @@ export class WorldMap extends Container {
     // no-op
   }
 
-  /** 钳制玩家至自然可走区域（草地+金沙滩+浅海 Lagoon，仅阻挡深海） */
+  /** 钳制玩家至自然可走区域（草地+金沙滩，贴有机海岸线，禁止入海） */
   static clampWorld(x: number, y: number, radius = DEFAULT_BODY_RADIUS): Vec2 {
     const def = getActiveMapDef();
     return clampToWalkableWorld(x, y, def, radius);
@@ -328,15 +337,22 @@ export class WorldMap extends Container {
   }
 
   private landRect(): { x: number; y: number; w: number; h: number } {
-    const grid = getMapGrid(this.def);
-    const m = grid.seaMarginCells * grid.cellSize;
-    const half = this.def.mapSize / 2;
-    return {
-      x: -half + m,
-      y: -half + m,
-      w: this.def.mapSize - m * 2,
-      h: this.def.mapSize - m * 2,
-    };
+    return landRectOf(this.def);
+  }
+
+  /**
+   * 上帝模式改树后：重建静态松树 chunk，并同步 solid 表。
+   * 返回新 chunk，由 LevelScene 挂到 sortLayer（Y-sort）。
+   */
+  rebuildPlacedTrees(): readonly TreeRowChunk[] {
+    for (const chunk of this.treeChunks) {
+      chunk.parent?.removeChild(chunk);
+      chunk.destroy({ children: true });
+    }
+    this.treeChunks.length = 0;
+    syncRuntimeTreesFromDef(this.def);
+    this.spawnPlacedTreeChunks();
+    return this.treeChunks;
   }
 
   private drawLand(g: Graphics): void {
@@ -444,34 +460,38 @@ export class WorldMap extends Container {
 
   /**
    * 仅绘制 kind=pine 的静态树（harvest 由 HarvestableTree 实体画）。
-   * 按 worldY 分行 + 水平 chunk 合并。
+   * 按 worldY 量化分行 + 水平邻近合并 chunk。
    */
   private spawnPlacedTreeChunks(): void {
-    const def = this.def;
-    const pines = normalizeTrees(def).filter((t) => treeKindOf(t) === 'pine');
+    const pines = normalizeTrees(this.def).filter(
+      (t) => treeKindOf(t) === 'pine',
+    );
     if (pines.length === 0) return;
 
-    // 按行(r)分组
+    /** 同一「行」：worldY 量化到 4px，避免浮点拆碎 */
+    const ROW_Q = 4;
     const byRow = new Map<number, typeof pines>();
     for (const t of pines) {
-      const list = byRow.get(t.r) ?? [];
+      const key = Math.round(t.y / ROW_Q) * ROW_Q;
+      const list = byRow.get(key) ?? [];
       list.push(t);
-      byRow.set(t.r, list);
+      byRow.set(key, list);
     }
 
-    for (const [row, list] of byRow) {
-      list.sort((a, b) => a.c - b.c);
-      const y = cellCenter(0, row, def.mapSize, def.cellSize).y;
+    const CHUNK_W = 1152;
+    for (const [, list] of byRow) {
+      list.sort((a, b) => a.x - b.x);
+      const y =
+        list.reduce((s, t) => s + t.y, 0) / Math.max(1, list.length);
       for (let i = 0; i < list.length; ) {
         const chunk: TreePlant[] = [];
-        const c0 = list[i]!.c;
-        while (
-          i < list.length &&
-          list[i]!.c < c0 + TREE_CHUNK_CELLS
-        ) {
+        const x0 = list[i]!.x;
+        while (i < list.length && list[i]!.x < x0 + CHUNK_W) {
           const t = list[i]!;
-          const p = cellCenter(t.c, t.r, def.mapSize, def.cellSize);
-          chunk.push({ x: p.x, shade: (t.c + t.r) % 3 });
+          const shade =
+            Math.abs(Math.round(t.x) + Math.round(t.y) + treeIdOf(t).length) %
+            3;
+          chunk.push({ x: t.x, shade });
           i++;
         }
         if (chunk.length > 0) {

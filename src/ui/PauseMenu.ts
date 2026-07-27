@@ -6,9 +6,7 @@ import { NightConfig } from '../utils/NightConfig';
 export type PauseMenuOptions = {
   onResume: () => void;
   onBack: () => void;
-  /** 预览模式：返回地图编辑 */
-  onEditMap?: () => void;
-  /** 自定义「返回」文案，如「返回编辑」 */
+  /** 自定义「返回」文案 */
   backLabel?: string;
 };
 
@@ -39,7 +37,6 @@ export class PauseMenu extends Container {
   private readonly resumeBtn: PauseButton;
   private readonly nightBtn: PauseButton;
   private readonly debugBtn: PauseButton;
-  private readonly editBtn?: PauseButton;
   private readonly backBtn: PauseButton;
 
   constructor(options: PauseMenuOptions) {
@@ -99,12 +96,7 @@ export class PauseMenu extends Container {
     );
     this.debugBtnLabel = this.debugBtn.label;
 
-    // 3. 继续编辑 (可选)
-    if (options.onEditMap) {
-      this.editBtn = this.createButton('继续编辑', 240, 46, 0x3d8a6a, 0x52b08a, options.onEditMap);
-    }
-
-    // 4. 返回主场景
+    // 3. 返回主场景
     this.backBtn = this.createButton(
       options.backLabel ?? '返回主场景',
       240,
@@ -160,8 +152,8 @@ export class PauseMenu extends Container {
 
     const panelW = 340;
     // 动态自适应面板高度：包含标题 + 顶栏 + 按钮组
-    const numRows = 3 + (this.editBtn ? 1 : 0);
-    const panelH = Math.max(320, 110 + numRows * 54);
+    const numRows = 3;
+    const panelH = Math.max(300, 110 + numRows * 54);
 
     const px = (width - panelW) / 2;
     const py = (height - panelH) / 2;
@@ -201,14 +193,7 @@ export class PauseMenu extends Container {
     this.debugBtn.root.position.set(width / 2 + 65, row2Y);
     currentY += this.nightBtn.height + 12;
 
-    // 行 3 (可选)：继续编辑
-    if (this.editBtn) {
-      this.editBtn.root.pivot.set(this.editBtn.width / 2, this.editBtn.height / 2);
-      this.editBtn.root.position.set(width / 2, currentY + this.editBtn.height / 2);
-      currentY += this.editBtn.height + 12;
-    }
-
-    // 行 4：返回主场景
+    // 行 3：返回主场景
     this.backBtn.root.pivot.set(this.backBtn.width / 2, this.backBtn.height / 2);
     this.backBtn.root.position.set(width / 2, currentY + this.backBtn.height / 2);
   }

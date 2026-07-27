@@ -9,7 +9,7 @@ export const MAP_SIZE = 2880;
 /** 地图半宽/半高（中心 = 原点） */
 export const MAP_WORLD_HALF = MAP_SIZE / 2;
 
-/** 松树网格间距（= 默认 cellSize） */
+/** 历史松树间距常量（布局已去网格，仅兼容旧 import） */
 export const PINE_SPACING = 36;
 
 /** 兼容旧 import（九宫格布局已废弃） */

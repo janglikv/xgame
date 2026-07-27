@@ -1,5 +1,5 @@
 import type { LevelMapDef } from './types';
-import { normalizeTrees } from './walkMask';
+import { normalizeTrees, seaMarginPx } from './walkMask';
 
 function roundN(n: number, digits = 2): number {
   const p = 10 ** digits;
@@ -18,20 +18,23 @@ export function formatLevelDefTs(
   lines.push(`import type { LevelMapDef } from './types';`);
   lines.push('');
   lines.push(
-    `/** 地图编辑器导出 — id: ${def.id} · 树 ${trees.length} · cell=${def.cellSize} · 海宽 ${def.seaMarginCells} 格 */`,
+    `/** 上帝模式导出 — id: ${def.id} · 树 ${trees.length} · 海缘 ${seaMarginPx(def)}px */`,
   );
   lines.push(`export const ${exportName}: LevelMapDef = {`);
   lines.push(`  id: ${JSON.stringify(def.id)},`);
   lines.push(`  mapSize: ${roundN(def.mapSize, 0)},`);
-  lines.push(`  cellSize: ${roundN(def.cellSize, 0)},`);
-  lines.push(`  seaMarginCells: ${roundN(def.seaMarginCells, 0)},`);
+  lines.push(`  seaMargin: ${roundN(seaMarginPx(def), 0)},`);
   lines.push(
     `  spawn: { x: ${roundN(def.spawn.x)}, y: ${roundN(def.spawn.y)} },`,
   );
   lines.push(`  trees: [`);
   for (const t of trees) {
-    const kind = t.kind && t.kind !== 'harvest' ? `, kind: ${JSON.stringify(t.kind)}` : '';
-    lines.push(`    { c: ${t.c}, r: ${t.r}${kind} },`);
+    const kind =
+      t.kind && t.kind !== 'harvest' ? `, kind: ${JSON.stringify(t.kind)}` : '';
+    const id = t.id ? `, id: ${JSON.stringify(t.id)}` : '';
+    lines.push(
+      `    { x: ${roundN(t.x)}, y: ${roundN(t.y)}${kind}${id} },`,
+    );
   }
   lines.push(`  ],`);
   lines.push(`  enemies: [`);

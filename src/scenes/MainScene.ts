@@ -13,7 +13,6 @@ const BG_COLOR = 0x1a2430;
 
 export type MainSceneOptions = {
   onSelectLevel: (mapDef: LevelMapDef) => void;
-  onMapEdit?: () => void;
   /** 碰撞 / 受击体模板编辑 */
   onBodyEdit?: () => void;
   onBackground?: (color: number) => void;
@@ -30,7 +29,8 @@ type MenuButton = {
 };
 
 /**
- * 主场景：选择关卡 / 地图编辑。
+ * 主场景：选择关卡 / 碰撞编辑。
+ * 地图用关内上帝模式（G）编辑。
  */
 export class MainScene extends Container implements GameScene {
   private readonly bg: Graphics;
@@ -38,7 +38,6 @@ export class MainScene extends Container implements GameScene {
   private readonly subtitle: Text;
   private readonly buttons: MenuButton[] = [];
   private readonly onSelectLevel: (mapDef: LevelMapDef) => void;
-  private readonly onMapEdit?: () => void;
   private readonly onBodyEdit?: () => void;
   private readonly onBackground?: (color: number) => void;
   private viewWidth: number;
@@ -50,7 +49,6 @@ export class MainScene extends Container implements GameScene {
     this.viewWidth = width;
     this.viewHeight = height;
     this.onSelectLevel = options.onSelectLevel;
-    this.onMapEdit = options.onMapEdit;
     this.onBodyEdit = options.onBodyEdit;
     this.onBackground = options.onBackground;
 
@@ -78,7 +76,7 @@ export class MainScene extends Container implements GameScene {
     this.addChild(this.title);
 
     this.subtitle = new Text({
-      text: '选择关卡 · 地图 / 碰撞编辑',
+      text: '选择关卡 · 关内 G 上帝模式编辑地图',
       style: {
         fontFamily: 'system-ui, sans-serif',
         fontSize: 20,
@@ -104,14 +102,6 @@ export class MainScene extends Container implements GameScene {
         this.createButton(label, base, hover, () => this.onSelectLevel(map)),
       );
     });
-
-    if (this.onMapEdit) {
-      this.buttons.push(
-        this.createButton('地图编辑', 0x4a7a52, 0x6aaa72, () =>
-          this.onMapEdit?.(),
-        ),
-      );
-    }
 
     if (this.onBodyEdit) {
       this.buttons.push(

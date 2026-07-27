@@ -41,13 +41,21 @@ import { BombAmmoHud } from '../ui/BombAmmoHud';
 import { SpearAmmoHud } from '../ui/SpearAmmoHud';
 import {
   LEVEL_1,
-  cellCenter,
+  TREE_SOLID_R,
+  addRuntimeTreeObstacle,
+  allocTreeId,
+  cloneLevelDef,
+  isOnLand,
   normalizeTrees,
-  removeRuntimeTreeObstacleAtCell,
+  removeRuntimeTreeObstacleById,
+  saveMapDraft,
   setActiveMapDef,
+  treeIdOf,
   treeKindOf,
   type LevelMapDef,
+  type MapTree,
 } from '../data/maps';
+import { GodModeHud, type GodBrush } from '../ui/GodModeHud';
 import { getNightBackground, NightOverlay } from '../world/NightOverlay';
 import { WorldMap } from '../world/WorldMap';
 import { LevelCamera } from './LevelCamera';
@@ -94,18 +102,13 @@ export type LevelSceneOptions = {
   getLastCharacter?: () => CharacterId;
   /** 切换角色后写入存档 */
   setLastCharacter?: (id: CharacterId) => void;
-  /**
-   * 地图编辑预览：暂停菜单显示「继续编辑」，
-   * 并可用 backLabel 覆盖返回文案。
-   */
-  onEditMap?: () => void;
-  backLabel?: string;
 };
 
 /**
  * 可玩关卡（默认黑夜）：WASD 移动，点击远程攻击，Esc 暂停。
  * 场上始终只有一名角色；右侧头像点击或 Tab 切换。
  * 滚轮 / +/- 缩放，0 复位，F 看全景；R 近战砍可交互树。
+ * G：上帝模式，任意点放置树/怪/出生点，自动存草稿。
  * 纵深：worldRoot 镜头变换 + sortLayer 按脚底 Y 排序。
  */
 export class LevelScene extends Container implements GameScene {
@@ -139,24 +142,29 @@ export class LevelScene extends Container implements GameScene {
   private readonly combat: CombatSystem;
   private readonly debugOverlay: DebugOverlay;
   private readonly pauseMenu: PauseMenu;
+  private readonly godHud: GodModeHud;
   private readonly camera: LevelCamera;
+  /** 可变关卡数据（上帝模式就地改，并 saveMapDraft） */
   private readonly mapDef: LevelMapDef;
-  private readonly spawn: { x: number; y: number };
+  private spawn: { x: number; y: number };
   private readonly onBack: () => void;
   private readonly onBackground?: (color: number) => void;
-  private readonly onEditMap?: () => void;
   private readonly getLastCharacter: () => CharacterId;
   private readonly setLastCharacter?: (id: CharacterId) => void;
 
   private paused = false;
+  private godMode = false;
+  private godBrush: GodBrush = 'harvest';
   private escWasDown = false;
   private tabWasDown = false;
   private qWasDown = false;
   private eWasDown = false;
   private rWasDown = false;
+  private gWasDown = false;
   private fitWasDown = false;
   private resetZoomWasDown = false;
   private treesMounted = false;
+  private readonly brushDigitWasDown = new Map<string, boolean>();
   /** 切换角色剩余冷却（秒）；0 表示可切换 */
   private switchCooldownRemaining = 0;
   /** 最近指针屏幕坐标（供 Q 等按键技取瞄准方向） */
@@ -166,12 +174,13 @@ export class LevelScene extends Container implements GameScene {
 
   constructor(width: number, height: number, options: LevelSceneOptions) {
     super();
-    this.mapDef = options.mapDef ?? LEVEL_1;
+    // 克隆一份，避免改草稿时污染目录常量
+    this.mapDef = cloneLevelDef(options.mapDef ?? LEVEL_1);
+    if (this.mapDef.enemies === undefined) this.mapDef.enemies = [];
     this.spawn = { ...this.mapDef.spawn };
     this.label = `LevelScene:${this.mapDef.id}`;
     this.onBack = options.onBack;
     this.onBackground = options.onBackground;
-    this.onEditMap = options.onEditMap;
     this.getLastCharacter =
       options.getLastCharacter ?? (() => 'bomb-girl' as CharacterId);
     this.setLastCharacter = options.setLastCharacter;
@@ -199,13 +208,6 @@ export class LevelScene extends Container implements GameScene {
     this.worldMap = new WorldMap(this.mapDef);
     this.worldRoot.addChild(this.worldMap);
 
-    // 夜色只压在地面（草坪）上，不进 sortLayer，避免角色/怪/爆炸变黑
-    const half = this.mapDef.mapSize / 2;
-    this.nightOverlay = new NightOverlay();
-    this.nightOverlay.position.set(-half, -half);
-    this.nightOverlay.layout(this.mapDef.mapSize, this.mapDef.mapSize);
-    this.worldRoot.addChild(this.nightOverlay);
-
     this.sortLayer = new Container();
     this.sortLayer.label = 'SortLayer';
     this.sortLayer.sortableChildren = true;
@@ -231,6 +233,12 @@ export class LevelScene extends Container implements GameScene {
 
     this.spawnEnemies();
     this.spawnHarvestTrees();
+
+    // 夜色：屏幕空间遮罩，永远铺满视口（不受地图/镜头缩放影响）
+    // 在 worldRoot 之上、HUD 之下，UI 保持可读
+    this.nightOverlay = new NightOverlay();
+    this.nightOverlay.layout(width, height);
+    this.addChild(this.nightOverlay);
 
     // HUD 须先于 activateCharacter：后者会同步飞剑条 / 光标
     this.healthBar = new HealthBar({
@@ -259,14 +267,12 @@ export class LevelScene extends Container implements GameScene {
     this.pauseMenu = new PauseMenu({
       onResume: () => this.setPaused(false),
       onBack: () => this.onBack(),
-      onEditMap: this.onEditMap
-        ? () => {
-            this.onEditMap?.();
-          }
-        : undefined,
-      backLabel: options.backLabel,
     });
     this.addChild(this.pauseMenu);
+
+    this.godHud = new GodModeHud();
+    this.godHud.setBrush(this.godBrush);
+    this.addChild(this.godHud);
 
     this.mountRoster();
     this.activateCharacter(this.getLastCharacter(), {
@@ -282,9 +288,11 @@ export class LevelScene extends Container implements GameScene {
     this.stepCamera(0, true);
     this.syncWorldActors();
     this.layoutHealthHud();
+    this.nightOverlay.layout(width, height);
     this.inventoryHud.layout(width, height);
     this.characterHud.layout(width, height);
     this.pauseMenu.layout(width, height);
+    this.godHud.layout(width, height);
   }
 
   /** 创建全角色实体（先不全部挂到 sortLayer） */
@@ -506,21 +514,29 @@ export class LevelScene extends Container implements GameScene {
     const trees = normalizeTrees(this.mapDef);
     for (const t of trees) {
       if (treeKindOf(t) !== 'harvest') continue;
-      const p = cellCenter(t.c, t.r, this.mapDef.mapSize, this.mapDef.cellSize);
-      const tree = new HarvestableTree(p.x, p.y, {
-        woodDrop: 1 + ((t.c + t.r) % 2),
-        cellC: t.c,
-        cellR: t.r,
-      });
-      this.sortLayer.addChild(tree);
-      this.harvestTrees.push(tree);
+      this.mountHarvestTree(t);
     }
   }
 
-  /** 树被摧毁：掉木头 + 移除 solid */
+  private mountHarvestTree(t: MapTree): HarvestableTree {
+    const id = treeIdOf(t);
+    const tree = new HarvestableTree(t.x, t.y, {
+      woodDrop: 1 + (Math.abs(Math.round(t.x) + Math.round(t.y)) % 2),
+      treeId: id,
+    });
+    this.sortLayer.addChild(tree);
+    this.harvestTrees.push(tree);
+    return tree;
+  }
+
+  /** 树被摧毁：掉木头 + 移除 solid + 从草稿去掉 */
   private onHarvestTreeDestroyed(tree: HarvestableTree): void {
-    if (tree.cellC >= 0 && tree.cellR >= 0) {
-      removeRuntimeTreeObstacleAtCell(this.mapDef, tree.cellC, tree.cellR);
+    if (tree.treeId) {
+      removeRuntimeTreeObstacleById(tree.treeId);
+      this.mapDef.trees = this.mapDef.trees.filter(
+        (t) => treeIdOf(t) !== tree.treeId,
+      );
+      this.persistMapDraft();
     }
     const n = tree.woodDrop;
     for (let i = 0; i < n; i++) {
@@ -717,16 +733,27 @@ export class LevelScene extends Container implements GameScene {
     }
     this.escWasDown = escDown;
 
+    // G：开关上帝模式（暂停中也可开）
+    const gDown = this.keyboard.isDown('KeyG');
+    if (gDown && !this.gWasDown) {
+      this.setGodMode(!this.godMode);
+    }
+    this.gWasDown = gDown;
+
+    if (this.godMode && !this.paused) {
+      this.handleGodBrushKeys();
+    }
+
     // Tab：循环切换操控角色（暂停 / CD 中忽略）
     const tabDown = this.keyboard.isDown('Tab');
-    if (tabDown && !this.tabWasDown && !this.paused) {
+    if (tabDown && !this.tabWasDown && !this.paused && !this.godMode) {
       this.switchCharacter(this.characterHud.getNextCharacterId());
     }
     this.tabWasDown = tabDown;
 
     // Q：角色特技（冰冰 = 原地十二角剑阵，无位移）
     const qDown = this.keyboard.isDown('KeyQ');
-    if (qDown && !this.qWasDown && !this.paused) {
+    if (qDown && !this.qWasDown && !this.paused && !this.godMode) {
       const p = this.player;
       if (p && !p.entranceLocks.attack) {
         const aim = this.pointerSeen
@@ -759,7 +786,7 @@ export class LevelScene extends Container implements GameScene {
 
     // E：冰冰沿指针正方向闪现（射线停墙前）；不生成剑阵
     const eDown = this.keyboard.isDown('KeyE');
-    if (eDown && !this.eWasDown && !this.paused) {
+    if (eDown && !this.eWasDown && !this.paused && !this.godMode) {
       const p = this.player;
       if (p && !p.entranceLocks.move) {
         const fromX = p.worldX;
@@ -795,7 +822,7 @@ export class LevelScene extends Container implements GameScene {
 
     // R：近战砍最近可交互树（F 留给全景）
     const rDown = this.keyboard.isDown('KeyR');
-    if (rDown && !this.rWasDown && !this.paused) {
+    if (rDown && !this.rWasDown && !this.paused && !this.godMode) {
       this.tryMeleeHarvest();
     }
     this.rWasDown = rDown;
@@ -831,23 +858,30 @@ export class LevelScene extends Container implements GameScene {
     const fromX = player.worldX;
     const fromY = player.worldY;
 
-    // 被炸飞：抛物线（地面推开 + 高度起落）
-    const knockStep = stepKnockArc(player.knock, dt);
+    // 被炸飞：抛物线（地面推开 + 高度起落）——上帝模式关掉击退
+    const knockStep = this.godMode
+      ? { moved: false, dx: 0, dy: 0, airborne: false, justLanded: false }
+      : stepKnockArc(player.knock, dt);
     if (knockStep.moved) {
       player.worldX += knockStep.dx;
       player.worldY += knockStep.dy;
       moved = true;
     }
-    const knockSpeed = Math.hypot(player.knock.velX, player.knock.velY);
+    const knockSpeed = this.godMode
+      ? 0
+      : Math.hypot(player.knock.velX, player.knock.velY);
     const airborne = knockStep.airborne;
     const locks = player.entranceLocks;
 
     // 出场锁移动时保持垂直落点；普通空中状态仍保留少量操控。
     // 左右朝向由指针决定，不再跟 A/D。
+    // 上帝模式：更快飞行，无视锁
     const moving = x !== 0 || y !== 0;
-    if (moving && !locks.move) {
+    if (moving && (this.godMode || !locks.move)) {
       let control = 1;
-      if (airborne) {
+      if (this.godMode) {
+        control = 1.6;
+      } else if (airborne) {
         control = 0.08;
       } else if (knockSpeed > KNOCK_CONTROL_SOFTEN) {
         control = Math.max(0.2, 1 - knockSpeed / (KNOCK_CONTROL_SOFTEN * 3));
@@ -857,8 +891,10 @@ export class LevelScene extends Container implements GameScene {
       moved = true;
     }
 
-    // 树区 + 脚底圆互挡（即使本帧没位移，也可能被怪挤占，统一走 solid）
-    this.applyPlayerSolid(fromX, fromY);
+    // 树区 + 脚底圆互挡（上帝模式跳过，可飞出海/穿树）
+    if (!this.godMode) {
+      this.applyPlayerSolid(fromX, fromY);
+    }
 
     // 朝向：指针在角色哪一侧就看向哪一侧（指针未出现过则保持原朝向）
     // 不用 aimFromScreen：它在过近时返回 null（投掷用），朝向仍应更新。
@@ -890,28 +926,32 @@ export class LevelScene extends Container implements GameScene {
     this.syncAmmoHud(player);
     this.worldMap.update(deltaMS);
 
-    for (let si = 0; si < this.spiders.length; si++) {
-      const spider = this.spiders[si]!;
-      if (!spider.isAlive) continue;
-      const sFromX = spider.worldX;
-      const sFromY = spider.worldY;
-      const result = spider.update(
-        deltaMS,
-        player.worldX,
-        player.worldY,
-        player.bodyProfileId,
-      );
-      this.applySpiderSolid(spider, sFromX, sFromY, si);
-      if (result.attackHit) {
-        this.applySpiderAttack(result.attackHit);
+    if (!this.godMode) {
+      for (let si = 0; si < this.spiders.length; si++) {
+        const spider = this.spiders[si]!;
+        if (!spider.isAlive) continue;
+        const sFromX = spider.worldX;
+        const sFromY = spider.worldY;
+        const result = spider.update(
+          deltaMS,
+          player.worldX,
+          player.worldY,
+          player.bodyProfileId,
+        );
+        this.applySpiderSolid(spider, sFromX, sFromY, si);
+        if (result.attackHit) {
+          this.applySpiderAttack(result.attackHit);
+        }
+      }
+      for (const spider of this.spiders) {
+        spider.syncToWorld();
+      }
+      this.combat.update(deltaMS, this.combatWorld());
+    } else {
+      for (const spider of this.spiders) {
+        spider.syncToWorld();
       }
     }
-    // solid 后写回显示位置（sync 在 AI 之前做过，这里补本帧位移）
-    for (const spider of this.spiders) {
-      spider.syncToWorld();
-    }
-
-    this.combat.update(deltaMS, this.combatWorld());
 
     for (const tree of this.harvestTrees) {
       tree.update(deltaMS);
@@ -1023,9 +1063,11 @@ export class LevelScene extends Container implements GameScene {
     this.cullTrees();
     this.sortDepth();
     this.layoutHealthHud();
+    this.nightOverlay.layout(width, height);
     this.inventoryHud.layout(width, height);
     this.characterHud.layout(width, height);
     this.pauseMenu.layout(width, height);
+    this.godHud.layout(width, height);
   }
 
   private handleZoomKeys(dt: number): void {
@@ -1067,6 +1109,12 @@ export class LevelScene extends Container implements GameScene {
     this.pointerScreenY = e.global.y;
     this.pointerSeen = true;
     if (this.paused) return;
+
+    if (this.godMode) {
+      this.handleGodClick(e.global.x, e.global.y);
+      return;
+    }
+
     const player = this.player;
     if (!player) return;
     if (player.entranceLocks.attack) return;
@@ -1084,6 +1132,245 @@ export class LevelScene extends Container implements GameScene {
     this.pauseMenu.setOpen(value);
     // 清掉按键，避免继续后突然冲刺
     this.keyboard.clear();
+  }
+
+  private setGodMode(on: boolean): void {
+    this.godMode = on;
+    this.godHud.visible = on;
+    if (on) {
+      this.godHud.setBrush(this.godBrush);
+      // 进入上帝模式时清 knock，避免残留击退
+      if (this.player) {
+        this.player.knock.velX = 0;
+        this.player.knock.velY = 0;
+      }
+    }
+    this.cursor = on ? 'crosshair' : 'default';
+  }
+
+  private handleGodBrushKeys(): void {
+    const map: Array<[string, GodBrush]> = [
+      ['Digit1', 'harvest'],
+      ['Digit2', 'pine'],
+      ['Digit3', 'spider'],
+      ['Digit4', 'flame-flower'],
+      ['Digit5', 'wooden-dummy'],
+      ['Digit6', 'spawn'],
+      ['Digit7', 'erase'],
+      ['Numpad1', 'harvest'],
+      ['Numpad2', 'pine'],
+      ['Numpad3', 'spider'],
+      ['Numpad4', 'flame-flower'],
+      ['Numpad5', 'wooden-dummy'],
+      ['Numpad6', 'spawn'],
+      ['Numpad7', 'erase'],
+    ];
+    for (const [code, brush] of map) {
+      const down = this.keyboard.isDown(code);
+      const was = this.brushDigitWasDown.get(code) ?? false;
+      if (down && !was) {
+        this.godBrush = brush;
+        this.godHud.setBrush(brush);
+      }
+      this.brushDigitWasDown.set(code, down);
+    }
+  }
+
+  private screenToWorld(sx: number, sy: number): { x: number; y: number } {
+    const z = Math.max(this.camera.currentZoom, 1e-4);
+    return {
+      x: this.camera.x + (sx - this.camera.width / 2) / z,
+      y: this.camera.y + (sy - this.camera.height / 2) / z,
+    };
+  }
+
+  private handleGodClick(sx: number, sy: number): void {
+    const w = this.screenToWorld(sx, sy);
+    if (this.godBrush === 'erase') {
+      this.godEraseAt(w.x, w.y);
+      return;
+    }
+    if (this.godBrush === 'spawn') {
+      this.godSetSpawn(w.x, w.y);
+      return;
+    }
+    if (!isOnLand(w.x, w.y, this.mapDef, 0)) return;
+
+    if (this.godBrush === 'harvest' || this.godBrush === 'pine') {
+      this.godPlaceTree(w.x, w.y, this.godBrush);
+      return;
+    }
+    this.godPlaceEnemy(w.x, w.y, this.godBrush);
+  }
+
+  private godPlaceTree(x: number, y: number, kind: 'harvest' | 'pine'): void {
+    const id = allocTreeId(kind === 'pine' ? 'pine' : 'harv');
+    const t: MapTree = { x, y, kind, id };
+    this.mapDef.trees.push(t);
+    addRuntimeTreeObstacle({
+      x,
+      y,
+      r: TREE_SOLID_R,
+      id,
+    });
+
+    if (kind === 'harvest') {
+      this.mountHarvestTree(t);
+      this.syncWorldActors();
+      this.sortDepth();
+    } else {
+      this.remountPineChunks();
+    }
+    this.persistMapDraft();
+  }
+
+  private godPlaceEnemy(
+    x: number,
+    y: number,
+    kind: 'spider' | 'flame-flower' | 'wooden-dummy',
+  ): void {
+    if (!this.mapDef.enemies) this.mapDef.enemies = [];
+    this.mapDef.enemies.push({ kind, x, y });
+
+    const solid = WorldMap.resolveSolid(x, y, x, y, 16);
+    const entity =
+      kind === 'flame-flower'
+        ? new FlameFlower(solid.x, solid.y)
+        : kind === 'wooden-dummy'
+          ? new WoodenDummy(solid.x, solid.y)
+          : new Spider(solid.x, solid.y, { scale: SPIDER_SCALE });
+    entity.faceToward(this.spawn.x, this.spawn.y);
+    this.sortLayer.addChild(entity);
+    this.spiders.push(entity);
+    void entity.load();
+    this.syncWorldActors();
+    this.sortDepth();
+    this.persistMapDraft();
+  }
+
+  private godSetSpawn(x: number, y: number): void {
+    if (!isOnLand(x, y, this.mapDef, 8)) return;
+    this.spawn = { x, y };
+    this.mapDef.spawn = { x, y };
+    if (this.player) {
+      this.player.worldX = x;
+      this.player.worldY = y;
+      this.syncWorldActors();
+    }
+    this.persistMapDraft();
+  }
+
+  private godEraseAt(x: number, y: number): void {
+    const PICK_R = 40;
+    let bestTree: HarvestableTree | null = null;
+    let bestTreeD = PICK_R;
+    for (const t of this.harvestTrees) {
+      if (!t.isAlive) continue;
+      const d = Math.hypot(t.worldX - x, t.worldY - y);
+      if (d < bestTreeD) {
+        bestTreeD = d;
+        bestTree = t;
+      }
+    }
+
+    let bestEnemy: Spider | null = null;
+    let bestEnemyD = PICK_R;
+    let bestEnemyI = -1;
+    for (let i = 0; i < this.spiders.length; i++) {
+      const s = this.spiders[i]!;
+      if (!s.isAlive) continue;
+      const d = Math.hypot(s.worldX - x, s.worldY - y);
+      if (d < bestEnemyD) {
+        bestEnemyD = d;
+        bestEnemy = s;
+        bestEnemyI = i;
+      }
+    }
+
+    // 静态松树：从 def 里找最近点
+    let bestPine: MapTree | null = null;
+    let bestPineD = PICK_R;
+    for (const t of this.mapDef.trees) {
+      if (treeKindOf(t) !== 'pine') continue;
+      const d = Math.hypot(t.x - x, t.y - y);
+      if (d < bestPineD) {
+        bestPineD = d;
+        bestPine = t;
+      }
+    }
+
+    // 选最近的一类
+    type Pick = { kind: 'tree' | 'enemy' | 'pine'; d: number };
+    const candidates: Pick[] = [];
+    if (bestTree) candidates.push({ kind: 'tree', d: bestTreeD });
+    if (bestEnemy) candidates.push({ kind: 'enemy', d: bestEnemyD });
+    if (bestPine) candidates.push({ kind: 'pine', d: bestPineD });
+    if (candidates.length === 0) return;
+    candidates.sort((a, b) => a.d - b.d);
+    const pick = candidates[0]!;
+
+    if (pick.kind === 'tree' && bestTree) {
+      if (bestTree.treeId) {
+        removeRuntimeTreeObstacleById(bestTree.treeId);
+        this.mapDef.trees = this.mapDef.trees.filter(
+          (t) => treeIdOf(t) !== bestTree!.treeId,
+        );
+      }
+      bestTree.parent?.removeChild(bestTree);
+      bestTree.destroy({ children: true });
+      this.harvestTrees.splice(this.harvestTrees.indexOf(bestTree), 1);
+      this.persistMapDraft();
+      return;
+    }
+
+    if (pick.kind === 'enemy' && bestEnemy && bestEnemyI >= 0) {
+      const ex = bestEnemy.worldX;
+      const ey = bestEnemy.worldY;
+      if (this.mapDef.enemies) {
+        let nearestI = -1;
+        let nearestD = 24;
+        for (let i = 0; i < this.mapDef.enemies.length; i++) {
+          const e = this.mapDef.enemies[i]!;
+          const d = Math.hypot(e.x - ex, e.y - ey);
+          if (d < nearestD) {
+            nearestD = d;
+            nearestI = i;
+          }
+        }
+        if (nearestI >= 0) this.mapDef.enemies.splice(nearestI, 1);
+      }
+      bestEnemy.parent?.removeChild(bestEnemy);
+      bestEnemy.destroy({ children: true });
+      this.spiders.splice(bestEnemyI, 1);
+      this.persistMapDraft();
+      return;
+    }
+
+    if (pick.kind === 'pine' && bestPine) {
+      const pid = treeIdOf(bestPine);
+      removeRuntimeTreeObstacleById(pid);
+      this.mapDef.trees = this.mapDef.trees.filter((t) => treeIdOf(t) !== pid);
+      this.remountPineChunks();
+      this.persistMapDraft();
+    }
+  }
+
+  private remountPineChunks(): void {
+    const chunks = this.worldMap.rebuildPlacedTrees();
+    for (const chunk of chunks) {
+      chunk.tint = NIGHT_TREE_TINT;
+      this.sortLayer.addChild(chunk);
+    }
+    this.cullTrees();
+    this.sortDepth();
+  }
+
+  private persistMapDraft(): void {
+    // 同步可砍树实体回 def（防止砍伐后列表不一致时被覆盖）——def 已实时维护
+    this.mapDef.trees = normalizeTrees(this.mapDef);
+    this.mapDef.spawn = { ...this.spawn };
+    saveMapDraft(this.mapDef);
+    setActiveMapDef(this.mapDef);
   }
 
   /** 玩家血条 + 弹药数量 HUD：底部居中，弹药在血条之上并与血条左对齐 */
