@@ -164,7 +164,6 @@ export class LevelScene extends Container implements GameScene {
   private fitWasDown = false;
   private resetZoomWasDown = false;
   private treesMounted = false;
-  private readonly brushDigitWasDown = new Map<string, boolean>();
   /** 切换角色剩余冷却（秒）；0 表示可切换 */
   private switchCooldownRemaining = 0;
   /** 最近指针屏幕坐标（供 Q 等按键技取瞄准方向） */
@@ -270,7 +269,11 @@ export class LevelScene extends Container implements GameScene {
     });
     this.addChild(this.pauseMenu);
 
-    this.godHud = new GodModeHud();
+    this.godHud = new GodModeHud({
+      onSelectBrush: (brush) => {
+        this.godBrush = brush;
+      },
+    });
     this.godHud.setBrush(this.godBrush);
     this.addChild(this.godHud);
 
@@ -740,10 +743,6 @@ export class LevelScene extends Container implements GameScene {
     }
     this.gWasDown = gDown;
 
-    if (this.godMode && !this.paused) {
-      this.handleGodBrushKeys();
-    }
-
     // Tab：循环切换操控角色（暂停 / CD 中忽略）
     const tabDown = this.keyboard.isDown('Tab');
     if (tabDown && !this.tabWasDown && !this.paused && !this.godMode) {
@@ -1148,34 +1147,6 @@ export class LevelScene extends Container implements GameScene {
     this.cursor = on ? 'crosshair' : 'default';
   }
 
-  private handleGodBrushKeys(): void {
-    const map: Array<[string, GodBrush]> = [
-      ['Digit1', 'harvest'],
-      ['Digit2', 'pine'],
-      ['Digit3', 'spider'],
-      ['Digit4', 'flame-flower'],
-      ['Digit5', 'wooden-dummy'],
-      ['Digit6', 'spawn'],
-      ['Digit7', 'erase'],
-      ['Numpad1', 'harvest'],
-      ['Numpad2', 'pine'],
-      ['Numpad3', 'spider'],
-      ['Numpad4', 'flame-flower'],
-      ['Numpad5', 'wooden-dummy'],
-      ['Numpad6', 'spawn'],
-      ['Numpad7', 'erase'],
-    ];
-    for (const [code, brush] of map) {
-      const down = this.keyboard.isDown(code);
-      const was = this.brushDigitWasDown.get(code) ?? false;
-      if (down && !was) {
-        this.godBrush = brush;
-        this.godHud.setBrush(brush);
-      }
-      this.brushDigitWasDown.set(code, down);
-    }
-  }
-
   private screenToWorld(sx: number, sy: number): { x: number; y: number } {
     const z = Math.max(this.camera.currentZoom, 1e-4);
     return {
@@ -1185,6 +1156,9 @@ export class LevelScene extends Container implements GameScene {
   }
 
   private handleGodClick(sx: number, sy: number): void {
+    if (this.godHud.containsScreenPoint(sx, sy)) {
+      return;
+    }
     const w = this.screenToWorld(sx, sy);
     if (this.godBrush === 'erase') {
       this.godEraseAt(w.x, w.y);
