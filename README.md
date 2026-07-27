@@ -1,7 +1,7 @@
 # lu-o-lu.game
 
 基于 **PixiJS 8 + TypeScript + Vite** 的 2D 俯视角动作小游戏。  
-场上始终只有一名可操控角色（炸炸 / 冰冰），可 Tab 或点头像切换；远程攻击（炸弹 / 飞剑）、蜘蛛敌人、黑夜树林地图与简易地图编辑。
+场上始终只有一名可操控角色（炸炸 / 冰冰），可 Tab 或点头像切换；远程攻击（炸弹 / 飞剑）、蜘蛛敌人、黑夜树林地图；关卡内 **G 上帝模式** 摆放树/怪并自动存草稿。
 
 ```bash
 npm install
@@ -21,11 +21,11 @@ src/
 ├── data/                   # 存档、关卡地图定义、草稿
 │   └── maps/               # LEVEL_1/2、walkMask、网格模板、编辑导出
 ├── entities/               # 角色 / 怪物 / 投射物 / 弹药（玩法实体）
-├── systems/                # 跨实体规则：战斗弹体、碰撞、Debug
-├── scenes/                 # 场景编排：主菜单、关卡、地图编辑、镜头
+├── systems/                # 跨实体规则：战斗、碰撞、角色池、收割、上帝模式
+├── scenes/                 # 场景编排：主菜单、关卡、体型编辑、镜头
 ├── world/                  # 地图表现：草坪、松树 chunk、夜色
-├── ui/                     # 屏幕 HUD（血条、弹药、暂停、切换）
-├── input/                  # 键盘
+├── ui/                     # 屏幕 HUD（血条、弹药、暂停、切换、上帝面板）
+├── input/                  # 键盘 + 边沿检测
 └── utils/                  # 数学、描边贴图、Debug 配置
 public/assets/              # 运行时静态资源（角色图、炸弹、蜘蛛等）
 ```
@@ -33,11 +33,21 @@ public/assets/              # 运行时静态资源（角色图、炸弹、蜘�
 | 目录 | 职责一句话 |
 |------|------------|
 | `entities` | **是什么、怎么表现、怎么打**（状态与意图在实体上） |
-| `systems` | **世界如何结算**（弹体列表、命中、固体） |
+| `systems` | **世界如何结算**（弹体、命中、固体、角色池、收割、上帝摆放） |
 | `scenes` | **这一帧谁先谁后**（输入、切换、驱动 update） |
 | `world` | **地图长什么样**（不参与角色 AI） |
 | `ui` | **屏幕叠层**（不写玩法规则） |
 | `data` | **持久化与关卡数据** |
+
+关卡相关 system（从 `LevelScene` 拆出）：
+
+| 模块 | 职责 |
+|------|------|
+| `CharacterRoster` | 角色池挂载 / 上场 / Tab 切换冷却 |
+| `HarvestWorld` | 可砍树、掉落、近战、进包 |
+| `GodModeController` | G 模式摆放/擦除/出生点 + 草稿 |
+| `EnemySpawner` / `enemyFactory` | 按地图刷怪 |
+| `CombatSystem` | 投射物与命中 |
 
 ---
 
@@ -183,9 +193,9 @@ LevelScene.update
 
 | 场景 | 说明 |
 |------|------|
-| `MainScene` | 选关 / 进编辑器 |
-| `LevelScene` | 可玩关卡（核心） |
-| `MapEditScene` | 地图编辑与预览进关 |
+| `MainScene` | 选关 / 进体型编辑 |
+| `LevelScene` | 可玩关卡（核心编排） |
+| `BodyEditScene` | 碰撞/受击体编辑 |
 | `SceneManager` | 切换、resize、销毁旧场景 |
 
 存档（`LocalSaveStore`）：上次场景、上次操控角色等。
@@ -197,8 +207,11 @@ LevelScene.update
 | 输入 | 作用 |
 |------|------|
 | WASD | 移动 |
-| 鼠标点击 | 远程攻击（准星角色） |
+| 鼠标点击 | 远程攻击（准星角色）；上帝模式下为摆放 |
 | Tab / 右侧头像 | 切换角色 |
+| Q / E | 特技 / 闪现（按角色实现） |
+| R | 近战砍可交互树 |
+| G | 上帝模式（摆放树/怪/出生点，自动草稿） |
 | Esc | 暂停 |
 | 滚轮 / `+` `-` | 缩放；`0` 复位；`F` 看全景 |
 
@@ -213,7 +226,7 @@ LevelScene.update
 | 新弹药 HUD | `AmmoHudModel` 加 `kind` + `applyAmmoHudModel` + UI 组件 |
 | 调蜘蛛数值 | `Spider.ts` 顶部 `AI` 常量 |
 | 调炸弹/矛伤害射程 | `BombProjectile` / `SpearProjectile` 常量 |
-| 新关卡布局 | `data/maps/` 或地图编辑器 |
+| 新关卡布局 | `data/maps/` 或关卡内 G 上帝模式 |
 | 碰撞手感 | `WorldActor` 半径、`SolidResolver`、`knockArc` |
 
 **避免**：把角色专属演出或武器模式堆进 `LevelScene`；把飞剑/炸药特化 API 写进 `CombatSystemHooks`。
