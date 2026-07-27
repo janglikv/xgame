@@ -4,6 +4,7 @@ import {
   Texture,
   TilingSprite,
 } from 'pixi.js';
+import { fbm2D, makeSeamlessNoiseTexture } from '../utils/noiseTexture';
 
 /**
  * 深邃大海与自然海岸线调色板
@@ -111,6 +112,29 @@ export class OceanLayer extends Container {
     this.baseShoreGraphics.label = 'BaseShore';
     this.addChild(this.baseShoreGraphics);
 
+    // 3.5 沙滩精准环形 Mask（仅覆盖海岸沙滩带，绝不出界污染深海）
+    const sandMask = new Graphics();
+    sandMask.label = 'SandMask';
+    this.addChild(sandMask);
+
+    // 沙滩无缝颗粒噪点贴图层 Overlay
+    const sandNoiseTex = makeSeamlessNoiseTexture({
+      seed,
+      grainIntensity: 0.4,
+      contrast: 1.3,
+    });
+    const sandNoiseSprite = new TilingSprite({
+      texture: sandNoiseTex,
+      width: extent,
+      height: extent,
+    });
+    sandNoiseSprite.label = 'SandNoiseOverlay';
+    sandNoiseSprite.position.set(-h, -h);
+    sandNoiseSprite.alpha = 0.15;
+    sandNoiseSprite.tint = 0xdcb468;
+    sandNoiseSprite.mask = sandMask;
+    this.addChild(sandNoiseSprite);
+
     // 4. 动态波浪拍岸泡沫 Graphics
     this.dynamicWaveGraphics = new Graphics();
     this.dynamicWaveGraphics.label = 'DynamicWaves';
@@ -122,17 +146,21 @@ export class OceanLayer extends Container {
     this.addChild(this.sparklesGraphics);
 
     // 预先生成自然海岸线轮廓并渲染静态浅滩沙滩
-    this.initOrganicShore();
+    this.initOrganicShore(sandMask);
   }
 
   /**
    * 初始化自然有机海岸线、沙滩与浅海过渡
    */
-  private initOrganicShore(): void {
+  private initOrganicShore(sandMask?: Graphics): void {
     if (!this.land) return;
 
     // 生成基础有机轮廓 (采样 220 个点)
     this.organicCoastlineBase = generateOrganicContour(this.land, 0, this.seed, 220);
+
+    if (sandMask) {
+      this.drawSandMask(sandMask);
+    }
 
     const g = this.baseShoreGraphics;
     g.clear();
@@ -160,31 +188,117 @@ export class OceanLayer extends Container {
     const beachContour = generateOrganicContour(this.land, 24, this.seed, 220);
     drawPolygon(g, beachContour, PALETTE.goldenSand, 1.0);
 
+    // 3.5) 沙滩程序化低频 Noise 斑驳 (Dune Color Patches Field)
+    this.drawSandNoisePatches(g);
+
     // 4) 亮沙边高光与细腻内金沙
     const innerBeachContour = generateOrganicContour(this.land, -35, this.seed, 220);
     drawPolygon(g, innerBeachContour, PALETTE.lightSand, 0.85);
 
-    // 5) 沙滩颗粒与贝壳碎石细致散点 (Sand Grains & Shells)
+    // 5) 大密度沙滩颗粒与贝壳碎石细致噪点 (Sand Grain Noise Particles & Shells)
     this.drawSandDetails(g);
   }
 
   /**
-   * 绘制宽广沙滩上的泥土与微小碎石沙粒细节
+   * 绘制沙滩精准环形蒙版 (仅允许沙滩噪点停留在沙滩区域，绝对不侵入深海与草地)
+   */
+  private drawSandMask(g: Graphics): void {
+    if (!this.land) return;
+
+    // 沙滩与浅海交界外圈 (offset 56)
+    const outerContour = generateOrganicContour(this.land, 56, this.seed, 220);
+    // 草地边界内圈 (offset -90)
+    const innerContour = generateOrganicContour(this.land, -90, this.seed, 220);
+
+    g.clear();
+    g.beginPath();
+
+    // 1) 顺时针绘制外沿
+    if (outerContour.length >= 3) {
+      g.moveTo(outerContour[0]!.x, outerContour[0]!.y);
+      for (let i = 1; i < outerContour.length; i++) {
+        g.lineTo(outerContour[i]!.x, outerContour[i]!.y);
+      }
+      g.closePath();
+    }
+
+    // 2) 逆时针绘制内沿 (在中心挖孔)
+    if (innerContour.length >= 3) {
+      g.moveTo(innerContour[0]!.x, innerContour[0]!.y);
+      for (let i = innerContour.length - 1; i >= 0; i--) {
+        g.lineTo(innerContour[i]!.x, innerContour[i]!.y);
+      }
+      g.closePath();
+    }
+
+    g.fill({ color: 0xffffff });
+  }
+
+  /**
+   * 绘制沙滩程序化低频噪点斑块 (沙丘起伏与风化颜色变幻)
+   */
+  private drawSandNoisePatches(g: Graphics): void {
+    if (!this.land || this.organicCoastlineBase.length === 0) return;
+
+    const sandColors = [
+      0xd2aa62, // 深风化金沙
+      0xdfbc7a, // 沉金沙
+      0xe8d298, // 暖亮黄沙
+      0xf4e5b9, // 浅细阳沙
+    ];
+
+    const rng = createRng(this.seed ^ 0x4444);
+
+    for (let i = 0; i < this.organicCoastlineBase.length; i += 2) {
+      const pt = this.organicCoastlineBase[i]!;
+      const nv = fbm2D(pt.x * 0.004, pt.y * 0.004, 3, 0.5, 2.0, this.seed ^ 0x777);
+      const colorIdx = Math.floor(nv * sandColors.length);
+      const color = sandColors[Math.min(sandColors.length - 1, Math.max(0, colorIdx))]!;
+
+      const distOff = (nv - 0.5) * 60;
+      const patchX = pt.x + (rng() - 0.5) * 30;
+      const patchY = pt.y + (rng() - 0.5) * 30 + distOff;
+      const radius = 16 + nv * 22;
+
+      g.circle(patchX, patchY, radius).fill({ color, alpha: 0.45 });
+    }
+  }
+
+  /**
+   * 绘制宽广沙滩上的泥土、海沙与微小碎石沙粒噪点细节
    */
   private drawSandDetails(g: Graphics): void {
-    if (!this.land) return;
+    if (!this.land || this.organicCoastlineBase.length === 0) return;
     const rng = createRng(this.seed ^ 0x7777);
 
-    for (let i = 0; i < 300; i++) {
-      const idx = Math.floor(rng() * this.organicCoastlineBase.length);
+    const sandGrainColors = [
+      PALETTE.lightSand,     // 亮沙
+      PALETTE.wetSandDark,   // 湿沙暗
+      PALETTE.wetSand,       // 浅湿沙
+      PALETTE.foamWhite,     // 白石/贝壳
+      0x7a562b,              // 褐色泥沙微点
+      0x4a3417,              // 深调暗晶微粒
+    ];
+
+    const numGrains = 2000;
+    const coastlineLen = this.organicCoastlineBase.length;
+
+    for (let i = 0; i < numGrains; i++) {
+      const idx = Math.floor(rng() * coastlineLen);
       const pt = this.organicCoastlineBase[idx]!;
-      // 在超大沙滩带上分布微小细沙与贝壳
-      const rOffset = (rng() - 0.5) * 90;
-      const sx = pt.x + rOffset;
-      const sy = pt.y + rOffset;
-      const size = 0.8 + rng() * 1.8;
-      const color = rng() > 0.4 ? PALETTE.lightSand : PALETTE.wetSandDark;
-      g.circle(sx, sy, size).fill({ color, alpha: 0.65 });
+
+      const rOffset = -40 + rng() * 110;
+      const angle = rng() * Math.PI * 2;
+      const rDist = rng() * 18;
+
+      const sx = pt.x + Math.cos(angle) * rDist;
+      const sy = pt.y + Math.sin(angle) * rDist + rOffset * 0.5;
+
+      const size = 0.5 + rng() * 1.8;
+      const color = sandGrainColors[Math.floor(rng() * sandGrainColors.length)]!;
+      const alpha = 0.35 + rng() * 0.55;
+
+      g.circle(sx, sy, size).fill({ color, alpha });
     }
   }
 

@@ -1,6 +1,5 @@
 import { Container, Sprite, Texture } from 'pixi.js';
-import { getActiveMapDef } from '../data/maps';
-import { bodyHitsTrees } from '../world/WorldMap';
+import { hitsTreeObstacle } from '../data/maps';
 import {
   loadOutlinedTexture,
   OUTLINE_PX_SPEAR,
@@ -12,16 +11,14 @@ const SPEAR_URL = '/assets/ice-ranger/spear.png';
 export const SPEAR_SPEED = 640;
 /**
  * 普攻 / 剑阵发射 / 出场自动瞄准：最远飞行与索敌距离（世界像素）。
- * 到距后钉住消散；地图边界不挡，但有效射程统一由此常量收束。
+ * 到距后钉住消散。海面与陆地边界都不挡，只按路程收束。
  */
 export const SPEAR_MAX_RANGE = 620;
 /**
  * 碰撞体：与树等障碍的 solid 半径。
- * 只负责钉树，不参与伤害判定；地图边界不再阻挡飞剑。
+ * 只负责钉树，不参与伤害判定。
  */
 export const SPEAR_BODY_R = 10;
-/** 飞出地图半幅再额外此距离后回收（兜底，正常由 maxRange 收束） */
-const OFF_MAP_CULL_PAD = 120;
 /**
  * 攻击体：对敌人的命中半径（与 BODY 独立）。
  * 实际判定 = SPEAR_HIT_R + 目标 hurtbox 半径。
@@ -455,12 +452,6 @@ export class SpearProjectile extends Container {
       this.groundX = nx;
       this.groundY = ny;
       this.traveled += step;
-
-      // 兜底：飞出地图外缘过远时回收
-      if (this.isFarOffMap(this.groundX, this.groundY)) {
-        this.phase = 'done';
-        break;
-      }
     }
   }
 
@@ -493,14 +484,12 @@ export class SpearProjectile extends Container {
     this.sprite.scale.set(this.visualScale * multiplier);
   }
 
-  /** 仅树等障碍钉住；地图边界不挡飞剑 */
+  /**
+   * 仅树干钉住。
+   * 不可用 bodyHitsTrees（会把海洋当硬墙）；也不做 mapSize 外缘回收
+   * （陆地框外就是海，用 map 半幅 + pad 会让矛在海里只飞很短就消失）。
+   */
   private isBlocked(x: number, y: number): boolean {
-    return bodyHitsTrees(x, y, SPEAR_BODY_R);
-  }
-
-  /** 超出地图半幅 + pad 后视为飞出视野，回收实体 */
-  private isFarOffMap(x: number, y: number): boolean {
-    const h = getActiveMapDef().mapSize / 2 + OFF_MAP_CULL_PAD;
-    return x < -h || x > h || y < -h || y > h;
+    return hitsTreeObstacle(x, y, SPEAR_BODY_R);
   }
 }

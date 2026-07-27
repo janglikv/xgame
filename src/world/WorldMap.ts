@@ -1,4 +1,4 @@
-import { Container, Graphics } from 'pixi.js';
+import { Container, Graphics, TilingSprite } from 'pixi.js';
 import { getActiveMapDef, setActiveMapDef } from '../data/maps/activeMap';
 import type { LevelMapDef } from '../data/maps/types';
 import {
@@ -12,6 +12,7 @@ import {
   treeKindOf,
 } from '../data/maps/walkMask';
 import type { Vec2 } from '../utils/math';
+import { fbm2D, makeSeamlessNoiseTexture } from '../utils/noiseTexture';
 import { generateOrganicContour, OceanLayer } from './OceanLayer';
 import {
   TreeRowChunk,
@@ -324,8 +325,36 @@ export class WorldMap extends Container {
     );
     this.ocean = ocean;
 
+    const landContainer = new Container();
+    landContainer.label = 'LandContainer';
+
     const land = new Graphics();
     land.label = 'Land';
+
+    // 建立无缝程序化噪点图层 Overlay
+    const noiseTex = makeSeamlessNoiseTexture({
+      seed: this.seed,
+      grainIntensity: 0.35,
+      contrast: 1.25,
+    });
+    const noiseOverlay = new TilingSprite({
+      texture: noiseTex,
+      width: Math.max(100, landRect.w + 400),
+      height: Math.max(100, landRect.h + 400),
+    });
+    noiseOverlay.label = 'LandNoiseOverlay';
+    noiseOverlay.position.set(landRect.x - 200, landRect.y - 200);
+    noiseOverlay.alpha = 0.15;
+    noiseOverlay.tint = 0x448833;
+
+    landContainer.addChild(land, noiseOverlay);
+
+    // 建立草地精准有机轮廓 Mask，绝对防止草地噪点渗出至沙滩和海洋
+    const landMask = new Graphics();
+    landMask.label = 'LandMask';
+    this.drawLandMask(landMask);
+    landContainer.mask = landMask;
+
     const decor = new Graphics();
     decor.label = 'Decor';
 
@@ -333,7 +362,22 @@ export class WorldMap extends Container {
     this.drawLandDecor(decor);
     this.spawnPlacedTreeChunks();
 
-    this.root.addChild(ocean, land, decor);
+    this.root.addChild(ocean, landContainer, landMask, decor);
+  }
+
+  private drawLandMask(g: Graphics): void {
+    const r = this.landRect();
+    if (r.w <= 0 || r.h <= 0) return;
+    const soilContour = generateOrganicContour(r, -90, this.seed, 220);
+    if (soilContour.length < 3) return;
+
+    g.beginPath();
+    g.moveTo(soilContour[0]!.x, soilContour[0]!.y);
+    for (let i = 1; i < soilContour.length; i++) {
+      g.lineTo(soilContour[i]!.x, soilContour[i]!.y);
+    }
+    g.closePath();
+    g.fill({ color: 0xffffff });
   }
 
   private landRect(): { x: number; y: number; w: number; h: number } {
@@ -381,7 +425,39 @@ export class WorldMap extends Container {
     g.closePath();
     g.fill({ color: COLORS.grass, alpha: 1.0 });
 
-    // 3) 草地中央柔和阳光光斑 - 向内缩进 -130px
+    // 3) 程序化低频噪声草色斑块 (Grass Noise Patches Field) - 消除单色平淡感
+    const step = 36;
+    const margin = 110;
+    const startX = r.x + margin;
+    const endX = r.x + r.w - margin;
+    const startY = r.y + margin;
+    const endY = r.y + r.h - margin;
+
+    const patchColors = [
+      0x62a832, // 深草苔绿
+      0x72c13a, // 沉绿
+      0x7fd84a, // 标准草绿
+      0x8ede52, // 浅亮草绿
+      0x9ee75c, // 阳光亮绿
+    ];
+
+    if (endX > startX && endY > startY) {
+      for (let y = startY; y < endY; y += step) {
+        for (let x = startX; x < endX; x += step) {
+          const nv = fbm2D(x * 0.003, y * 0.003, 3, 0.5, 2.0, this.seed);
+          const colorIdx = Math.floor(nv * patchColors.length);
+          const color = patchColors[Math.min(patchColors.length - 1, Math.max(0, colorIdx))]!;
+
+          const radius = 20 + nv * 24;
+          const offsetX = (fbm2D(x * 0.01, y * 0.01, 2, 0.5, 2.0, this.seed ^ 0x123) - 0.5) * 18;
+          const offsetY = (fbm2D(x * 0.01, y * 0.01, 2, 0.5, 2.0, this.seed ^ 0x456) - 0.5) * 18;
+
+          g.circle(x + offsetX, y + offsetY, radius).fill({ color, alpha: 0.5 });
+        }
+      }
+    }
+
+    // 4) 草地中央柔和阳光光斑 - 向内缩进 -130px
     const innerGrass = generateOrganicContour(r, -130, this.seed, 220);
     g.beginPath();
     g.moveTo(innerGrass[0]!.x, innerGrass[0]!.y);
@@ -390,6 +466,23 @@ export class WorldMap extends Container {
     }
     g.closePath();
     g.fill({ color: 0x8be555, alpha: 0.28 });
+
+    // 5) 高频草地细微杂色颗粒 (Micro Noise Grain)
+    const rng = createRng(this.seed ^ 0x9999);
+    const numGrainDots = 1000;
+    const grainColors = [0x4d8726, 0x62a832, 0x8ede52, 0xa3ed64];
+
+    if (endX > startX && endY > startY) {
+      for (let i = 0; i < numGrainDots; i++) {
+        const gx = startX + rng() * (endX - startX);
+        const gy = startY + rng() * (endY - startY);
+        const size = 1.0 + rng() * 2.2;
+        const gColor = grainColors[Math.floor(rng() * grainColors.length)]!;
+        const gAlpha = 0.25 + rng() * 0.45;
+
+        g.circle(gx, gy, size).fill({ color: gColor, alpha: gAlpha });
+      }
+    }
   }
 
   private drawLandDecor(g: Graphics): void {
