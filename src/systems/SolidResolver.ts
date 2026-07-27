@@ -26,9 +26,11 @@ export type FootBody = {
   bodyProfileId: BodyProfileId;
 };
 
-/** 蜘蛛等：额外需要 isAlive 以跳过尸体 */
+/** 蜘蛛等：额外需要 isAlive 以跳过尸体；immovable 不被挤走但仍挡别人 */
 export type AliveFootBody = FootBody & {
   isAlive: boolean;
+  /** true：跳过 resolveSpider，位置钉死 */
+  immovable?: boolean;
 };
 
 export type SolidContext = {
@@ -90,12 +92,15 @@ export class SolidResolver {
   }
 
   resolveSpider(
-    spider: FootBody,
+    spider: FootBody & { immovable?: boolean },
     fromX: number,
     fromY: number,
     spiderIndex: number,
     ctx: SolidContext,
   ): void {
+    // 训练木桩等：绝不被 solid 推出，只作为障碍存在
+    if (spider.immovable) return;
+
     const primary = primarySolidCircle(spider.bodyProfileId);
     const r = Math.max(1, primary.r);
     let cx = spider.worldX + primary.ox;

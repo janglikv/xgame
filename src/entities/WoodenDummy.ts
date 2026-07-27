@@ -5,8 +5,8 @@ const WOODEN_DUMMY_URL = '/assets/wooden-dummy/wooden-dummy.png';
 export type WoodenDummyOptions = Pick<SpiderOptions, 'scale'>;
 
 /**
- * 训练木桩：无敌、原地站立，只挨打不反击。
- * 受击有抖动反馈，无血条、无位移、无 AI。
+ * 训练木桩：无敌、出生点绝对固定，只挨打不反击。
+ * 受击有抖动反馈，无血条、不被挤走、无 AI。
  */
 export class WoodenDummy extends Spider {
   constructor(
@@ -18,6 +18,7 @@ export class WoodenDummy extends Spider {
       scale: options.scale ?? 0.09,
       invincible: true,
       passive: true,
+      immovable: true,
       appearance: {
         textureUrl: WOODEN_DUMMY_URL,
         label: 'WoodenDummy',

@@ -161,6 +161,11 @@ export type SpiderOptions = {
    * 仅原地受击抖动。
    */
   passive?: boolean;
+  /**
+   * 绝对固定：solid 不把它挤走（仍作为硬障碍推开玩家/其他怪）。
+   * 缺省与 passive 相同。
+   */
+  immovable?: boolean;
 };
 
 /** 蜘蛛 AI 状态 */
@@ -199,6 +204,8 @@ export class Spider extends Container implements WorldActor {
   readonly invincible: boolean;
   /** 被动木桩：不 AI、不击飞位移 */
   readonly passive: boolean;
+  /** 绝对固定：不被 solid 挤走，每帧钉回出生点 */
+  readonly immovable: boolean;
   /** 描边外扩后换算出的实际脚底锚点。 */
   private footAnchorY: number;
   /** 碰撞模板；子类外观决定 id */
@@ -273,6 +280,7 @@ export class Spider extends Container implements WorldActor {
     this.bodyProfileId = bodyProfileIdFromLabel(this.appearance.label);
     this.invincible = options.invincible ?? false;
     this.passive = options.passive ?? false;
+    this.immovable = options.immovable ?? this.passive;
     this.worldX = worldX;
     this.worldY = worldY;
     this.homeX = worldX;
@@ -480,8 +488,14 @@ export class Spider extends Container implements WorldActor {
     const dt = deltaMS / 1000;
     this.healthBar.update(deltaMS);
 
-    // 木桩：原地受击反馈，不位移、不攻击
-    if (this.passive) {
+    // 木桩 / 固定体：钉死出生点，只做受击姿态
+    if (this.passive || this.immovable) {
+      this.worldX = this.homeX;
+      this.worldY = this.homeY;
+      this.knock.velX = 0;
+      this.knock.velY = 0;
+      this.knock.velZ = 0;
+      this.knock.height = 0;
       this.updatePose(dt, false);
       return { moved: false, attackHit: null };
     }

@@ -480,6 +480,7 @@ export class LevelScene extends Container implements GameScene {
     fromY: number,
     spiderIndex: number,
   ): void {
+    if (spider.immovable) return;
     this.solid.resolveSpider(
       spider,
       fromX,
