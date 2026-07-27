@@ -13,6 +13,7 @@ import {
 import type { PlayerCharacterBase } from '../entities/PlayerCharacterBase';
 import {
   SPEAR_HIT_R,
+  SPEAR_MAX_RANGE,
   SPEAR_SCALE,
   SpearProjectile,
   type SpearProjectileOptions,
@@ -41,8 +42,6 @@ export const SPIDER_KNOCK_SCALE = 0.85;
 const THROW_MIN_DIST = 12;
 /** 脚本化自动瞄准连射：单发间隔（秒） */
 const AUTO_AIM_SPEAR_INTERVAL = 0.12;
-/** 脚本化自动瞄准连射：索敌半径（世界像素） */
-const AUTO_AIM_RANGE = 520;
 
 /** 镜头参数：屏幕点击 → 世界瞄准 */
 export type CombatCameraView = {
@@ -349,12 +348,14 @@ export class CombatSystem {
     }
 
     const { caster } = volley;
+    // 索敌半径与普攻飞剑射程统一：SPEAR_MAX_RANGE
+    const range2 = SPEAR_MAX_RANGE * SPEAR_MAX_RANGE;
     const targets = volley.targets
       .filter((t) => {
         if (!t.isAlive) return false;
         const dx = t.worldX - caster.worldX;
         const dy = t.worldY - caster.worldY;
-        return dx * dx + dy * dy <= AUTO_AIM_RANGE ** 2;
+        return dx * dx + dy * dy <= range2;
       })
       .sort((a, b) => {
         const adx = a.worldX - caster.worldX;
@@ -376,7 +377,10 @@ export class CombatSystem {
       origin.y,
       target.worldX - origin.x,
       target.worldY - origin.y,
-      { originHeight: origin.height },
+      {
+        originHeight: origin.height,
+        maxRange: SPEAR_MAX_RANGE,
+      },
     );
 
     volley.remaining -= 1;

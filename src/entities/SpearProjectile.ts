@@ -11,10 +11,17 @@ const SPEAR_URL = '/assets/ice-ranger/spear.png';
 /** 飞行速度（世界像素/秒） */
 export const SPEAR_SPEED = 640;
 /**
- * 碰撞体：与墙体 / 树 / 地图边界的 solid 半径。
- * 只负责穿模与钉墙，不参与伤害判定。
+ * 普攻 / 剑阵发射 / 出场自动瞄准：最远飞行与索敌距离（世界像素）。
+ * 到距后钉住消散；地图边界不挡，但有效射程统一由此常量收束。
+ */
+export const SPEAR_MAX_RANGE = 620;
+/**
+ * 碰撞体：与树等障碍的 solid 半径。
+ * 只负责钉树，不参与伤害判定；地图边界不再阻挡飞剑。
  */
 export const SPEAR_BODY_R = 10;
+/** 飞出地图半幅再额外此距离后回收（兜底，正常由 maxRange 收束） */
+const OFF_MAP_CULL_PAD = 120;
 /**
  * 攻击体：对敌人的命中半径（与 BODY 独立）。
  * 实际判定 = SPEAR_HIT_R + 目标 hurtbox 半径。
@@ -72,10 +79,11 @@ export type SpearProjectileOptions = {
   speed?: number;
   /**
    * 最远飞行距离（世界像素）。
-   * 与 holdAtRange 合用：飞到此距离后悬停成阵，不钉墙消散。
+   * - 普攻 / 发射段：默认 SPEAR_MAX_RANGE，到距后钉住消散
+   * - holdAtRange 剑阵就位：阵位半径；发射时会重置为 SPEAR_MAX_RANGE
    */
   maxRange?: number;
-  /** 到达 maxRange 后进入 holding（悬停），默认 false */
+  /** 到达 maxRange 后进入 holding（悬停成阵），默认 false */
   holdAtRange?: boolean;
   /** 贴图缩放，默认 SPEAR_SCALE */
   scale?: number;
@@ -119,7 +127,8 @@ export class SpearProjectile extends Container {
   private dirY: number;
   private readonly speed: number;
   private readonly originHeight: number;
-  private readonly maxRange: number;
+  /** 当前段最远距离（就位半径或普攻/发射射程；发射时会改写） */
+  private maxRange: number;
   private readonly holdAtRange: boolean;
   private readonly visualScale: number;
   /** 剑阵矛标记（供战斗系统批量清理） */
@@ -174,11 +183,12 @@ export class SpearProjectile extends Container {
 
     this.speed = options.speed ?? SPEAR_SPEED;
     this.originHeight = Math.max(4, options.originHeight ?? 28);
+    this.holdAtRange = options.holdAtRange === true;
+    // 剑阵就位必须用传入半径；普攻默认 SPEAR_MAX_RANGE
     this.maxRange =
       options.maxRange !== undefined && options.maxRange > 0
         ? options.maxRange
-        : Number.POSITIVE_INFINITY;
-    this.holdAtRange = options.holdAtRange === true;
+        : SPEAR_MAX_RANGE;
     this.visualScale = options.scale ?? SPEAR_SCALE;
     this.isFormation = options.formation === true;
     this.faceWorld =
@@ -381,6 +391,8 @@ export class SpearProjectile extends Container {
     this.motion = 'launch';
     this.phase = 'flying';
     this.traveled = 0;
+    // 就位半径用完后，发射段改用普攻射程上限
+    this.maxRange = SPEAR_MAX_RANGE;
     this.currentSpeed = FORMATION_LAUNCH_START_SPEED;
   }
 
@@ -399,15 +411,15 @@ export class SpearProjectile extends Container {
   }
 
   /**
-   * 沿 dir 推进距离 remain；可选用 maxRange 悬停。
-   * @param canHold 是否在 maxRange 处进入 holding（仅普攻旧逻辑）
+   * 沿 dir 推进距离 remain。
+   * @param canHold 到 maxRange 时悬停成阵；否则到距钉住消散
    */
   private advanceAlongDir(remain: number, canHold: boolean): void {
     while (remain > 1e-4 && this.phase === 'flying') {
       const step = Math.min(MAX_STEP, remain);
       remain -= step;
 
-      if (canHold && this.traveled + step >= this.maxRange) {
+      if (this.traveled + step >= this.maxRange) {
         const left = this.maxRange - this.traveled;
         if (left > 1e-4) {
           const nx = this.groundX + this.dirX * left;
@@ -421,7 +433,13 @@ export class SpearProjectile extends Container {
           this.groundY = ny;
         }
         this.traveled = this.maxRange;
-        this.phase = 'holding';
+        if (canHold) {
+          this.phase = 'holding';
+        } else {
+          // 最远射程：钉住消散（可飞出陆地，但不无限飞）
+          this.phase = 'stuck';
+          this.stuckElapsed = 0;
+        }
         break;
       }
 
@@ -437,6 +455,12 @@ export class SpearProjectile extends Container {
       this.groundX = nx;
       this.groundY = ny;
       this.traveled += step;
+
+      // 兜底：飞出地图外缘过远时回收
+      if (this.isFarOffMap(this.groundX, this.groundY)) {
+        this.phase = 'done';
+        break;
+      }
     }
   }
 
@@ -469,9 +493,14 @@ export class SpearProjectile extends Container {
     this.sprite.scale.set(this.visualScale * multiplier);
   }
 
+  /** 仅树等障碍钉住；地图边界不挡飞剑 */
   private isBlocked(x: number, y: number): boolean {
-    const h = getActiveMapDef().mapSize / 2 - 4;
-    if (x < -h || x > h || y < -h || y > h) return true;
     return bodyHitsTrees(x, y, SPEAR_BODY_R);
+  }
+
+  /** 超出地图半幅 + pad 后视为飞出视野，回收实体 */
+  private isFarOffMap(x: number, y: number): boolean {
+    const h = getActiveMapDef().mapSize / 2 + OFF_MAP_CULL_PAD;
+    return x < -h || x > h || y < -h || y > h;
   }
 }
