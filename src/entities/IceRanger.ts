@@ -12,6 +12,8 @@ import type {
 } from './CharacterRanged';
 import { applyRecoilHop } from './knockArc';
 import { PlayerCharacterBase } from './PlayerCharacterBase';
+import { primarySolidCircle } from '../data/bodyProfiles';
+import { WorldMap } from '../world/WorldMap';
 import {
   DEFAULT_SPEAR_AMMO,
   SpearAmmo,
@@ -90,13 +92,16 @@ const SWORD_ARRAY = {
 } as const;
 
 /**
- * Q：反向瞬移（与朝向相反的水平大位移）+ 路径残影。
+ * E 闪现：沿指针方向瞬移 + 路径残影。
  * 距离约 0.8s 走路，体感「一大段」。
+ * 落点用射线采样取墙前最后合法点；过短则取消。
  */
-const Q_BLINK = {
+const E_BLINK = {
   distance: 180,
-  /** 路径上残影数量（起点→终点均匀分布，不含终点本体） */
+  /** 路径上残影数量（起点→实际落点均匀分布，不含终点本体） */
   afterimageCount: 6,
+  /** 实际位移低于此值视为贴墙无效，不闪现 */
+  minDistance: 24,
 } as const;
 
 /**
@@ -456,20 +461,20 @@ export class IceRanger extends PlayerCharacterBase {
   }
 
   /**
-   * Q：原地释放十二角剑阵（减速就位 → 朝指针加速齐射），再沿指针反方向瞬移。
-   * 剑阵锚定施法时脚底，不跟随闪现；不消耗弹药；连续施放的剑阵互不影响。
-   * @param aim 指针相对脚底的世界向量；过近/缺省时回退为朝向反方向水平闪
+   * Q：原地释放十二角剑阵（减速就位 → 朝指针加速齐射），无位移。
+   * 剑阵锚定施法时脚底；不消耗弹药；连续施放的剑阵互不影响。
+   * @param aim 指针相对脚底的世界向量；过近/缺省时剑阵按默认朝向展开
    */
   override trySpecialAbility(
     combat?: RangedCombatServices,
-    ctx?: EntranceContext,
+    _ctx?: EntranceContext,
     aim?: RangedAim,
   ): boolean {
     if (!combat) return false;
 
     const fromX = this.worldX;
     const fromY = this.worldY;
-    // 剑阵先在原地放出，原点取闪现前出手点；十二剑均朝向指针世界落点
+    // 剑阵在原地放出；十二剑均朝向指针世界落点
     const origin = this.getThrowOrigin(fromX, fromY);
     const formationOpts: RadialSpearFormationOptions = {
       count: SWORD_ARRAY.count,
@@ -484,26 +489,30 @@ export class IceRanger extends PlayerCharacterBase {
     }
     combat.spawnRadialSpearFormation(origin.x, origin.y, formationOpts);
 
-    this.performBlink(ctx, aim, -1);
     this.playThrowRecoil();
     return true;
   }
 
-  /** E：沿指针正方向闪现并生成残影，不生成剑阵。 */
+  /**
+   * E：沿指针正方向闪现并生成残影，不生成剑阵。
+   * 落点为射线最后一个不撞树位置；位移过短则失败。
+   */
   override tryMobilityAbility(
     ctx?: EntranceContext,
     aim?: RangedAim,
   ): boolean {
-    this.performBlink(ctx, aim, 1);
-    return true;
+    return this.performBlink(ctx, aim, 1);
   }
 
-  /** 沿指针方向闪现；direction 为 1 向前，-1 向后。 */
+  /**
+   * 沿指针方向闪现；direction 为 1 向前，-1 向后。
+   * @returns 是否成功位移（贴墙过短时 false）
+   */
   private performBlink(
     ctx?: EntranceContext,
     aim?: RangedAim,
     direction = 1,
-  ): void {
+  ): boolean {
     const fromX = this.worldX;
     const fromY = this.worldY;
     let nx = this.facingDir * direction;
@@ -515,8 +524,30 @@ export class IceRanger extends PlayerCharacterBase {
         ny = (aim.dy / len) * direction;
       }
     }
-    const toX = fromX + nx * Q_BLINK.distance;
-    const toY = fromY + ny * Q_BLINK.distance;
+
+    const intendedX = fromX + nx * E_BLINK.distance;
+    const intendedY = fromY + ny * E_BLINK.distance;
+
+    // solid 圆心上做射线采样，与走路 / 树挡一致
+    const primary = primarySolidCircle(this.bodyProfileId);
+    const fromCx = fromX + primary.ox;
+    const fromCy = fromY + primary.oy;
+    const intendedCx = intendedX + primary.ox;
+    const intendedCy = intendedY + primary.oy;
+    const landed = WorldMap.resolveBlink(
+      fromCx,
+      fromCy,
+      intendedCx,
+      intendedCy,
+      Math.max(1, primary.r),
+    );
+    const toX = landed.x - primary.ox;
+    const toY = landed.y - primary.oy;
+
+    const traveled = Math.hypot(toX - fromX, toY - fromY);
+    if (traveled < E_BLINK.minDistance) {
+      return false;
+    }
 
     if (ctx) {
       this.spawnBlinkAfterimages(ctx, fromX, fromY, toX, toY);
@@ -527,11 +558,12 @@ export class IceRanger extends PlayerCharacterBase {
     // 掐断击飞/后坐残留，避免闪身后继续滑
     this.knock.velX = 0;
     this.knock.velY = 0;
+    return true;
   }
 
   /**
    * 沿闪现路径铺残影（与入场同款冰色淡出）。
-   * 起点更淡、靠终点更实，拖尾感更明显。
+   * 起点更淡、靠终点更实；路径跟实际落点，不穿墙。
    */
   private spawnBlinkAfterimages(
     ctx: EntranceContext,
@@ -540,7 +572,7 @@ export class IceRanger extends PlayerCharacterBase {
     toX: number,
     toY: number,
   ): void {
-    const n = Q_BLINK.afterimageCount;
+    const n = E_BLINK.afterimageCount;
     if (n <= 0) return;
 
     const savedX = this.worldX;

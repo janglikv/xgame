@@ -125,6 +125,63 @@ export function resolveTreeCollision(
   return { x: fromX, y: fromY };
 }
 
+/** 闪现射线采样默认步长（世界像素） */
+const BLINK_RAY_STEP = 4;
+
+/**
+ * 闪现落点：沿 from→to 射线采样，返回最后一个不撞树的位置。
+ * 与走路轴分离不同——贴墙时停在墙前，不会横向滑移或整段取消。
+ * 坐标应为 solid 圆心（与 resolveSolid / bodyHitsTrees 一致）。
+ */
+export function resolveBlinkAlongRay(
+  fromX: number,
+  fromY: number,
+  toX: number,
+  toY: number,
+  radius = DEFAULT_BODY_RADIUS,
+  step = BLINK_RAY_STEP,
+): Vec2 {
+  const clampedFrom = WorldMap.clampWorld(fromX, fromY);
+  const clampedTo = WorldMap.clampWorld(toX, toY);
+  const dx = clampedTo.x - clampedFrom.x;
+  const dy = clampedTo.y - clampedFrom.y;
+  const dist = Math.hypot(dx, dy);
+  if (dist < 1e-4) {
+    return { x: clampedFrom.x, y: clampedFrom.y };
+  }
+
+  // 起点已卡进树：尽量脱困，避免整条射线无效
+  if (bodyHitsTrees(clampedFrom.x, clampedFrom.y, radius)) {
+    const escaped = tryEscapeTrees(clampedFrom.x, clampedFrom.y, radius);
+    if (escaped) return WorldMap.clampWorld(escaped.x, escaped.y);
+    return { x: clampedFrom.x, y: clampedFrom.y };
+  }
+
+  const inv = 1 / dist;
+  const nx = dx * inv;
+  const ny = dy * inv;
+  const sampleStep = Math.max(1, step);
+
+  let lastX = clampedFrom.x;
+  let lastY = clampedFrom.y;
+
+  for (let d = sampleStep; d < dist; d += sampleStep) {
+    const x = clampedFrom.x + nx * d;
+    const y = clampedFrom.y + ny * d;
+    if (bodyHitsTrees(x, y, radius)) {
+      return { x: lastX, y: lastY };
+    }
+    lastX = x;
+    lastY = y;
+  }
+
+  // 精确终点（避免步长漏掉最后一小段）
+  if (!bodyHitsTrees(clampedTo.x, clampedTo.y, radius)) {
+    return { x: clampedTo.x, y: clampedTo.y };
+  }
+  return { x: lastX, y: lastY };
+}
+
 function tryEscapeTrees(
   x: number,
   y: number,
@@ -222,6 +279,19 @@ export class WorldMap extends Container {
   ): Vec2 {
     const hit = resolveTreeCollision(fromX, fromY, toX, toY, radius);
     return WorldMap.clampWorld(hit.x, hit.y);
+  }
+
+  /**
+   * 闪现专用：沿射线取最后一个可站 solid 圆心（见 {@link resolveBlinkAlongRay}）。
+   */
+  static resolveBlink(
+    fromX: number,
+    fromY: number,
+    toX: number,
+    toY: number,
+    radius = DEFAULT_BODY_RADIUS,
+  ): Vec2 {
+    return resolveBlinkAlongRay(fromX, fromY, toX, toY, radius);
   }
 
   static clampCamera(

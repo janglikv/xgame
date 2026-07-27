@@ -641,13 +641,11 @@ export class LevelScene extends Container implements GameScene {
     }
     this.tabWasDown = tabDown;
 
-    // Q：角色特技（冰冰 = 指针反向闪现 + 残影 + 十二角剑阵）
+    // Q：角色特技（冰冰 = 原地十二角剑阵，无位移）
     const qDown = this.keyboard.isDown('KeyQ');
     if (qDown && !this.qWasDown && !this.paused) {
       const p = this.player;
       if (p && !p.entranceLocks.attack) {
-        const fromX = p.worldX;
-        const fromY = p.worldY;
         const aim = this.pointerSeen
           ? this.combat.aimFromScreen(
               p.worldX,
@@ -670,15 +668,13 @@ export class LevelScene extends Container implements GameScene {
             aim ?? undefined,
           )
         ) {
-          // 闪现落点走 solid，避免穿进树区；from 用施法前脚底做轴分离
-          this.applyPlayerSolid(fromX, fromY);
           this.syncWorldActors();
         }
       }
     }
     this.qWasDown = qDown;
 
-    // E：冰冰仅沿指针正方向闪现，不生成剑阵
+    // E：冰冰沿指针正方向闪现（射线停墙前）；不生成剑阵
     const eDown = this.keyboard.isDown('KeyE');
     if (eDown && !this.eWasDown && !this.paused) {
       const p = this.player;
@@ -706,6 +702,7 @@ export class LevelScene extends Container implements GameScene {
             aim ?? undefined,
           )
         ) {
+          // 树区已在闪现射线内处理；此处主要做人/怪互挡与边界二次保险
           this.applyPlayerSolid(fromX, fromY);
           this.syncWorldActors();
         }
