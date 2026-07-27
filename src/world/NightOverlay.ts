@@ -1,56 +1,74 @@
 import { Container, Graphics } from 'pixi.js';
+import { NightConfig } from '../utils/NightConfig';
 
 /**
- * 叠在白天场景上的黑夜效果（仅环境地面）：
- * 1) multiply 冷色层 — 草地/花整体压暗并偏蓝
- * 2) 半透明遮罩 — 再压一层环境暗度
- *
- * 应夹在「草坪」与「角色/怪/特效」之间，或只盖 worldMap。
- * 松树用 tint 单独压暗，勿用本层盖住 sortLayer。
+ * 环境夜晚效果遮罩（全局无硬边月夜幽蓝蒙版）：
+ * 当【夜晚模式】开关开启时全屏通透压暗，关闭时完全隐藏恢复白天明亮。
  */
 export class NightOverlay extends Container {
-  private readonly multiply: Graphics;
   private readonly shade: Graphics;
-  private viewW = 0;
-  private viewH = 0;
+  private extentW = 4000;
+  private extentH = 4000;
+  private unsubscribe: (() => void) | null = null;
 
   constructor() {
     super();
     this.label = 'NightOverlay';
     this.eventMode = 'none';
 
-    this.multiply = new Graphics();
-    this.multiply.label = 'NightMultiply';
-    this.multiply.blendMode = 'multiply';
-    this.addChild(this.multiply);
-
     this.shade = new Graphics();
     this.shade.label = 'NightShade';
     this.addChild(this.shade);
+
+    // 订阅夜晚模式全局状态变动
+    this.unsubscribe = NightConfig.onChange(() => {
+      this.updateState();
+    });
+
+    this.updateState();
   }
 
+  /**
+   * 扩展布局范围（覆盖整片视野与海域）
+   */
   layout(width: number, height: number): void {
-    if (width <= 0 || height <= 0) return;
-    if (width === this.viewW && height === this.viewH) return;
-    this.viewW = width;
-    this.viewH = height;
+    this.extentW = Math.max(width * 2, 4000);
+    this.extentH = Math.max(height * 2, 4000);
+    this.updateState();
+  }
 
-    // 冷蓝乘色：把白天的绿草/花压成夜色
-    this.multiply
-      .clear()
-      .rect(0, 0, width, height)
-      .fill({ color: 0x263a60 });
+  /**
+   * 刷新夜晚遮罩显示与调色
+   */
+  private updateState(): void {
+    const isNight = NightConfig.isNightEnabled();
+    this.visible = isNight;
 
-    // 额外压暗，避免 multiply 后仍偏亮
+    if (!isNight) {
+      this.shade.clear();
+      return;
+    }
+
+    const hw = this.extentW / 2;
+    const hh = this.extentH / 2;
+
+    // 极其漆黑浓重的深夜黑影蒙版 (Pitch Black Midnight)
     this.shade
       .clear()
-      .rect(0, 0, width, height)
-      .fill({ color: 0x03070e, alpha: 0.62 });
+      .rect(-hw, -hh, this.extentW, this.extentH)
+      .fill({ color: 0x01040a, alpha: 0.88 });
+  }
+
+  destroy(): void {
+    if (this.unsubscribe) {
+      this.unsubscribe();
+      this.unsubscribe = null;
+    }
+    super.destroy();
   }
 }
 
-/** 关卡背景色（默认黑夜） */
+/** 关卡背景色 */
 export function getNightBackground(): number {
-  // 偏暗底，避免 letterbox 露亮绿
-  return 0x0b1524;
+  return 0x071b2d;
 }

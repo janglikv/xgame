@@ -104,21 +104,187 @@ export function isLandCell(
  * 用连续陆地矩形判定，避免格子台阶在下边界造成「顶墙感」和抖动。
  * margin > 0：把 solid 圆内缩进陆地（圆心距边 < margin 即算海）。
  */
+/**
+ * 点/圆是否在海水区域（禁止进入任何海水，仅允许在岛上：草地+金沙滩活动）。
+ * margin > 0：把实体圆半径算入碰撞抵挡。
+ */
 export function isOcean(
   x: number,
   y: number,
   def: LevelMapDef,
   margin = 0,
 ): boolean {
-  const { min, max } = landBounds(def);
-  if (max <= min) return true;
-  const pad = Math.max(0, margin);
-  return (
-    x - pad < min ||
-    x + pad > max ||
-    y - pad < min ||
-    y + pad > max
-  );
+  const grid = getMapGrid(def);
+  const m = grid.seaMarginCells * grid.cellSize;
+  const half = def.mapSize / 2;
+
+  const lx = -half + m;
+  const ly = -half + m;
+  const lw = def.mapSize - m * 2;
+  const lh = def.mapSize - m * 2;
+
+  // 金色沙滩最外边缘 offset 为 24，严格限制玩家在岛上沙滩以内，禁止下水
+  const maxAllowedOffset = 24;
+  return checkPointDeepOcean(x, y, lx, ly, lw, lh, maxAllowedOffset, margin);
+}
+
+/**
+ * 钳制坐标到岛上可走区域（草地+金沙滩），防止踩入海水
+ */
+export function clampToWalkableWorld(x: number, y: number, def: LevelMapDef, margin = 0): { x: number; y: number } {
+  const grid = getMapGrid(def);
+  const m = grid.seaMarginCells * grid.cellSize;
+  const half = def.mapSize / 2;
+
+  const lx = -half + m;
+  const ly = -half + m;
+  const lw = def.mapSize - m * 2;
+  const lh = def.mapSize - m * 2;
+
+  const maxAllowedOffset = 24;
+  return clampPointToDeepOcean(x, y, lx, ly, lw, lh, maxAllowedOffset, margin);
+}
+
+function checkPointDeepOcean(
+  px: number,
+  py: number,
+  lx: number,
+  ly: number,
+  lw: number,
+  lh: number,
+  maxOffset: number,
+  margin: number,
+): boolean {
+  const rCorner = Math.min(lw, lh) * 0.12;
+  const u = getBoundaryAngleU(px, py, lx, ly, lw, lh);
+  const { pos, normal } = sampleRectBoundaryNormal(lx, ly, lw, lh, rCorner, u);
+
+  // 匹配 OceanLayer 的自然波纹起伏公式
+  const s1 = Math.sin(u * Math.PI * 6 + 42) * 16;
+  const s2 = Math.cos(u * Math.PI * 14 + 42 * 1.7) * 7;
+  const s3 = Math.sin(u * Math.PI * 26 + 42 * 2.9) * 3.5;
+
+  const allowedDist = maxOffset - Math.abs(margin) + (s1 + s2 + s3);
+  const distAlongNormal = (px - pos.x) * normal.x + (py - pos.y) * normal.y;
+
+  return distAlongNormal > allowedDist;
+}
+
+function clampPointToDeepOcean(
+  px: number,
+  py: number,
+  lx: number,
+  ly: number,
+  lw: number,
+  lh: number,
+  maxOffset: number,
+  margin: number,
+): { x: number; y: number } {
+  const rCorner = Math.min(lw, lh) * 0.12;
+  const u = getBoundaryAngleU(px, py, lx, ly, lw, lh);
+  const { pos, normal } = sampleRectBoundaryNormal(lx, ly, lw, lh, rCorner, u);
+
+  const s1 = Math.sin(u * Math.PI * 6 + 42) * 16;
+  const s2 = Math.cos(u * Math.PI * 14 + 42 * 1.7) * 7;
+  const s3 = Math.sin(u * Math.PI * 26 + 42 * 2.9) * 3.5;
+
+  const allowedDist = maxOffset - Math.abs(margin) + (s1 + s2 + s3);
+  const distAlongNormal = (px - pos.x) * normal.x + (py - pos.y) * normal.y;
+
+  if (distAlongNormal > allowedDist) {
+    const pushBack = distAlongNormal - allowedDist;
+    return {
+      x: px - normal.x * pushBack,
+      y: py - normal.y * pushBack,
+    };
+  }
+
+  return { x: px, y: py };
+}
+
+function getBoundaryAngleU(
+  px: number,
+  py: number,
+  lx: number,
+  ly: number,
+  lw: number,
+  lh: number,
+): number {
+  const cx = lx + lw / 2;
+  const cy = ly + lh / 2;
+  const angle = Math.atan2(py - cy, px - cx); // -PI..PI
+  // 映射至 0..1 的周长比例
+  let u = (angle + Math.PI) / (Math.PI * 2);
+  return (u + 0.25) % 1;
+}
+
+function sampleRectBoundaryNormal(
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  r: number,
+  u: number,
+): { pos: { x: number; y: number }; normal: { x: number; y: number } } {
+  const straightW = Math.max(1, w - 2 * r);
+  const straightH = Math.max(1, h - 2 * r);
+  const cornerArc = 0.5 * Math.PI * r;
+  const totalPerimeter = 2 * straightW + 2 * straightH + 4 * cornerArc;
+
+  let d = ((u % 1 + 1) % 1) * totalPerimeter;
+
+  if (d <= straightW) {
+    const t = d / straightW;
+    return { pos: { x: x + r + t * straightW, y }, normal: { x: 0, y: -1 } };
+  }
+  d -= straightW;
+
+  if (d <= cornerArc) {
+    const angle = (d / cornerArc) * (Math.PI / 2) - Math.PI / 2;
+    const nx = Math.cos(angle);
+    const ny = Math.sin(angle);
+    return { pos: { x: x + w - r + nx * r, y: y + r + ny * r }, normal: { x: nx, y: ny } };
+  }
+  d -= cornerArc;
+
+  if (d <= straightH) {
+    const t = d / straightH;
+    return { pos: { x: x + w, y: y + r + t * straightH }, normal: { x: 1, y: 0 } };
+  }
+  d -= straightH;
+
+  if (d <= cornerArc) {
+    const angle = (d / cornerArc) * (Math.PI / 2);
+    const nx = Math.cos(angle);
+    const ny = Math.sin(angle);
+    return { pos: { x: x + w - r + nx * r, y: y + h - r + ny * r }, normal: { x: nx, y: ny } };
+  }
+  d -= cornerArc;
+
+  if (d <= straightW) {
+    const t = d / straightW;
+    return { pos: { x: x + w - r - t * straightW, y: y + h }, normal: { x: 0, y: 1 } };
+  }
+  d -= straightW;
+
+  if (d <= cornerArc) {
+    const angle = (d / cornerArc) * (Math.PI / 2) + Math.PI / 2;
+    const nx = Math.cos(angle);
+    const ny = Math.sin(angle);
+    return { pos: { x: x + r + nx * r, y: y + h - r + ny * r }, normal: { x: nx, y: ny } };
+  }
+  d -= cornerArc;
+
+  if (d <= straightH) {
+    const t = d / straightH;
+    return { pos: { x, y: y + h - r - t * straightH }, normal: { x: -1, y: 0 } };
+  }
+  d -= straightH;
+
+  const angle = (Math.min(d, cornerArc) / cornerArc) * (Math.PI / 2) + Math.PI;
+  const nx = Math.cos(angle);
+  const ny = Math.sin(angle);
+  return { pos: { x: x + r + nx * r, y: y + r + ny * r }, normal: { x: nx, y: ny } };
 }
 
 /** 陆地可走（不考虑树） */

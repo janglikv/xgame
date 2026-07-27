@@ -816,9 +816,8 @@ export class LevelScene extends Container implements GameScene {
     if (!player) return;
 
     if (this.paused) {
-      // 暂停时角色回正、不处理移动；炸弹也冻结；镜头仍可平滑缩放；海面继续动
+      // 暂停时角色与海水完全冻结；镜头仍可平滑缩放
       player.update(deltaMS, false);
-      this.worldMap.update(deltaMS);
       if (this.stepCamera(dt)) {
         this.cullTrees();
       }

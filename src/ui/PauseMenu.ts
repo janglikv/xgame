@@ -1,6 +1,7 @@
 import { Container, Graphics, Text } from 'pixi.js';
 
 import { DebugConfig } from '../utils/DebugConfig';
+import { NightConfig } from '../utils/NightConfig';
 
 export type PauseMenuOptions = {
   onResume: () => void;
@@ -22,15 +23,24 @@ type PauseButton = {
 };
 
 /**
- * 关卡暂停层：半透明遮罩 + 面板 + 继续 / 返回主场景。
- * 自身是 Container，由场景 addChild；visible 表示是否打开。
+ * 重构版关卡暂停层：
+ * 1. 开关选项 (夜晚 / Debug) 横向并排，大幅节省纵向空间。
+ * 2. 面板高度根据内容动态自适应，永远完美包裹无遗漏。
+ * 3. 强化 UI 质感与层次分割。
  */
 export class PauseMenu extends Container {
   private readonly veil: Graphics;
   private readonly panel: Graphics;
+  private readonly divider: Graphics;
   private readonly title: Text;
   private readonly debugBtnLabel: Text;
-  private readonly buttons: PauseButton[] = [];
+  private readonly nightBtnLabel: Text;
+
+  private readonly resumeBtn: PauseButton;
+  private readonly nightBtn: PauseButton;
+  private readonly debugBtn: PauseButton;
+  private readonly editBtn?: PauseButton;
+  private readonly backBtn: PauseButton;
 
   constructor(options: PauseMenuOptions) {
     super();
@@ -44,11 +54,14 @@ export class PauseMenu extends Container {
     this.panel = new Graphics();
     this.addChild(this.panel);
 
+    this.divider = new Graphics();
+    this.addChild(this.divider);
+
     this.title = new Text({
-      text: '暂停',
+      text: '游戏暂停',
       style: {
         fontFamily: 'system-ui, sans-serif',
-        fontSize: 32,
+        fontSize: 26,
         fontWeight: '700',
         fill: 0xffffff,
       },
@@ -56,12 +69,27 @@ export class PauseMenu extends Container {
     this.title.anchor.set(0.5);
     this.addChild(this.title);
 
-    this.buttons.push(
-      this.createButton('继续', 0x4caf50, 0x66c96a, options.onResume),
-    );
+    // 1. 继续游戏主按钮
+    this.resumeBtn = this.createButton('继续游戏', 240, 48, 0x4caf50, 0x66c96a, options.onResume);
 
-    const debugBtn = this.createButton(
+    // 2. 横向并排开关 (夜晚 / Debug)
+    this.nightBtn = this.createButton(
+      this.getNightBtnText(),
+      115,
+      42,
+      0x2c4a6e,
+      0x3e6594,
+      () => {
+        NightConfig.toggleNight();
+        this.updateNightBtnText();
+      },
+    );
+    this.nightBtnLabel = this.nightBtn.label;
+
+    this.debugBtn = this.createButton(
       this.getDebugBtnText(),
+      115,
+      42,
       0x3d5c8a,
       0x527ab0,
       () => {
@@ -69,25 +97,29 @@ export class PauseMenu extends Container {
         this.updateDebugBtnText();
       },
     );
-    this.debugBtnLabel = debugBtn.label;
-    this.buttons.push(debugBtn);
+    this.debugBtnLabel = this.debugBtn.label;
 
+    // 3. 继续编辑 (可选)
     if (options.onEditMap) {
-      this.buttons.push(
-        this.createButton('继续编辑', 0x3d8a6a, 0x52b08a, options.onEditMap),
-      );
+      this.editBtn = this.createButton('继续编辑', 240, 46, 0x3d8a6a, 0x52b08a, options.onEditMap);
     }
-    this.buttons.push(
-      this.createButton(
-        options.backLabel ?? '返回主场景',
-        0x5a6a8a,
-        0x7a8ab0,
-        options.onBack,
-      ),
+
+    // 4. 返回主场景
+    this.backBtn = this.createButton(
+      options.backLabel ?? '返回主场景',
+      240,
+      46,
+      0x5a6a8a,
+      0x7a8ab0,
+      options.onBack,
     );
 
     DebugConfig.onChange(() => {
       this.updateDebugBtnText();
+    });
+
+    NightConfig.onChange(() => {
+      this.updateNightBtnText();
     });
   }
 
@@ -101,58 +133,94 @@ export class PauseMenu extends Container {
     }
   }
 
+  private getNightBtnText(): string {
+    return `夜晚: ${NightConfig.isNightEnabled() ? '开' : '关'}`;
+  }
+
+  private updateNightBtnText(): void {
+    if (this.nightBtnLabel) {
+      this.nightBtnLabel.text = this.getNightBtnText();
+    }
+  }
+
   setOpen(open: boolean): void {
     this.visible = open;
     if (open) {
       this.updateDebugBtnText();
+      this.updateNightBtnText();
     }
   }
 
   layout(width: number, height: number): void {
+    // 全屏半透明遮罩
     this.veil
       .clear()
       .rect(0, 0, width, height)
-      .fill({ color: 0x000000, alpha: 0.5 });
+      .fill({ color: 0x000000, alpha: 0.55 });
 
-    const n = this.buttons.length;
-    const panelW = 320;
-    const panelH = n > 3 ? 360 : 310;
+    const panelW = 340;
+    // 动态自适应面板高度：包含标题 + 顶栏 + 按钮组
+    const numRows = 3 + (this.editBtn ? 1 : 0);
+    const panelH = Math.max(320, 110 + numRows * 54);
+
     const px = (width - panelW) / 2;
     const py = (height - panelH) / 2;
 
+    // 面板背景与描边
     this.panel
       .clear()
       .roundRect(px + 4, py + 6, panelW, panelH, 20)
-      .fill({ color: 0x000000, alpha: 0.3 })
+      .fill({ color: 0x000000, alpha: 0.35 })
       .roundRect(px, py, panelW, panelH, 20)
-      .fill({ color: 0x1e2838, alpha: 0.95 })
+      .fill({ color: 0x1b2432, alpha: 0.96 })
       .roundRect(px + 2, py + 2, panelW - 4, panelH - 4, 18)
-      .stroke({ width: 2, color: 0xffffff, alpha: 0.12 });
+      .stroke({ width: 2, color: 0xffffff, alpha: 0.14 });
 
-    this.title.position.set(width / 2, py + 40);
+    // 标题
+    this.title.position.set(width / 2, py + 38);
 
-    const gap = 14;
-    const totalBtnH =
-      this.buttons.reduce((s, b) => s + b.height, 0) +
-      gap * (this.buttons.length - 1);
-    const startY = py + (panelH - 50 - totalBtnH) / 2 + 50;
-    let y = startY;
+    // 装饰分割线
+    this.divider
+      .clear()
+      .rect(px + 30, py + 62, panelW - 60, 1)
+      .fill({ color: 0xffffff, alpha: 0.12 });
 
-    for (const btn of this.buttons) {
-      btn.root.pivot.set(btn.width / 2, btn.height / 2);
-      btn.root.position.set(width / 2, y + btn.height / 2);
-      y += btn.height + gap;
+    let currentY = py + 86;
+
+    // 行 1：继续游戏主按钮
+    this.resumeBtn.root.pivot.set(this.resumeBtn.width / 2, this.resumeBtn.height / 2);
+    this.resumeBtn.root.position.set(width / 2, currentY + this.resumeBtn.height / 2);
+    currentY += this.resumeBtn.height + 12;
+
+    // 行 2：设置开关并排行 (夜晚 | Debug)
+    const row2Y = currentY + this.nightBtn.height / 2;
+    this.nightBtn.root.pivot.set(this.nightBtn.width / 2, this.nightBtn.height / 2);
+    this.nightBtn.root.position.set(width / 2 - 65, row2Y);
+
+    this.debugBtn.root.pivot.set(this.debugBtn.width / 2, this.debugBtn.height / 2);
+    this.debugBtn.root.position.set(width / 2 + 65, row2Y);
+    currentY += this.nightBtn.height + 12;
+
+    // 行 3 (可选)：继续编辑
+    if (this.editBtn) {
+      this.editBtn.root.pivot.set(this.editBtn.width / 2, this.editBtn.height / 2);
+      this.editBtn.root.position.set(width / 2, currentY + this.editBtn.height / 2);
+      currentY += this.editBtn.height + 12;
     }
+
+    // 行 4：返回主场景
+    this.backBtn.root.pivot.set(this.backBtn.width / 2, this.backBtn.height / 2);
+    this.backBtn.root.position.set(width / 2, currentY + this.backBtn.height / 2);
   }
 
   private createButton(
     text: string,
+    width: number,
+    height: number,
     baseColor: number,
     hoverColor: number,
     onClick: () => void,
   ): PauseButton {
-    const width = 220;
-    const height = 52;
     const root = new Container();
     root.eventMode = 'static';
     root.cursor = 'pointer';
@@ -165,7 +233,7 @@ export class PauseMenu extends Container {
       text,
       style: {
         fontFamily: 'system-ui, sans-serif',
-        fontSize: 20,
+        fontSize: width < 150 ? 16 : 19,
         fontWeight: '600',
         fill: 0xffffff,
       },
@@ -198,8 +266,9 @@ function paintButton(
   h: number,
   color: number,
 ): void {
-  g.clear();
-  g.roundRect(3, 4, w, h, 14).fill({ color: 0x000000, alpha: 0.25 });
-  g.roundRect(0, 0, w, h, 14).fill({ color });
-  g.roundRect(8, 6, w - 16, 10, 6).fill({ color: 0xffffff, alpha: 0.15 });
+  g.clear()
+    .roundRect(0, 0, w, h, 12)
+    .fill({ color })
+    .roundRect(1, 1, w - 2, Math.floor(h / 2), 10)
+    .fill({ color: 0xffffff, alpha: 0.12 });
 }

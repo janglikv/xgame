@@ -3,6 +3,7 @@ import { getActiveMapDef, setActiveMapDef } from '../data/maps/activeMap';
 import type { LevelMapDef } from '../data/maps/types';
 import {
   cellCenter,
+  clampToWalkableWorld,
   getMapGrid,
   hitsTreeObstacle,
   isOcean,
@@ -11,7 +12,7 @@ import {
   treeKindOf,
 } from '../data/maps/walkMask';
 import type { Vec2 } from '../utils/math';
-import { OceanLayer } from './OceanLayer';
+import { generateOrganicContour, OceanLayer } from './OceanLayer';
 import {
   TREE_CHUNK_CELLS,
   TreeRowChunk,
@@ -258,19 +259,10 @@ export class WorldMap extends Container {
     // no-op
   }
 
-  /** 钳到陆地矩形内（与 isOcean 陆地范围一致） */
-  static clampWorld(x: number, y: number): Vec2 {
+  /** 钳制玩家至自然可走区域（草地+金沙滩+浅海 Lagoon，仅阻挡深海） */
+  static clampWorld(x: number, y: number, radius = DEFAULT_BODY_RADIUS): Vec2 {
     const def = getActiveMapDef();
-    const half = def.mapSize / 2;
-    const sea =
-      Math.max(0, Math.floor(def.seaMarginCells)) * Math.max(1, def.cellSize);
-    const lo = -half + sea;
-    const hi = half - sea;
-    if (hi <= lo) return { x: 0, y: 0 };
-    return {
-      x: Math.min(hi, Math.max(lo, x)),
-      y: Math.min(hi, Math.max(lo, y)),
-    };
+    return clampToWalkableWorld(x, y, def, radius);
   }
 
   static resolveSolid(
@@ -281,7 +273,7 @@ export class WorldMap extends Container {
     radius = DEFAULT_BODY_RADIUS,
   ): Vec2 {
     const hit = resolveTreeCollision(fromX, fromY, toX, toY, radius);
-    return WorldMap.clampWorld(hit.x, hit.y);
+    return WorldMap.clampWorld(hit.x, hit.y, radius);
   }
 
   /**
@@ -351,8 +343,37 @@ export class WorldMap extends Container {
     const r = this.landRect();
     if (r.w <= 0 || r.h <= 0) return;
 
-    // 草地（纯色，无随机色斑 / 无浅滩描边）
-    g.roundRect(r.x, r.y, r.w, r.h, 14).fill({ color: COLORS.grass });
+    // 1) 泥土草根过渡包边 - 向内缩进 -90px
+    const soilContour = generateOrganicContour(r, -90, this.seed, 220);
+    if (soilContour.length < 3) return;
+
+    g.beginPath();
+    g.moveTo(soilContour[0]!.x, soilContour[0]!.y);
+    for (let i = 1; i < soilContour.length; i++) {
+      g.lineTo(soilContour[i]!.x, soilContour[i]!.y);
+    }
+    g.closePath();
+    g.fill({ color: 0x5b9d36, alpha: 0.95 });
+
+    // 2) 岛屿主草地 - 向内缩进 -96px，留出超大面积阳光金沙滩！
+    const grassContour = generateOrganicContour(r, -96, this.seed, 220);
+    g.beginPath();
+    g.moveTo(grassContour[0]!.x, grassContour[0]!.y);
+    for (let i = 1; i < grassContour.length; i++) {
+      g.lineTo(grassContour[i]!.x, grassContour[i]!.y);
+    }
+    g.closePath();
+    g.fill({ color: COLORS.grass, alpha: 1.0 });
+
+    // 3) 草地中央柔和阳光光斑 - 向内缩进 -130px
+    const innerGrass = generateOrganicContour(r, -130, this.seed, 220);
+    g.beginPath();
+    g.moveTo(innerGrass[0]!.x, innerGrass[0]!.y);
+    for (let i = 1; i < innerGrass.length; i++) {
+      g.lineTo(innerGrass[i]!.x, innerGrass[i]!.y);
+    }
+    g.closePath();
+    g.fill({ color: 0x8be555, alpha: 0.28 });
   }
 
   private drawLandDecor(g: Graphics): void {
