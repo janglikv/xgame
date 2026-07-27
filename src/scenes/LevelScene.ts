@@ -816,8 +816,9 @@ export class LevelScene extends Container implements GameScene {
     if (!player) return;
 
     if (this.paused) {
-      // 暂停时角色回正、不处理移动；炸弹也冻结；镜头仍可平滑缩放
+      // 暂停时角色回正、不处理移动；炸弹也冻结；镜头仍可平滑缩放；海面继续动
       player.update(deltaMS, false);
+      this.worldMap.update(deltaMS);
       if (this.stepCamera(dt)) {
         this.cullTrees();
       }
@@ -888,6 +889,7 @@ export class LevelScene extends Container implements GameScene {
     this.healthBar.update(deltaMS);
     player.tickResources(deltaMS);
     this.syncAmmoHud(player);
+    this.worldMap.update(deltaMS);
 
     for (let si = 0; si < this.spiders.length; si++) {
       const spider = this.spiders[si]!;

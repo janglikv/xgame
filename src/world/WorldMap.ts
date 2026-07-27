@@ -11,6 +11,7 @@ import {
   treeKindOf,
 } from '../data/maps/walkMask';
 import type { Vec2 } from '../utils/math';
+import { OceanLayer } from './OceanLayer';
 import {
   TREE_CHUNK_CELLS,
   TreeRowChunk,
@@ -37,7 +38,6 @@ export const DEFAULT_BODY_RADIUS = 16;
 const EDGE_INSET = 28;
 
 const COLORS = {
-  oceanDeep: 0x0a3a5c,
   grass: 0x7fd84a,
   blade: 0x4caf2f,
   bladeLight: 0x7ed957,
@@ -207,6 +207,7 @@ export class WorldMap extends Container {
   private readonly treeChunks: TreeRowChunk[] = [];
   private readonly def: LevelMapDef;
   private built = false;
+  private ocean: OceanLayer | null = null;
 
   constructor(
     def?: LevelMapDef,
@@ -236,6 +237,11 @@ export class WorldMap extends Container {
     syncRuntimeTreesFromDef(this.def);
     this.build();
     this.built = true;
+  }
+
+  /** 海面动画（波纹滚动 / 泡沫呼吸） */
+  update(deltaMS: number): void {
+    this.ocean?.update(deltaMS);
   }
 
   /**
@@ -307,15 +313,21 @@ export class WorldMap extends Container {
   private build(): void {
     this.root.removeChildren();
     this.treeChunks.length = 0;
+    this.ocean = null;
 
-    const ocean = new Graphics();
-    ocean.label = 'Ocean';
+    const landRect = this.landRect();
+    const ocean = new OceanLayer(
+      oceanDrawExtent(this.def.mapSize),
+      landRect,
+      this.seed,
+    );
+    this.ocean = ocean;
+
     const land = new Graphics();
     land.label = 'Land';
     const decor = new Graphics();
     decor.label = 'Decor';
 
-    this.drawOcean(ocean);
     this.drawLand(land);
     this.drawLandDecor(decor);
     this.spawnPlacedTreeChunks();
@@ -333,15 +345,6 @@ export class WorldMap extends Container {
       w: this.def.mapSize - m * 2,
       h: this.def.mapSize - m * 2,
     };
-  }
-
-  /**
-   * 陆地以外全是海：画远超地图的矩形，避免缩放到全图时只见「围一圈」的窄海。
-   */
-  private drawOcean(g: Graphics): void {
-    const extent = oceanDrawExtent(this.def.mapSize);
-    const h = extent / 2;
-    g.rect(-h, -h, extent, extent).fill({ color: COLORS.oceanDeep });
   }
 
   private drawLand(g: Graphics): void {
