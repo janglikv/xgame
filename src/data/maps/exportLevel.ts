@@ -1,5 +1,5 @@
 import type { LevelMapDef } from './types';
-import { countWalkCells } from './walkMask';
+import { normalizeTrees } from './walkMask';
 
 function roundN(n: number, digits = 2): number {
   const p = 10 ** digits;
@@ -13,24 +13,25 @@ export function formatLevelDefTs(
   def: LevelMapDef,
   exportName = 'LEVEL_1',
 ): string {
+  const trees = normalizeTrees(def);
   const lines: string[] = [];
   lines.push(`import type { LevelMapDef } from './types';`);
   lines.push('');
   lines.push(
-    `/** 地图编辑器导出 — id: ${def.id} · ${countWalkCells(def)} 格 · cell=${def.cellSize} */`,
+    `/** 地图编辑器导出 — id: ${def.id} · 树 ${trees.length} · cell=${def.cellSize} · 海宽 ${def.seaMarginCells} 格 */`,
   );
   lines.push(`export const ${exportName}: LevelMapDef = {`);
   lines.push(`  id: ${JSON.stringify(def.id)},`);
   lines.push(`  mapSize: ${roundN(def.mapSize, 0)},`);
   lines.push(`  cellSize: ${roundN(def.cellSize, 0)},`);
+  lines.push(`  seaMarginCells: ${roundN(def.seaMarginCells, 0)},`);
   lines.push(
     `  spawn: { x: ${roundN(def.spawn.x)}, y: ${roundN(def.spawn.y)} },`,
   );
-  lines.push(`  walk: [`);
-  for (const r of def.walk) {
-    lines.push(
-      `    { c: ${r.c}, r: ${r.r}, w: ${r.w}, h: ${r.h} },`,
-    );
+  lines.push(`  trees: [`);
+  for (const t of trees) {
+    const kind = t.kind && t.kind !== 'harvest' ? `, kind: ${JSON.stringify(t.kind)}` : '';
+    lines.push(`    { c: ${t.c}, r: ${t.r}${kind} },`);
   }
   lines.push(`  ],`);
   lines.push(`  enemies: [`);

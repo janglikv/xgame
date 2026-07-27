@@ -1,15 +1,14 @@
-import type { CellRect, LevelMapDef } from './types';
+import type { LevelMapDef, MapTree, TreeKind } from './types';
 
-/** 种树时相对可走边的额外净空（世界像素，小于一格时主要靠边距） */
-export const TREE_CLEAR_MARGIN = 8;
+/** 树干 solid 半径（世界像素，相对格子中心） */
+export const TREE_SOLID_R = 14;
 
-export type WalkGrid = {
+export type MapGrid = {
   cols: number;
   rows: number;
   cellSize: number;
   mapSize: number;
-  /** 1 = 可走 */
-  mask: Uint8Array;
+  seaMarginCells: number;
 };
 
 export function mapHalf(def: LevelMapDef): number {
@@ -67,65 +66,74 @@ export function cellCenter(
   return { x: o.x + cellSize / 2, y: o.y + cellSize / 2 };
 }
 
-/** 格子矩形 → 世界 AABB（左上 + 宽高） */
-export function cellRectToWorld(
-  rect: CellRect,
-  mapSize: number,
-  cellSize: number,
-): { x: number; y: number; w: number; h: number } {
-  const o = cellOrigin(rect.c, rect.r, mapSize, cellSize);
-  return {
-    x: o.x,
-    y: o.y,
-    w: rect.w * cellSize,
-    h: rect.h * cellSize,
-  };
-}
-
-export function buildWalkGrid(def: LevelMapDef): WalkGrid {
+export function getMapGrid(def: LevelMapDef): MapGrid {
   const { cols, rows } = gridDims(def.mapSize, def.cellSize);
-  const mask = new Uint8Array(cols * rows);
-  for (const rect of def.walk) {
-    const c0 = Math.max(0, rect.c);
-    const r0 = Math.max(0, rect.r);
-    const c1 = Math.min(cols, rect.c + rect.w);
-    const r1 = Math.min(rows, rect.r + rect.h);
-    for (let r = r0; r < r1; r++) {
-      for (let c = c0; c < c1; c++) {
-        mask[cellKey(c, r, cols)] = 1;
-      }
-    }
-  }
   return {
     cols,
     rows,
     cellSize: def.cellSize,
     mapSize: def.mapSize,
-    mask,
+    seaMarginCells: Math.max(0, Math.floor(def.seaMarginCells)),
   };
 }
 
-let cached: { def: LevelMapDef; grid: WalkGrid } | null = null;
-
-export function invalidateWalkCache(): void {
-  cached = null;
+/**
+ * 陆地轴对齐范围（与 WorldMap 绿地矩形一致，世界像素）。
+ * 闭开区间语义：点在 [min, max] 内算陆；圆用 margin 内缩。
+ */
+export function landBounds(def: LevelMapDef): { min: number; max: number } {
+  const half = def.mapSize / 2;
+  const sea =
+    Math.max(0, Math.floor(def.seaMarginCells)) * Math.max(1, def.cellSize);
+  return { min: -half + sea, max: half - sea };
 }
 
-export function getWalkGrid(def: LevelMapDef): WalkGrid {
-  if (cached?.def === def) return cached.grid;
-  const grid = buildWalkGrid(def);
-  cached = { def, grid };
-  return grid;
-}
-
-function inMask(grid: WalkGrid, c: number, r: number): boolean {
-  if (c < 0 || r < 0 || c >= grid.cols || r >= grid.rows) return false;
-  return grid.mask[cellKey(c, r, grid.cols)] === 1;
+/** 格子是否在陆地区（非海、非越界）——编辑器摆放用 */
+export function isLandCell(
+  c: number,
+  r: number,
+  def: LevelMapDef,
+): boolean {
+  const { cols, rows, seaMarginCells: m } = getMapGrid(def);
+  if (c < m || r < m || c >= cols - m || r >= rows - m) return false;
+  return true;
 }
 
 /**
- * 点是否可走。
- * margin > 0：向外扩（种树净空）；margin < 0：向内缩（身体半径）。
+ * 点/圆是否在海里（含越界）。
+ * 用连续陆地矩形判定，避免格子台阶在下边界造成「顶墙感」和抖动。
+ * margin > 0：把 solid 圆内缩进陆地（圆心距边 < margin 即算海）。
+ */
+export function isOcean(
+  x: number,
+  y: number,
+  def: LevelMapDef,
+  margin = 0,
+): boolean {
+  const { min, max } = landBounds(def);
+  if (max <= min) return true;
+  const pad = Math.max(0, margin);
+  return (
+    x - pad < min ||
+    x + pad > max ||
+    y - pad < min ||
+    y + pad > max
+  );
+}
+
+/** 陆地可走（不考虑树） */
+export function isOnLand(
+  x: number,
+  y: number,
+  def: LevelMapDef,
+  bodyR = 0,
+): boolean {
+  return !isOcean(x, y, def, bodyR);
+}
+
+/**
+ * 兼容旧名：可站立点 = 陆地（树 solid 另算）。
+ * body 半径用 margin 语义：>0 时按身体采样。
  */
 export function isWalkable(
   x: number,
@@ -133,150 +141,111 @@ export function isWalkable(
   def: LevelMapDef,
   margin = 0,
 ): boolean {
-  const grid = getWalkGrid(def);
-  if (margin === 0) {
-    const { c, r } = worldToCell(x, y, def.mapSize, def.cellSize);
-    return inMask(grid, c, r);
-  }
-
-  // 采样圆/盒：用 margin 推开的四角 + 中心
-  const samples =
-    margin > 0
-      ? [
-          [0, 0],
-          [margin, 0],
-          [-margin, 0],
-          [0, margin],
-          [0, -margin],
-        ]
-      : [
-          [0, 0],
-          [margin, 0],
-          [-margin, 0],
-          [0, margin],
-          [0, -margin],
-        ];
-
-  if (margin > 0) {
-    // 扩：任一点在可走格内 → 视为可走（种树时 !isWalkable 才种）
-    for (const [dx, dy] of samples) {
-      const { c, r } = worldToCell(x + dx, y + dy, def.mapSize, def.cellSize);
-      if (inMask(grid, c, r)) return true;
-    }
-    return false;
-  }
-
-  // 缩：全部采样点都在可走格内
-  for (const [dx, dy] of samples) {
-    const { c, r } = worldToCell(x + dx, y + dy, def.mapSize, def.cellSize);
-    if (!inMask(grid, c, r)) return false;
-  }
-  return true;
+  return isOnLand(x, y, def, Math.abs(margin));
 }
 
-export function shouldPlantTree(
-  x: number,
-  y: number,
-  def: LevelMapDef,
-  clearMargin = TREE_CLEAR_MARGIN,
-): boolean {
-  return !isWalkable(x, y, def, clearMargin);
+export function treeKindOf(t: MapTree): TreeKind {
+  return t.kind ?? 'harvest';
 }
 
-/** 格子集合 → 合并为尽量少的 CellRect（行游程 + 纵向合并） */
-export function mergeCellsToRects(
-  cells: Iterable<number>,
-  cols: number,
-  rows: number,
-): CellRect[] {
-  const set = new Set(cells);
-  if (set.size === 0) return [];
-
-  // 每行：水平 runs [c0, c1)
-  const rowRuns: Array<Array<{ c: number; w: number }>> = [];
-  for (let r = 0; r < rows; r++) {
-    const runs: Array<{ c: number; w: number }> = [];
-    let c = 0;
-    while (c < cols) {
-      if (!set.has(cellKey(c, r, cols))) {
-        c++;
-        continue;
-      }
-      const c0 = c;
-      while (c < cols && set.has(cellKey(c, r, cols))) c++;
-      runs.push({ c: c0, w: c - c0 });
-    }
-    rowRuns.push(runs);
-  }
-
-  const used: boolean[][] = rowRuns.map((runs) => runs.map(() => false));
-  const out: CellRect[] = [];
-
-  for (let r = 0; r < rows; r++) {
-    const runs = rowRuns[r]!;
-    for (let i = 0; i < runs.length; i++) {
-      if (used[r]![i]) continue;
-      const { c, w } = runs[i]!;
-      used[r]![i] = true;
-      let h = 1;
-      // 向下合并相同 run
-      for (let rr = r + 1; rr < rows; rr++) {
-        const idx = rowRuns[rr]!.findIndex(
-          (run, j) => !used[rr]![j] && run.c === c && run.w === w,
-        );
-        if (idx < 0) break;
-        used[rr]![idx] = true;
-        h++;
-      }
-      out.push({ c, r, w, h });
-    }
+/** 规范化树列表（去重格、钳制陆地） */
+export function normalizeTrees(
+  def: Pick<LevelMapDef, 'mapSize' | 'cellSize' | 'seaMarginCells' | 'trees'>,
+): MapTree[] {
+  const { cols, rows } = gridDims(def.mapSize, def.cellSize);
+  const seen = new Set<number>();
+  const out: MapTree[] = [];
+  for (const t of def.trees) {
+    const c = Math.floor(t.c);
+    const r = Math.floor(t.r);
+    if (!isLandCell(c, r, def as LevelMapDef)) continue;
+    if (c < 0 || r < 0 || c >= cols || r >= rows) continue;
+    const k = cellKey(c, r, cols);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push({ c, r, kind: treeKindOf(t) });
   }
   return out;
 }
 
-/** 世界矩形光栅化进格子集合（重叠即纳入） */
-export function rasterizeWorldRect(
+export type TreeObstacle = {
+  x: number;
+  y: number;
+  r: number;
+  /** 格子 key，便于砍伐后移除 */
+  key: number;
+};
+
+/** 由地图树生成 solid 圆列表 */
+export function buildTreeObstacles(def: LevelMapDef): TreeObstacle[] {
+  const { cols } = gridDims(def.mapSize, def.cellSize);
+  const out: TreeObstacle[] = [];
+  for (const t of normalizeTrees(def)) {
+    const p = cellCenter(t.c, t.r, def.mapSize, def.cellSize);
+    out.push({
+      x: p.x,
+      y: p.y,
+      r: TREE_SOLID_R,
+      key: cellKey(t.c, t.r, cols),
+    });
+  }
+  return out;
+}
+
+// —— 运行时树 solid（砍伐后可动态移除）——
+
+let runtimeTreeObstacles: TreeObstacle[] = [];
+let runtimeDefId: string | null = null;
+
+export function setRuntimeTreeObstacles(
+  def: LevelMapDef,
+  obstacles: TreeObstacle[],
+): void {
+  runtimeDefId = def.id;
+  runtimeTreeObstacles = obstacles.slice();
+}
+
+export function getRuntimeTreeObstacles(): readonly TreeObstacle[] {
+  return runtimeTreeObstacles;
+}
+
+export function removeRuntimeTreeObstacleAtCell(
+  def: LevelMapDef,
+  c: number,
+  r: number,
+): void {
+  const { cols } = gridDims(def.mapSize, def.cellSize);
+  const key = cellKey(c, r, cols);
+  runtimeTreeObstacles = runtimeTreeObstacles.filter((o) => o.key !== key);
+}
+
+export function clearRuntimeTreeObstacles(): void {
+  runtimeTreeObstacles = [];
+  runtimeDefId = null;
+}
+
+export function syncRuntimeTreesFromDef(def: LevelMapDef): void {
+  setRuntimeTreeObstacles(def, buildTreeObstacles(def));
+}
+
+/** 圆心是否碰到运行时树干 */
+export function hitsTreeObstacle(
   x: number,
   y: number,
-  w: number,
-  h: number,
-  mapSize: number,
-  cellSize: number,
-  into: Set<number>,
-): void {
-  const { cols, rows } = gridDims(mapSize, cellSize);
-  const half = mapSize / 2;
-  const c0 = Math.max(0, Math.floor((x + half) / cellSize));
-  const r0 = Math.max(0, Math.floor((y + half) / cellSize));
-  const c1 = Math.min(cols, Math.ceil((x + w + half) / cellSize));
-  const r1 = Math.min(rows, Math.ceil((y + h + half) / cellSize));
-  for (let r = r0; r < r1; r++) {
-    for (let c = c0; c < c1; c++) {
-      into.add(cellKey(c, r, cols));
-    }
+  radius: number,
+): boolean {
+  const r = Math.max(0, radius);
+  for (const o of runtimeTreeObstacles) {
+    const dx = x - o.x;
+    const dy = y - o.y;
+    const lim = r + o.r;
+    if (dx * dx + dy * dy < lim * lim) return true;
   }
-}
-
-export function cellsFromWalk(def: LevelMapDef): Set<number> {
-  const { cols } = gridDims(def.mapSize, def.cellSize);
-  const set = new Set<number>();
-  for (const rect of def.walk) {
-    for (let r = rect.r; r < rect.r + rect.h; r++) {
-      for (let c = rect.c; c < rect.c + rect.w; c++) {
-        set.add(cellKey(c, r, cols));
-      }
-    }
-  }
-  return set;
-}
-
-export function countWalkCells(def: LevelMapDef): number {
-  return cellsFromWalk(def).size;
+  return false;
 }
 
 export function isSpawnValid(def: LevelMapDef): boolean {
-  if (def.walk.length === 0) return false;
-  return isWalkable(def.spawn.x, def.spawn.y, def, 0);
+  return isOnLand(def.spawn.x, def.spawn.y, def, 8);
 }
 
 export function cloneLevelDef(def: LevelMapDef): LevelMapDef {
@@ -284,9 +253,13 @@ export function cloneLevelDef(def: LevelMapDef): LevelMapDef {
     id: def.id,
     mapSize: def.mapSize,
     cellSize: def.cellSize,
+    seaMarginCells: def.seaMarginCells,
     spawn: { x: def.spawn.x, y: def.spawn.y },
-    walk: def.walk.map((r) => ({ ...r })),
-    // 保留 undefined（旧关卡默认刷怪）与 []（明确无敌人）的区别
+    trees: def.trees.map((t) => ({
+      c: t.c,
+      r: t.r,
+      kind: t.kind,
+    })),
     enemies:
       def.enemies === undefined
         ? undefined
@@ -294,19 +267,33 @@ export function cloneLevelDef(def: LevelMapDef): LevelMapDef {
   };
 }
 
-/** 从格子集合生成完整 def.walk */
-export function defFromCells(
-  base: Pick<LevelMapDef, 'id' | 'mapSize' | 'cellSize' | 'spawn'> &
-    Partial<Pick<LevelMapDef, 'enemies'>>,
-  cells: Set<number>,
+/** 空白海岛关卡模板 */
+export function emptyIslandDef(
+  id: string,
+  options: {
+    mapSize?: number;
+    cellSize?: number;
+    seaMarginCells?: number;
+  } = {},
 ): LevelMapDef {
-  const { cols, rows } = gridDims(base.mapSize, base.cellSize);
+  const mapSize = options.mapSize ?? 2880;
+  const cellSize = options.cellSize ?? 36;
+  // 默认 0：整块 mapSize 是绿地岛，岛外全是海（不再「只围一圈」）
+  const seaMarginCells = options.seaMarginCells ?? 0;
   return {
-    id: base.id,
-    mapSize: base.mapSize,
-    cellSize: base.cellSize,
-    spawn: { ...base.spawn },
-    walk: mergeCellsToRects(cells, cols, rows),
-    enemies: (base.enemies ?? []).map((e) => ({ ...e })),
+    id,
+    mapSize,
+    cellSize,
+    seaMarginCells,
+    spawn: { x: 0, y: 0 },
+    trees: [],
+    enemies: [],
   };
 }
+
+/** @deprecated 兼容旧 import 名 */
+export function invalidateWalkCache(): void {
+  /* no-op：海岛模型不再缓存 walk 掩码 */
+}
+
+void runtimeDefId;

@@ -1,5 +1,6 @@
 import type { Container } from 'pixi.js';
-import { MAP_SIZE, WorldMap } from '../world/WorldMap';
+import { getActiveMapDef } from '../data/maps';
+import { WorldMap } from '../world/WorldMap';
 
 export type LevelCameraOptions = {
   worldRoot: Container;
@@ -110,12 +111,15 @@ export class LevelCamera {
     );
   }
 
-  /** 当前窗口下能看全地图的最小缩放 */
+  /**
+   * 缩到「岛 + 周围海」的最小缩放。
+   * 用大于 mapSize 的 fit 框，避免全图时绿地贴满屏幕、海只剩一圈边。
+   */
   getMinZoom(): number {
     if (this.viewWidth <= 0 || this.viewHeight <= 0) return 0.15;
-    return (
-      Math.min(this.viewWidth / MAP_SIZE, this.viewHeight / MAP_SIZE) * 0.92
-    );
+    const mapSize = getActiveMapDef().mapSize;
+    const fit = mapSize * 1.65;
+    return Math.min(this.viewWidth / fit, this.viewHeight / fit) * 0.92;
   }
 
   /** 设置缩放目标（由 step 平滑过渡） */

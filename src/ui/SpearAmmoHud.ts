@@ -1,4 +1,4 @@
-import { Container, Graphics, Sprite } from 'pixi.js';
+import { Container, Sprite } from 'pixi.js';
 import { getSpearTexture, SPEAR_TEX_ANGLE } from '../entities/SpearProjectile';
 import type { SpearAmmoSnapshot } from '../entities/SpearAmmo';
 
@@ -17,8 +17,10 @@ export class SpearAmmoHud extends Container {
   private readonly slotSize: number;
   private readonly gap: number;
   private readonly slotsRoot: Container;
-  private icons: (Sprite | Graphics)[] = [];
+  private icons: Sprite[] = [];
   private lastCurrent = -1;
+  /** 贴图是否已就绪（避免加载前画占位菱形后数量不变再不刷新） */
+  private hadTexture = false;
 
   /**
    * 单枚斜置角：更斜的 / 排，剑尖朝右上（+π 翻转到贴图尖端一侧）。
@@ -40,11 +42,17 @@ export class SpearAmmoHud extends Container {
     this.addChild(this.slotsRoot);
   }
 
-  /** 同步当前数量；仅 current 变化时重建图标 */
+  /**
+   * 同步当前数量。
+   * current 变化，或飞剑贴图从无到有时重建（与 BombAmmoHud 一致）。
+   */
   setAmmo(snap: SpearAmmoSnapshot): void {
     const n = Math.max(0, Math.floor(snap.current));
-    if (n === this.lastCurrent) return;
+    const tex = getSpearTexture();
+    const hasTex = !!tex && tex.width > 0;
+    if (n === this.lastCurrent && hasTex === this.hadTexture) return;
     this.lastCurrent = n;
+    this.hadTexture = hasTex;
     this.rebuild(n);
   }
 
@@ -65,28 +73,22 @@ export class SpearAmmoHud extends Container {
     if (count <= 0) return;
 
     const tex = getSpearTexture();
+    // 贴图未加载时不画菱形占位，等 loadSpearTexture 后再刷
+    if (!tex) return;
+
     const base = this.iconBaseScale();
     // 水平一排、Y 对齐；原点在左缘，向右铺（与血条左对齐）
     const startX = this.slotSize / 2;
 
     for (let i = 0; i < count; i++) {
-      let icon: Sprite | Graphics;
-      if (tex) {
-        const sp = new Sprite(tex);
-        sp.anchor.set(0.5, 0.5);
-        sp.scale.set(base);
-        sp.rotation = SpearAmmoHud.ICON_TILT;
-        icon = sp;
-      } else {
-        icon = new Graphics()
-          .poly([0, -11, 6, 0, 0, 11, -6, 0])
-          .fill({ color: 0x7ecbff, alpha: 0.95 });
-        icon.rotation = SpearAmmoHud.ICON_TILT;
-      }
-      icon.position.set(startX + i * this.gap, 0);
-      icon.alpha = 0.95;
-      this.slotsRoot.addChild(icon);
-      this.icons.push(icon);
+      const sp = new Sprite(tex);
+      sp.anchor.set(0.5, 0.5);
+      sp.scale.set(base);
+      sp.rotation = SpearAmmoHud.ICON_TILT;
+      sp.position.set(startX + i * this.gap, 0);
+      sp.alpha = 0.95;
+      this.slotsRoot.addChild(sp);
+      this.icons.push(sp);
     }
   }
 }

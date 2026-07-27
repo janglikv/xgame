@@ -302,7 +302,7 @@ export abstract class PlayerCharacterBase
   }
 
   /**
-   * 根据水平移动方向左右翻转。
+   * 按世界 X 方向左右翻转（指针、击退、技能瞄准等共用）。
    * @param dirX 负值朝左，正值朝右；0 保持不变
    */
   setFacingFromMoveX(dirX: number): void {

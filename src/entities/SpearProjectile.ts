@@ -1,5 +1,6 @@
 import { Container, Sprite, Texture } from 'pixi.js';
-import { bodyHitsTrees, MAP_WORLD_HALF } from '../world/WorldMap';
+import { getActiveMapDef } from '../data/maps';
+import { bodyHitsTrees } from '../world/WorldMap';
 import {
   loadOutlinedTexture,
   OUTLINE_PX_SPEAR,
@@ -469,7 +470,7 @@ export class SpearProjectile extends Container {
   }
 
   private isBlocked(x: number, y: number): boolean {
-    const h = MAP_WORLD_HALF - 4;
+    const h = getActiveMapDef().mapSize / 2 - 4;
     if (x < -h || x > h || y < -h || y > h) return true;
     return bodyHitsTrees(x, y, SPEAR_BODY_R);
   }

@@ -13,11 +13,21 @@ import {
 import { Spider } from '../entities/Spider';
 import { FlameFlower } from '../entities/FlameFlower';
 import { WoodenDummy } from '../entities/WoodenDummy';
+import {
+  HARVEST_MELEE_DAMAGE,
+  HARVEST_RANGE,
+  HarvestableTree,
+} from '../entities/HarvestableTree';
+import {
+  ItemPickup,
+  PICKUP_RADIUS,
+} from '../entities/ItemPickup';
 import { Keyboard } from '../input/Keyboard';
 import {
   CombatSystem,
   type CombatWorld,
 } from '../systems/CombatSystem';
+import { Inventory } from '../systems/Inventory';
 import {
   SolidResolver,
   type SolidContext,
@@ -25,12 +35,21 @@ import {
 import { DebugOverlay } from '../systems/DebugOverlay';
 import { CharacterSwitchHud } from '../ui/CharacterSwitchHud';
 import { HealthBar } from '../ui/HealthBar';
+import { InventoryHud } from '../ui/InventoryHud';
 import { PauseMenu } from '../ui/PauseMenu';
 import { BombAmmoHud } from '../ui/BombAmmoHud';
 import { SpearAmmoHud } from '../ui/SpearAmmoHud';
-import { LEVEL_1, type LevelMapDef } from '../data/maps';
+import {
+  LEVEL_1,
+  cellCenter,
+  normalizeTrees,
+  removeRuntimeTreeObstacleAtCell,
+  setActiveMapDef,
+  treeKindOf,
+  type LevelMapDef,
+} from '../data/maps';
 import { getNightBackground, NightOverlay } from '../world/NightOverlay';
-import { MAP_SIZE, MAP_WORLD_HALF, WorldMap } from '../world/WorldMap';
+import { WorldMap } from '../world/WorldMap';
 import { LevelCamera } from './LevelCamera';
 import type { GameScene } from './types';
 
@@ -86,7 +105,7 @@ export type LevelSceneOptions = {
 /**
  * 可玩关卡（默认黑夜）：WASD 移动，点击远程攻击，Esc 暂停。
  * 场上始终只有一名角色；右侧头像点击或 Tab 切换。
- * 滚轮 / +/- 缩放，0 复位，F 看全景。
+ * 滚轮 / +/- 缩放，0 复位，F 看全景；R 近战砍可交互树。
  * 纵深：worldRoot 镜头变换 + sortLayer 按脚底 Y 排序。
  */
 export class LevelScene extends Container implements GameScene {
@@ -110,7 +129,11 @@ export class LevelScene extends Container implements GameScene {
   private readonly spearAmmoHud: SpearAmmoHud;
   private readonly bombAmmoHud: BombAmmoHud;
   private readonly characterHud: CharacterSwitchHud;
+  private readonly inventoryHud: InventoryHud;
   private readonly spiders: Spider[] = [];
+  private readonly harvestTrees: HarvestableTree[] = [];
+  private readonly pickups: ItemPickup[] = [];
+  private readonly inventory: Inventory;
   private readonly keyboard = new Keyboard();
   private readonly solid = new SolidResolver();
   private readonly combat: CombatSystem;
@@ -130,6 +153,7 @@ export class LevelScene extends Container implements GameScene {
   private tabWasDown = false;
   private qWasDown = false;
   private eWasDown = false;
+  private rWasDown = false;
   private fitWasDown = false;
   private resetZoomWasDown = false;
   private treesMounted = false;
@@ -171,13 +195,15 @@ export class LevelScene extends Container implements GameScene {
       viewHeight: height,
     });
 
+    setActiveMapDef(this.mapDef);
     this.worldMap = new WorldMap(this.mapDef);
     this.worldRoot.addChild(this.worldMap);
 
     // 夜色只压在地面（草坪）上，不进 sortLayer，避免角色/怪/爆炸变黑
+    const half = this.mapDef.mapSize / 2;
     this.nightOverlay = new NightOverlay();
-    this.nightOverlay.position.set(-MAP_WORLD_HALF, -MAP_WORLD_HALF);
-    this.nightOverlay.layout(MAP_SIZE, MAP_SIZE);
+    this.nightOverlay.position.set(-half, -half);
+    this.nightOverlay.layout(this.mapDef.mapSize, this.mapDef.mapSize);
     this.worldRoot.addChild(this.nightOverlay);
 
     this.sortLayer = new Container();
@@ -186,16 +212,25 @@ export class LevelScene extends Container implements GameScene {
     this.sortLayer.eventMode = 'none';
     this.worldRoot.addChild(this.sortLayer);
 
+    this.inventoryHud = new InventoryHud();
+    this.inventory = new Inventory({
+      slotCount: 8,
+      onChange: () => this.inventoryHud.setSlots(this.inventory.getSlots()),
+    });
+    this.inventoryHud.setSlots(this.inventory.getSlots());
+
     this.combat = new CombatSystem(this.sortLayer, {
       sortDepth: () => this.sortDepth(),
       syncWorldActors: () => this.syncWorldActors(),
       onAmmoHudChanged: (model) => this.applyAmmoHudModel(model),
+      onHarvestTreeDestroyed: (tree) => this.onHarvestTreeDestroyed(tree),
     });
 
     this.debugOverlay = new DebugOverlay();
     this.worldRoot.addChild(this.debugOverlay);
 
     this.spawnEnemies();
+    this.spawnHarvestTrees();
 
     // HUD 须先于 activateCharacter：后者会同步飞剑条 / 光标
     this.healthBar = new HealthBar({
@@ -213,6 +248,8 @@ export class LevelScene extends Container implements GameScene {
     this.bombAmmoHud = new BombAmmoHud();
     this.bombAmmoHud.visible = false;
     this.addChild(this.bombAmmoHud);
+
+    this.addChild(this.inventoryHud);
 
     this.characterHud = new CharacterSwitchHud({
       onSelect: (id) => this.switchCharacter(id),
@@ -245,6 +282,7 @@ export class LevelScene extends Container implements GameScene {
     this.stepCamera(0, true);
     this.syncWorldActors();
     this.layoutHealthHud();
+    this.inventoryHud.layout(width, height);
     this.characterHud.layout(width, height);
     this.pauseMenu.layout(width, height);
   }
@@ -415,6 +453,8 @@ export class LevelScene extends Container implements GameScene {
     await Promise.all(this.spiders.map((s) => s.load()));
     // 初始角色资源加载完成后再播放出场（逻辑在角色类内）。
     this.player?.startEntrance(this.entranceContext());
+    // 贴图已就绪后再刷弹药 HUD（避免构造时用占位图标卡死）
+    if (this.player) this.syncAmmoHud(this.player);
     this.syncWorldActors();
     this.cullTrees();
     this.sortDepth();
@@ -458,6 +498,51 @@ export class LevelScene extends Container implements GameScene {
     }
   }
 
+  /**
+   * 从地图 def.trees 刷可砍树（kind=harvest 或默认）。
+   * pine 由 WorldMap 静态绘制。
+   */
+  private spawnHarvestTrees(): void {
+    const trees = normalizeTrees(this.mapDef);
+    for (const t of trees) {
+      if (treeKindOf(t) !== 'harvest') continue;
+      const p = cellCenter(t.c, t.r, this.mapDef.mapSize, this.mapDef.cellSize);
+      const tree = new HarvestableTree(p.x, p.y, {
+        woodDrop: 1 + ((t.c + t.r) % 2),
+        cellC: t.c,
+        cellR: t.r,
+      });
+      this.sortLayer.addChild(tree);
+      this.harvestTrees.push(tree);
+    }
+  }
+
+  /** 树被摧毁：掉木头 + 移除 solid */
+  private onHarvestTreeDestroyed(tree: HarvestableTree): void {
+    if (tree.cellC >= 0 && tree.cellR >= 0) {
+      removeRuntimeTreeObstacleAtCell(this.mapDef, tree.cellC, tree.cellR);
+    }
+    const n = tree.woodDrop;
+    for (let i = 0; i < n; i++) {
+      const ang = (Math.PI * 2 * i) / n + Math.random() * 0.4;
+      const dist = 10 + Math.random() * 14;
+      const px = tree.worldX + Math.cos(ang) * dist;
+      const py = tree.worldY + Math.sin(ang) * dist * 0.65;
+      this.spawnPickup(px, py, 'wood', 1);
+    }
+  }
+
+  private spawnPickup(
+    x: number,
+    y: number,
+    itemId: 'wood',
+    count: number,
+  ): void {
+    const p = new ItemPickup(x, y, itemId, { count });
+    this.sortLayer.addChild(p);
+    this.pickups.push(p);
+  }
+
   /** 旧关卡无 enemies 字段时的默认刷怪 */
   private spawnLegacyCornerSpiders(): void {
     const offsets = [
@@ -481,43 +566,34 @@ export class LevelScene extends Container implements GameScene {
     }
   }
 
-  /** 镜头焦点：以玩家为主，适度朝指针方向前置。 */
+  /** 镜头焦点：以玩家为主，适度朝指针方向前置。不改写角色坐标。 */
   private getCameraFocus(): { x: number; y: number } {
     const player = this.player;
-    if (player) {
-      const solid = WorldMap.resolveSolid(
-        player.worldX,
-        player.worldY,
-        player.worldX,
-        player.worldY,
-        player.bodyR,
-      );
-      player.worldX = solid.x;
-      player.worldY = solid.y;
-
-      if (!this.pointerSeen) {
-        return { x: player.worldX, y: player.worldY };
-      }
-
-      const zoom = Math.max(this.camera.currentZoom, 1e-4);
-      let offsetX =
-        ((this.pointerScreenX - this.camera.width / 2) / zoom) *
-        CAMERA_POINTER_LEAD;
-      let offsetY =
-        ((this.pointerScreenY - this.camera.height / 2) / zoom) *
-        CAMERA_POINTER_LEAD;
-      const offsetLength = Math.hypot(offsetX, offsetY);
-      if (offsetLength > CAMERA_POINTER_LEAD_MAX) {
-        const scale = CAMERA_POINTER_LEAD_MAX / offsetLength;
-        offsetX *= scale;
-        offsetY *= scale;
-      }
-      return {
-        x: player.worldX + offsetX,
-        y: player.worldY + offsetY,
-      };
+    if (!player) {
+      return { x: this.spawn.x, y: this.spawn.y };
     }
-    return { x: this.spawn.x, y: this.spawn.y };
+
+    if (!this.pointerSeen) {
+      return { x: player.worldX, y: player.worldY };
+    }
+
+    const zoom = Math.max(this.camera.currentZoom, 1e-4);
+    let offsetX =
+      ((this.pointerScreenX - this.camera.width / 2) / zoom) *
+      CAMERA_POINTER_LEAD;
+    let offsetY =
+      ((this.pointerScreenY - this.camera.height / 2) / zoom) *
+      CAMERA_POINTER_LEAD;
+    const offsetLength = Math.hypot(offsetX, offsetY);
+    if (offsetLength > CAMERA_POINTER_LEAD_MAX) {
+      const scale = CAMERA_POINTER_LEAD_MAX / offsetLength;
+      offsetX *= scale;
+      offsetY *= scale;
+    }
+    return {
+      x: player.worldX + offsetX,
+      y: player.worldY + offsetY,
+    };
   }
 
   /**
@@ -530,13 +606,19 @@ export class LevelScene extends Container implements GameScene {
     return this.camera.step(dt, focus.x, focus.y, snap);
   }
 
-  /** 角色/蜘蛛/炸弹写到世界坐标，并刷新 zIndex */
+  /** 角色/蜘蛛/炸弹/可砍树/掉落写到世界坐标，并刷新 zIndex */
   private syncWorldActors(): void {
     if (this.player) {
       this.player.syncToWorld();
     }
     for (const spider of this.spiders) {
       spider.syncToWorld();
+    }
+    for (const tree of this.harvestTrees) {
+      tree.syncToWorld();
+    }
+    for (const p of this.pickups) {
+      p.syncToWorld();
     }
     this.combat.syncProjectiles();
   }
@@ -546,6 +628,7 @@ export class LevelScene extends Container implements GameScene {
     return {
       player: this.player,
       spiders: this.spiders,
+      harvestTrees: this.harvestTrees,
     };
   }
 
@@ -710,6 +793,13 @@ export class LevelScene extends Container implements GameScene {
     }
     this.eWasDown = eDown;
 
+    // R：近战砍最近可交互树（F 留给全景）
+    const rDown = this.keyboard.isDown('KeyR');
+    if (rDown && !this.rWasDown && !this.paused) {
+      this.tryMeleeHarvest();
+    }
+    this.rWasDown = rDown;
+
     // 缩放快捷键在暂停时也可用（方便看全景）
     this.handleZoomKeys(dt);
 
@@ -753,9 +843,9 @@ export class LevelScene extends Container implements GameScene {
     const locks = player.entranceLocks;
 
     // 出场锁移动时保持垂直落点；普通空中状态仍保留少量操控。
+    // 左右朝向由指针决定，不再跟 A/D。
     const moving = x !== 0 || y !== 0;
     if (moving && !locks.move) {
-      player.setFacingFromMoveX(x);
       let control = 1;
       if (airborne) {
         control = 0.08;
@@ -769,6 +859,16 @@ export class LevelScene extends Container implements GameScene {
 
     // 树区 + 脚底圆互挡（即使本帧没位移，也可能被怪挤占，统一走 solid）
     this.applyPlayerSolid(fromX, fromY);
+
+    // 朝向：指针在角色哪一侧就看向哪一侧（指针未出现过则保持原朝向）
+    // 不用 aimFromScreen：它在过近时返回 null（投掷用），朝向仍应更新。
+    if (this.pointerSeen) {
+      const z = Math.max(this.camera.currentZoom, 1e-4);
+      const playerSx =
+        this.camera.width / 2 + (player.worldX - this.camera.x) * z;
+      const screenDx = this.pointerScreenX - playerSx;
+      player.setFacingFromMoveX(screenDx);
+    }
     player.updateEntrance(
       dt,
       this.entranceContext(),
@@ -811,7 +911,84 @@ export class LevelScene extends Container implements GameScene {
     }
 
     this.combat.update(deltaMS, this.combatWorld());
+
+    for (const tree of this.harvestTrees) {
+      tree.update(deltaMS);
+    }
+    this.updatePickups(deltaMS, player.worldX, player.worldY);
+
     this.sortDepth();
+  }
+
+  /**
+   * 近战砍最近一棵在范围内的可砍树。
+   * 摧毁时掉落；投射物摧毁走 CombatSystem 回调。
+   */
+  private tryMeleeHarvest(): void {
+    const player = this.player;
+    if (!player || player.entranceLocks.attack) return;
+
+    let best: HarvestableTree | null = null;
+    let bestD = HARVEST_RANGE;
+    for (const tree of this.harvestTrees) {
+      if (!tree.isAlive) continue;
+      const d = Math.hypot(
+        tree.worldX - player.worldX,
+        tree.worldY - player.worldY,
+      );
+      if (d <= bestD) {
+        bestD = d;
+        best = tree;
+      }
+    }
+    if (!best) return;
+
+    player.setFacingFromMoveX(best.worldX - player.worldX);
+    const alive = best.applyDamage(HARVEST_MELEE_DAMAGE);
+    if (!alive) {
+      const idx = this.harvestTrees.indexOf(best);
+      if (idx >= 0) {
+        this.onHarvestTreeDestroyed(best);
+        this.sortLayer.removeChild(best);
+        best.destroy({ children: true });
+        this.harvestTrees.splice(idx, 1);
+      }
+    }
+    this.syncWorldActors();
+    this.sortDepth();
+  }
+
+  /** 掉落物漂浮 + 靠近自动进包 */
+  private updatePickups(
+    deltaMS: number,
+    playerX: number,
+    playerY: number,
+  ): void {
+    const r2 = PICKUP_RADIUS * PICKUP_RADIUS;
+    for (let i = this.pickups.length - 1; i >= 0; i--) {
+      const p = this.pickups[i]!;
+      p.update(deltaMS);
+      if (p.isCollected) {
+        this.sortLayer.removeChild(p);
+        p.destroy({ children: true });
+        this.pickups.splice(i, 1);
+        continue;
+      }
+      const dx = p.worldX - playerX;
+      const dy = p.worldY - playerY;
+      if (dx * dx + dy * dy > r2) continue;
+      if (!this.inventory.canAccept(p.itemId, p.count)) continue;
+      const left = this.inventory.add(p.itemId, p.count);
+      if (left < p.count) {
+        // 全收或半收：半收时简化为全收失败保留（堆叠够用时通常全收）
+        if (left === 0) {
+          p.markCollected();
+          this.sortLayer.removeChild(p);
+          p.destroy({ children: true });
+          this.pickups.splice(i, 1);
+        }
+      }
+    }
   }
 
   /** 蜘蛛扑咬命中：扣血 + 轻击退 + 姿态反馈 */
@@ -845,6 +1022,7 @@ export class LevelScene extends Container implements GameScene {
     this.cullTrees();
     this.sortDepth();
     this.layoutHealthHud();
+    this.inventoryHud.layout(width, height);
     this.characterHud.layout(width, height);
     this.pauseMenu.layout(width, height);
   }

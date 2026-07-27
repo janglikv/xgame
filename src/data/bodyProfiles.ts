@@ -57,7 +57,7 @@ export const BODY_PROFILES: Record<BodyProfileId, BodyProfile> = {
   'ice-ranger': {
     id: 'ice-ranger',
     label: '冰冰',
-    solid: [{ type: 'circle', ox: 1.35, oy: -6.3, r: 19.4 }],
+    solid: [{ type: 'circle', ox: 0.2, oy: -12.78, r: 19.4 }],
     hurt: [
       { type: 'circle', ox: -2.44, oy: -32.09, r: 22 },
       { type: 'circle', ox: 0, oy: -11.42, r: 20 },
@@ -72,7 +72,7 @@ export const BODY_PROFILES: Record<BodyProfileId, BodyProfile> = {
   'flame-flower': {
     id: 'flame-flower',
     label: '火焰花',
-    solid: [{ type: 'circle', ox: -6.25, oy: -9.66, r: 20 }],
+    solid: [{ type: 'circle', ox: -6.25, oy: -17.95, r: 20 }],
     hurt: [
       { type: 'circle', ox: -7.56, oy: -17.33, r: 24 },
       { type: 'circle', ox: -11.59, oy: -50.19, r: 23.77 },
@@ -81,7 +81,7 @@ export const BODY_PROFILES: Record<BodyProfileId, BodyProfile> = {
   'wooden-dummy': {
     id: 'wooden-dummy',
     label: '木桩',
-    solid: [{ type: 'circle', ox: -0.1, oy: -11.68, r: 18 }],
+    solid: [{ type: 'circle', ox: 0.82, oy: -9.38, r: 18 }],
     hurt: [
       { type: 'rect', ox: 0, oy: -40.45, w: 21.31, h: 73.35 },
       { type: 'rect', ox: 0.8, oy: -44.47, w: 50.49, h: 8.51 },

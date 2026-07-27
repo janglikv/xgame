@@ -20,6 +20,11 @@ import {
 import type { RadialSpearFormationOptions } from '../entities/CharacterRanged';
 import type { Spider } from '../entities/Spider';
 import {
+  HARVEST_BOMB_DAMAGE,
+  HARVEST_SPEAR_DAMAGE,
+  type HarvestableTree,
+} from '../entities/HarvestableTree';
+import {
   circleHitsHurt,
   distancePastHurt,
 } from '../data/bodyProfiles';
@@ -56,6 +61,8 @@ export type CombatWorld = {
   player: PlayerCharacterBase | null;
   /** 可变数组：死亡蜘蛛会从中 splice */
   spiders: Spider[];
+  /** 可砍树；摧毁时 splice 并回调 onHarvestTreeDestroyed */
+  harvestTrees: HarvestableTree[];
 };
 
 /**
@@ -67,6 +74,8 @@ export type CombatSystemHooks = {
   syncWorldActors: () => void;
   /** 弹药显示变更（模型由角色 getAmmoHud 产生） */
   onAmmoHudChanged?: (model: AmmoHudModel) => void;
+  /** 可砍树被摧毁（场景负责掉落） */
+  onHarvestTreeDestroyed?: (tree: HarvestableTree) => void;
 };
 
 /**
@@ -416,7 +425,7 @@ export class CombatSystem {
   }
 
   /**
-   * 直线长矛：飞行中检测蜘蛛；撞墙由投射物内部处理。
+   * 直线长矛：飞行中检测蜘蛛 / 可砍树；撞墙由投射物内部处理。
    */
   private updateSpears(deltaMS: number, world: CombatWorld): void {
     let needSync = false;
@@ -427,6 +436,8 @@ export class CombatSystem {
 
       // 飞行与剑阵悬停均可命中
       if (phase === 'flying' || phase === 'holding') {
+        let hitSomething = false;
+
         for (let s = world.spiders.length - 1; s >= 0; s--) {
           const spider = world.spiders[s]!;
           if (!spider.isAlive) continue;
@@ -451,7 +462,28 @@ export class CombatSystem {
           spear.stick();
           phase = spear.getPhase();
           needSync = true;
+          hitSomething = true;
           break;
+        }
+
+        if (!hitSomething) {
+          for (let t = world.harvestTrees.length - 1; t >= 0; t--) {
+            const tree = world.harvestTrees[t]!;
+            if (!tree.isAlive) continue;
+            const dx = spear.groundX - tree.worldX;
+            const dy = spear.groundY - tree.worldY;
+            const r = SPEAR_HIT_R + tree.hurtR;
+            if (dx * dx + dy * dy > r * r) continue;
+
+            const alive = tree.applyDamage(HARVEST_SPEAR_DAMAGE);
+            if (!alive) {
+              this.removeHarvestTree(world, t);
+            }
+            spear.stick();
+            phase = spear.getPhase();
+            needSync = true;
+            break;
+          }
         }
       }
 
@@ -471,7 +503,7 @@ export class CombatSystem {
 
   /**
    * 把炸弹算出的命中接到目标上。
-   * 炸弹无击飞：玩家不受影响；蜘蛛只结算伤害（可死亡）。
+   * 炸弹无击飞：玩家不受影响；蜘蛛 / 可砍树结算伤害。
    */
   private applyBombBlast(bomb: BombProjectile, world: CombatWorld): void {
     let anyFx = false;
@@ -502,6 +534,22 @@ export class CombatSystem {
       }
     }
 
+    for (let i = world.harvestTrees.length - 1; i >= 0; i--) {
+      const tree = world.harvestTrees[i]!;
+      if (!tree.isAlive) continue;
+      const dx = bomb.groundX - tree.worldX;
+      const dy = bomb.groundY - tree.worldY;
+      // 炸弹外缘略宽：用 hurtR + 固定爆炸半径近似
+      const r = tree.hurtR + 52;
+      if (dx * dx + dy * dy > r * r) continue;
+
+      anyFx = true;
+      const alive = tree.applyDamage(HARVEST_BOMB_DAMAGE);
+      if (!alive) {
+        this.removeHarvestTree(world, i);
+      }
+    }
+
     if (anyFx) {
       this.hooks.syncWorldActors();
       this.hooks.sortDepth();
@@ -514,5 +562,14 @@ export class CombatSystem {
     this.sortLayer.removeChild(spider);
     spider.destroy({ children: true });
     world.spiders.splice(index, 1);
+  }
+
+  private removeHarvestTree(world: CombatWorld, index: number): void {
+    const tree = world.harvestTrees[index];
+    if (!tree) return;
+    this.hooks.onHarvestTreeDestroyed?.(tree);
+    this.sortLayer.removeChild(tree);
+    tree.destroy({ children: true });
+    world.harvestTrees.splice(index, 1);
   }
 }

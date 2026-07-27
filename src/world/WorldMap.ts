@@ -2,12 +2,15 @@ import { Container, Graphics } from 'pixi.js';
 import { getActiveMapDef, setActiveMapDef } from '../data/maps/activeMap';
 import type { LevelMapDef } from '../data/maps/types';
 import {
-  cellRectToWorld,
-  isWalkable,
-  shouldPlantTree,
+  cellCenter,
+  getMapGrid,
+  hitsTreeObstacle,
+  isOcean,
+  normalizeTrees,
+  syncRuntimeTreesFromDef,
+  treeKindOf,
 } from '../data/maps/walkMask';
 import type { Vec2 } from '../utils/math';
-import { ISLAND_SIZE, PINE_SPACING } from './mapLayout';
 import {
   TREE_CHUNK_CELLS,
   TreeRowChunk,
@@ -30,19 +33,12 @@ export {
 /** 角色/实体默认碰撞半径（世界像素） */
 export const DEFAULT_BODY_RADIUS = 16;
 
-/** 开阔区装饰：短边小于此值的走廊不刷花草 */
-const DECOR_MIN_SIDE = 280;
-
 /** 岛内装饰内缩 */
-const EDGE_INSET = 24;
+const EDGE_INSET = 28;
 
 const COLORS = {
+  oceanDeep: 0x0a3a5c,
   grass: 0x7fd84a,
-  grassSoft: 0x6fc93c,
-  grassDark: 0x5bb832,
-  grassLight: 0xa6eb6e,
-  dirt: 0xd8b48a,
-  dirtDark: 0xc49a6c,
   blade: 0x4caf2f,
   bladeLight: 0x7ed957,
   flowerPink: 0xff7eb3,
@@ -64,36 +60,29 @@ function createRng(seed: number): () => number {
 }
 
 /**
- * 点是否落在密林阻挡区。
- * 默认整图挡；walkable 并集可走。
+ * 点是否不可走：海，或树干 solid。
+ * 保留函数名 bodyHitsTrees 以兼容旧调用。
  */
 export function isTreeBlocked(x: number, y: number): boolean {
-  return !isWalkable(x, y, getActiveMapDef());
+  const def = getActiveMapDef();
+  if (isOcean(x, y, def, 0)) return true;
+  return hitsTreeObstacle(x, y, 0);
 }
 
-/** 实体圆形碰撞体是否碰到树区 */
+/** 实体圆是否碰到海 / 树干 */
 export function bodyHitsTrees(
   x: number,
   y: number,
   radius = DEFAULT_BODY_RADIUS,
 ): boolean {
   const r = Math.max(0, radius);
-  if (isTreeBlocked(x, y)) return true;
-  if (r <= 0) return false;
-  return (
-    isTreeBlocked(x + r, y) ||
-    isTreeBlocked(x - r, y) ||
-    isTreeBlocked(x, y + r) ||
-    isTreeBlocked(x, y - r) ||
-    isTreeBlocked(x + r * 0.7, y + r * 0.7) ||
-    isTreeBlocked(x - r * 0.7, y + r * 0.7) ||
-    isTreeBlocked(x + r * 0.7, y - r * 0.7) ||
-    isTreeBlocked(x - r * 0.7, y - r * 0.7)
-  );
+  const def = getActiveMapDef();
+  if (isOcean(x, y, def, r)) return true;
+  return hitsTreeObstacle(x, y, r);
 }
 
 /**
- * 从 from 移向 to 时做轴分离滑动，避免穿进树区。
+ * 从 from 移向 to 时做轴分离滑动，避免穿进海 / 树。
  */
 export function resolveTreeCollision(
   fromX: number,
@@ -209,12 +198,12 @@ function tryEscapeTrees(
 }
 
 /**
- * 程序地图：草坪底 + 按 LevelMapDef 抠空种树。
+ * 海岛地图：海水底 + 陆地草坪 + 编辑器摆放的树。
  * 地图内容在世界坐标中绘制；镜头变换由外层 worldRoot 负责。
  */
 export class WorldMap extends Container {
   private readonly root: Container;
-  /** 行×水平分块的松树显示对象（进 sortLayer，不挂在 MapRoot） */
+  /** 静态松树行 chunk（仅 pine；harvest 由实体绘制） */
   private readonly treeChunks: TreeRowChunk[] = [];
   private readonly def: LevelMapDef;
   private built = false;
@@ -244,6 +233,7 @@ export class WorldMap extends Container {
   async load(): Promise<void> {
     if (this.built) return;
     setActiveMapDef(this.def);
+    syncRuntimeTreesFromDef(this.def);
     this.build();
     this.built = true;
   }
@@ -262,11 +252,18 @@ export class WorldMap extends Container {
     // no-op
   }
 
+  /** 钳到陆地矩形内（与 isOcean 陆地范围一致） */
   static clampWorld(x: number, y: number): Vec2 {
-    const h = mapHalfFromActive();
+    const def = getActiveMapDef();
+    const half = def.mapSize / 2;
+    const sea =
+      Math.max(0, Math.floor(def.seaMarginCells)) * Math.max(1, def.cellSize);
+    const lo = -half + sea;
+    const hi = half - sea;
+    if (hi <= lo) return { x: 0, y: 0 };
     return {
-      x: Math.min(h, Math.max(-h, x)),
-      y: Math.min(h, Math.max(-h, y)),
+      x: Math.min(hi, Math.max(lo, x)),
+      y: Math.min(hi, Math.max(lo, y)),
     };
   }
 
@@ -311,100 +308,65 @@ export class WorldMap extends Container {
     this.root.removeChildren();
     this.treeChunks.length = 0;
 
-    const grass = new Graphics();
-    grass.label = 'Grass';
+    const ocean = new Graphics();
+    ocean.label = 'Ocean';
+    const land = new Graphics();
+    land.label = 'Land';
     const decor = new Graphics();
     decor.label = 'Decor';
 
-    this.drawGrassBase(grass);
-    this.drawWalkableDecor(decor);
-    this.spawnForestTreeChunks();
+    this.drawOcean(ocean);
+    this.drawLand(land);
+    this.drawLandDecor(decor);
+    this.spawnPlacedTreeChunks();
 
-    this.root.addChild(grass, decor);
+    this.root.addChild(ocean, land, decor);
   }
 
-  private drawGrassBase(g: Graphics): void {
-    const size = this.def.mapSize;
-    const h = size / 2;
-    g.rect(-h, -h, size, size).fill({ color: COLORS.grass });
-
-    const rng = createRng(this.seed ^ 0x2222);
-    const band = 72;
-    for (let y = -h; y < h; y += band) {
-      for (let x = -h; x < h; x += band) {
-        if (rng() > 0.55) continue;
-        const wx = x + rng() * band;
-        const wy = y + rng() * band;
-        const rx = 36 + rng() * 70;
-        const ry = 26 + rng() * 50;
-        const color =
-          rng() < 0.4
-            ? COLORS.grassDark
-            : rng() < 0.75
-              ? COLORS.grassSoft
-              : COLORS.grassLight;
-        g.ellipse(wx, wy, rx, ry).fill({ color, alpha: 0.22 });
-      }
-    }
+  private landRect(): { x: number; y: number; w: number; h: number } {
+    const grid = getMapGrid(this.def);
+    const m = grid.seaMarginCells * grid.cellSize;
+    const half = this.def.mapSize / 2;
+    return {
+      x: -half + m,
+      y: -half + m,
+      w: this.def.mapSize - m * 2,
+      h: this.def.mapSize - m * 2,
+    };
   }
 
-  /** 在较开阔的可走格子矩形内刷花草装饰 */
-  private drawWalkableDecor(decor: Graphics): void {
-    let idx = 0;
-    for (const cell of this.def.walk) {
-      const r = cellRectToWorld(cell, this.def.mapSize, this.def.cellSize);
-      if (Math.min(r.w, r.h) < DECOR_MIN_SIDE) continue;
-      this.drawRegionDecor(decor, r, idx);
-      idx++;
-    }
+  /**
+   * 陆地以外全是海：画远超地图的矩形，避免缩放到全图时只见「围一圈」的窄海。
+   */
+  private drawOcean(g: Graphics): void {
+    const extent = oceanDrawExtent(this.def.mapSize);
+    const h = extent / 2;
+    g.rect(-h, -h, extent, extent).fill({ color: COLORS.oceanDeep });
   }
 
-  private drawRegionDecor(
-    g: Graphics,
-    r: { x: number; y: number; w: number; h: number },
-    idx: number,
-  ): void {
-    const rng = createRng(
-      (this.seed ^ Math.imul(idx + 1, 73856093) ^ Math.imul(r.w | 0, 19349663)) >>>
-        0,
-    );
+  private drawLand(g: Graphics): void {
+    const r = this.landRect();
+    if (r.w <= 0 || r.h <= 0) return;
 
-    const x0 = r.x + EDGE_INSET + 8;
-    const y0 = r.y + EDGE_INSET + 8;
-    const x1 = r.x + r.w - EDGE_INSET - 8;
-    const y1 = r.y + r.h - EDGE_INSET - 8;
+    // 草地（纯色，无随机色斑 / 无浅滩描边）
+    g.roundRect(r.x, r.y, r.w, r.h, 14).fill({ color: COLORS.grass });
+  }
+
+  private drawLandDecor(g: Graphics): void {
+    const r = this.landRect();
+    if (r.w <= 64 || r.h <= 64) return;
+
+    const rng = createRng(this.seed ^ 0x3333);
+    const x0 = r.x + EDGE_INSET;
+    const y0 = r.y + EDGE_INSET;
+    const x1 = r.x + r.w - EDGE_INSET;
+    const y1 = r.y + r.h - EDGE_INSET;
     if (x1 <= x0 || y1 <= y0) return;
 
     const area = r.w * r.h;
-    const scale = Math.min(1.4, Math.max(0.35, area / (ISLAND_SIZE * ISLAND_SIZE)));
+    const scale = Math.min(1.6, Math.max(0.4, area / (2000 * 2000)));
 
-    for (let i = 0; i < Math.floor(35 * scale); i++) {
-      const x = x0 + rng() * (x1 - x0);
-      const y = y0 + rng() * (y1 - y0);
-      const rx = 36 + rng() * 64;
-      const ry = 28 + rng() * 48;
-      const color =
-        rng() < 0.4
-          ? COLORS.grassDark
-          : rng() < 0.7
-            ? COLORS.grassSoft
-            : COLORS.grassLight;
-      g.ellipse(x, y, rx, ry).fill({ color, alpha: 0.28 });
-    }
-
-    for (let i = 0; i < Math.floor(14 * scale); i++) {
-      if (rng() > 0.75) continue;
-      const x = x0 + rng() * (x1 - x0);
-      const y = y0 + rng() * (y1 - y0);
-      const rad = 12 + rng() * 18;
-      g.ellipse(x, y, rad * 1.1, rad * 0.7).fill({
-        color: COLORS.dirtDark,
-        alpha: 0.3,
-      });
-      g.ellipse(x, y, rad, rad * 0.55).fill({ color: COLORS.dirt, alpha: 0.45 });
-    }
-
-    for (let i = 0; i < Math.floor(75 * scale); i++) {
+    for (let i = 0; i < Math.floor(90 * scale); i++) {
       const x = x0 + rng() * (x1 - x0);
       const y = y0 + rng() * (y1 - y0);
       const blades = 2 + Math.floor(rng() * 3);
@@ -438,7 +400,7 @@ export class WorldMap extends Container {
       COLORS.flowerYellow,
       COLORS.flowerWhite,
     ];
-    for (let i = 0; i < Math.floor(24 * scale); i++) {
+    for (let i = 0; i < Math.floor(28 * scale); i++) {
       if (rng() > 0.55) continue;
       const x = x0 + rng() * (x1 - x0);
       const y = y0 + rng() * (y1 - y0);
@@ -457,41 +419,62 @@ export class WorldMap extends Container {
   }
 
   /**
-   * 全图网格密植松树，按「行 + 水平 chunk」合并为少量 DisplayObject。
-   * walkable（含树冠净空）内不种；碰撞仍走 walk mask，与显示解耦。
+   * 仅绘制 kind=pine 的静态树（harvest 由 HarvestableTree 实体画）。
+   * 按 worldY 分行 + 水平 chunk 合并。
    */
-  private spawnForestTreeChunks(): void {
+  private spawnPlacedTreeChunks(): void {
     const def = this.def;
-    const half = def.mapSize / 2;
-    const spacing = PINE_SPACING;
-    const origin = -half + spacing * 0.5;
-    const cols = Math.floor(def.mapSize / spacing);
-    const rows = Math.floor(def.mapSize / spacing);
-    const chunkCells = TREE_CHUNK_CELLS;
+    const pines = normalizeTrees(def).filter((t) => treeKindOf(t) === 'pine');
+    if (pines.length === 0) return;
 
-    for (let row = 0; row < rows; row++) {
-      const y = origin + row * spacing;
-      for (let col0 = 0; col0 < cols; col0 += chunkCells) {
-        const plants: TreePlant[] = [];
-        const col1 = Math.min(cols, col0 + chunkCells);
-        for (let col = col0; col < col1; col++) {
-          const x = origin + col * spacing;
-          if (!shouldPlantTree(x, y, def)) continue;
-          plants.push({ x, shade: (col + row) % 3 });
+    // 按行(r)分组
+    const byRow = new Map<number, typeof pines>();
+    for (const t of pines) {
+      const list = byRow.get(t.r) ?? [];
+      list.push(t);
+      byRow.set(t.r, list);
+    }
+
+    for (const [row, list] of byRow) {
+      list.sort((a, b) => a.c - b.c);
+      const y = cellCenter(0, row, def.mapSize, def.cellSize).y;
+      for (let i = 0; i < list.length; ) {
+        const chunk: TreePlant[] = [];
+        const c0 = list[i]!.c;
+        while (
+          i < list.length &&
+          list[i]!.c < c0 + TREE_CHUNK_CELLS
+        ) {
+          const t = list[i]!;
+          const p = cellCenter(t.c, t.r, def.mapSize, def.cellSize);
+          chunk.push({ x: p.x, shade: (t.c + t.r) % 3 });
+          i++;
         }
-        if (plants.length === 0) continue;
-        this.treeChunks.push(new TreeRowChunk(y, plants));
+        if (chunk.length > 0) {
+          this.treeChunks.push(new TreeRowChunk(y, chunk));
+        }
       }
     }
   }
+}
+
+/** 海洋绘制范围：至少盖住陆地外很大一圈，缩小时也是一片海 */
+export function oceanDrawExtent(mapSize: number): number {
+  return Math.max(mapSize * 8, 20000);
 }
 
 function mapHalfFromActive(): number {
   return getActiveMapDef().mapSize / 2;
 }
 
-function clampAxis(desired: number, viewSize: number, mapHalf: number): number {
-  const maxCam = mapHalf - viewSize / 2;
+/**
+ * 镜头可移到陆地外侧一段，让角色站在岸边时能看到大片海，
+ * 而不是把视野死死钳在 mapSize 方框内（看起来像「只围一圈海」）。
+ */
+function clampAxis(desired: number, viewSize: number, landHalf: number): number {
+  const oceanPad = landHalf * 2;
+  const worldHalf = landHalf + oceanPad;
+  const maxCam = worldHalf - viewSize / 2;
   if (maxCam <= 0) return 0;
   return Math.min(maxCam, Math.max(-maxCam, desired));
 }

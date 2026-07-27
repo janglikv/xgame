@@ -1,12 +1,12 @@
 import { getActiveMapDef, setActiveMapDef } from './activeMap';
 import { LEVEL_CATALOG, getLevelById as getCatalogLevelById } from './catalog';
 import { LEVEL_1 } from './level-1';
-import type { LevelMapDef } from './types';
-import { cloneLevelDef } from './walkMask';
+import type { LevelMapDef, MapTree } from './types';
+import { cloneLevelDef, emptyIslandDef } from './walkMask';
 
-const STORAGE_KEY = 'lu-o-lu:map-drafts:v1';
+/** v2：海岛 + trees，旧 walk 草稿丢弃 */
+const STORAGE_KEY = 'lu-o-lu:map-drafts:v2';
 
-/** 运行时关卡草稿（编辑器改完可预览，刷新后仍保留） */
 const drafts = new Map<string, LevelMapDef>();
 
 let storageLoaded = false;
@@ -18,11 +18,28 @@ function isLevelMapDef(raw: unknown): raw is LevelMapDef {
     typeof d.id === 'string' &&
     typeof d.mapSize === 'number' &&
     typeof d.cellSize === 'number' &&
+    typeof d.seaMarginCells === 'number' &&
     !!d.spawn &&
     typeof d.spawn.x === 'number' &&
     typeof d.spawn.y === 'number' &&
-    Array.isArray(d.walk)
+    Array.isArray(d.trees)
   );
+}
+
+function sanitizeTrees(raw: unknown): MapTree[] {
+  if (!Array.isArray(raw)) return [];
+  const out: MapTree[] = [];
+  for (const t of raw) {
+    if (!t || typeof t !== 'object') continue;
+    const o = t as MapTree;
+    if (typeof o.c !== 'number' || typeof o.r !== 'number') continue;
+    out.push({
+      c: o.c,
+      r: o.r,
+      kind: o.kind === 'pine' || o.kind === 'harvest' ? o.kind : undefined,
+    });
+  }
+  return out;
 }
 
 /** 启动时读 localStorage；失败静默忽略 */
@@ -36,7 +53,9 @@ export function loadMapDraftsFromStorage(): void {
     if (!parsed || typeof parsed !== 'object') return;
     for (const [id, def] of Object.entries(parsed as Record<string, unknown>)) {
       if (isLevelMapDef(def) && def.id === id) {
-        drafts.set(id, cloneLevelDef(def));
+        const next = cloneLevelDef(def);
+        next.trees = sanitizeTrees(def.trees);
+        drafts.set(id, next);
       }
     }
   } catch {
@@ -85,7 +104,6 @@ export function clearMapDraft(id: string): void {
 
 /**
  * 可玩关卡：优先草稿，否则目录原版。
- * 用于主菜单进关 / 编辑器打开 / 读档恢复。
  */
 export function getPlayableLevelById(id: string): LevelMapDef | null {
   loadMapDraftsFromStorage();
@@ -95,14 +113,14 @@ export function getPlayableLevelById(id: string): LevelMapDef | null {
   return catalog ? cloneLevelDef(catalog) : null;
 }
 
-/** 编辑器打开时的默认关：当前激活关卡的可玩版（草稿优先） */
+/** 编辑器打开时的默认关 */
 export function getDefaultEditLevel(): LevelMapDef {
   loadMapDraftsFromStorage();
   const activeId = getActiveMapDef().id;
   return (
     getPlayableLevelById(activeId) ??
     getPlayableLevelById(LEVEL_1.id) ??
-    cloneLevelDef(LEVEL_1)
+    emptyIslandDef(LEVEL_1.id)
   );
 }
 
