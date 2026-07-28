@@ -32,6 +32,7 @@ import {
   treeKindOf,
   treeSizeOf,
   treeSolidR,
+  type EnemyKind,
   type LevelMapDef,
   type MapGrass,
   type MapTree,
@@ -46,6 +47,8 @@ export type HarvestWorldHooks = {
   persistMapDraft: () => void;
   /** 世界坐标 / 深度刷新 */
   afterWorldChange: () => void;
+  /** 草丰水茂时自然孕育诞生的农场动物回调 */
+  onSpawnNaturalAnimal?: (kind: EnemyKind, x: number, y: number) => void;
 };
 
 /**
@@ -442,6 +445,54 @@ export class HarvestWorld {
       }
 
       g.update(deltaMS);
+    }
+
+    this.tickNaturalAnimalSpawning(dt);
+  }
+
+  private naturalAnimalTimer = 20;
+
+  /**
+   * 当全岛草繁水茂（草数量 >= 60 株）时，生态系统会自然孕育诞生牛、马、鸡、猪
+   */
+  private tickNaturalAnimalSpawning(dt: number): void {
+    if (!this.hooks.onSpawnNaturalAnimal) return;
+
+    const grassCount = this.grasses.length;
+    // 只有全岛草地足够茂盛（>= 60 株）时具备自然孕育条件
+    if (grassCount < 60) {
+      this.naturalAnimalTimer = 20;
+      return;
+    }
+
+    this.naturalAnimalTimer -= dt;
+    if (this.naturalAnimalTimer <= 0) {
+      // 孕育倒计时重置为 20s ~ 30s
+      this.naturalAnimalTimer = 20 + Math.random() * 10;
+
+      // 从中草/大草密集区挑选孕育落点
+      const candidates = this.grasses.filter((g) => g.size !== 'small');
+      const seedGrass =
+        candidates.length > 0
+          ? candidates[Math.floor(Math.random() * candidates.length)]!
+          : this.grasses[Math.floor(Math.random() * this.grasses.length)]!;
+
+      if (!seedGrass) return;
+
+      const angle = Math.random() * Math.PI * 2;
+      const dist = 35 + Math.random() * 50;
+      const spawnX = seedGrass.worldX + Math.cos(angle) * dist;
+      const spawnY = seedGrass.worldY + Math.sin(angle) * dist;
+
+      const mapDef = this.hooks.getMapDef();
+      if (!isOnGreenLand(spawnX, spawnY, mapDef, 255)) return;
+      if (this.isGrassTooCloseToTrees(spawnX, spawnY)) return;
+
+      // 诞生动物类型偏向：牛 (cow)、马 (horse)、鸡 (chicken)、猪 (pig)
+      const kinds: EnemyKind[] = ['cow', 'horse', 'chicken', 'pig', 'chicken'];
+      const chosenKind = kinds[Math.floor(Math.random() * kinds.length)]!;
+
+      this.hooks.onSpawnNaturalAnimal(chosenKind, spawnX, spawnY);
     }
   }
 }

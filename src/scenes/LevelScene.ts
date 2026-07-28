@@ -22,6 +22,7 @@ import {
   type CombatWorld,
 } from '../systems/CombatSystem';
 import { spawnEnemiesInto } from '../systems/EnemySpawner';
+import { createEnemyAt } from '../systems/enemyFactory';
 import { GodModeController } from '../systems/GodModeController';
 import { HarvestWorld } from '../systems/HarvestWorld';
 import { Inventory } from '../systems/Inventory';
@@ -176,6 +177,20 @@ export class LevelScene extends Container implements GameScene {
       getMapDef: () => this.mapDef,
       persistMapDraft: () => this.persistMapDraft(),
       afterWorldChange: () => {
+        this.syncWorldActors();
+        this.sortDepth();
+      },
+      onSpawnNaturalAnimal: (kind, x, y) => {
+        // 限制全场农场动物自然孕育上限为 20 只
+        const farmAnimals = this.spiders.filter((s) =>
+          ['Chicken', 'Pig', 'Cow', 'Horse'].includes(s.label ?? ''),
+        );
+        if (farmAnimals.length >= 20) return;
+
+        const creature = createEnemyAt(kind, x, y);
+        this.sortLayer.addChild(creature);
+        this.spiders.push(creature);
+        void creature.load();
         this.syncWorldActors();
         this.sortDepth();
       },
