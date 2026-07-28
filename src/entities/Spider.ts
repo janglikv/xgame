@@ -202,6 +202,31 @@ export type SpiderUpdateResult = {
 };
 
 /**
+ * 生物生态上下文（猪觅食等）：由场景每帧注入。
+ * 不强制所有单位使用。
+ */
+export type CreatureEcologyContext = {
+  /** 地上未收集掉落 */
+  pickups: ReadonlyArray<{
+    itemId: string;
+    worldX: number;
+    worldY: number;
+    isCollected: boolean;
+  }>;
+  /** 场上其它生物（含自己，调用方过滤） */
+  creatures: ReadonlyArray<Spider>;
+  /** 吃掉地上的苹果等 */
+  consumePickup: (pickup: {
+    itemId: string;
+    worldX: number;
+    worldY: number;
+    isCollected: boolean;
+  }) => void;
+  /** 移除死亡生物（猪吃鸡等） */
+  removeCreature: (creature: Spider) => void;
+};
+
+/**
  * 蜘蛛怪物：世界坐标定位，由外部按摄像机同步到屏幕。
  * 原点在身体底部中心；血条为 sibling 子节点，不随朝向翻转。
  * AI：未锁定时巡视出生点领地；靠近或被打后锁定追击，贴近则扑咬。
@@ -257,28 +282,31 @@ export class Spider extends Container implements WorldActor {
   private spinSign: 1 | -1 = 1;
 
   /** AI */
-  private aiState: SpiderAIState = 'patrol';
+  protected aiState: SpiderAIState = 'patrol';
   /** 是否已锁定玩家（察觉 / 被打后保持，直到死亡） */
-  private locked = false;
+  protected locked = false;
   /** 攻击冷却计时（秒，>0 不可出手） */
-  private attackCd = 0;
+  protected attackCd = 0;
   /** 攻击阶段计时（秒） */
-  private attackT = 0;
+  protected attackT = 0;
   /** 本段攻击是否已结算伤害 */
-  private attackDealt = false;
+  protected attackDealt = false;
   /** 走路相位 */
   private walkPhase = 0;
   /** 攻击姿态 0→1 */
-  private attackPose = 0;
+  protected attackPose = 0;
 
   /** 领地中心（出生点） */
-  private readonly homeX: number;
-  private readonly homeY: number;
+  protected readonly homeX: number;
+  protected readonly homeY: number;
   /** 当前巡视航点 */
-  private patrolTargetX: number;
-  private patrolTargetY: number;
+  protected patrolTargetX: number;
+  protected patrolTargetY: number;
   /** 航点停留计时（秒，>0 表示停步观望） */
-  private patrolPause = 0;
+  protected patrolPause = 0;
+
+  /** 本帧生态上下文（猪觅食等）；update 时注入 */
+  protected ecology: CreatureEcologyContext | null = null;
 
   /** 世界坐标（与玩家 worldX/Y 同一空间） */
   worldX: number;
@@ -470,17 +498,32 @@ export class Spider extends Container implements WorldActor {
   }
 
   /**
+   * 纯扣血（不触发锁定 / 击飞姿态）。生态捕食等用。
+   * @returns 是否仍存活
+   */
+  applyDamage(amount: number): boolean {
+    if (!this.isAlive) return false;
+    if (!this.invincible) {
+      this.healthBar.applyDelta(-Math.abs(amount));
+    }
+    return this.isAlive;
+  }
+
+  /**
    * 每帧：AI + 击退 + 姿态 / 空中转圈 + 血条。
    * @param playerWorldX / Y 玩家脚底（锁定 / 追击）
    * @param playerBodyProfileId 玩家碰撞模板（扑咬用 hurt 多形状判定）
+   * @param ecology 可选生态上下文（猪觅食等）
    */
   update(
     deltaMS: number,
     playerWorldX: number,
     playerWorldY: number,
     playerBodyProfileId: BodyProfileId | null = null,
+    ecology: CreatureEcologyContext | null = null,
   ): SpiderUpdateResult {
     const dt = deltaMS / 1000;
+    this.ecology = ecology;
     this.healthBar.update(deltaMS);
 
     // 木桩 / 固定体：钉死出生点，无姿态反馈
@@ -535,7 +578,7 @@ export class Spider extends Container implements WorldActor {
   }
 
   /** 在领地圆盘内均匀随机一个航点 */
-  private pickPatrolWaypoint(): void {
+  protected pickPatrolWaypoint(): void {
     const angle = Math.random() * Math.PI * 2;
     // sqrt 使面积均匀，略偏外圈更像绕领地巡视
     const r = Math.sqrt(0.15 + 0.85 * Math.random()) * AI.territoryRadius;
@@ -543,7 +586,7 @@ export class Spider extends Container implements WorldActor {
     this.patrolTargetY = this.homeY + Math.sin(angle) * r;
   }
 
-  private rollPatrolPause(): number {
+  protected rollPatrolPause(): number {
     return (
       AI.patrolPauseMin +
       Math.random() * (AI.patrolPauseMax - AI.patrolPauseMin)
@@ -554,7 +597,7 @@ export class Spider extends Container implements WorldActor {
    * 未锁定：在领地内走航点 / 停步观望。
    * 顺带面向移动方向。
    */
-  private updatePatrol(dt: number): boolean {
+  protected updatePatrol(dt: number): boolean {
     this.aiState = 'patrol';
 
     if (this.patrolPause > 0) {
@@ -583,7 +626,27 @@ export class Spider extends Container implements WorldActor {
     return true;
   }
 
-  private updateAI(
+  /** 朝目标点移动一段，返回是否发生位移 */
+  protected moveToward(
+    tx: number,
+    ty: number,
+    speed: number,
+    dt: number,
+    stopDist = 4,
+  ): boolean {
+    const dx = tx - this.worldX;
+    const dy = ty - this.worldY;
+    const dist = Math.hypot(dx, dy);
+    if (dist <= stopDist) return false;
+    const step = Math.min(speed * dt, dist - stopDist);
+    const inv = 1 / dist;
+    this.worldX += dx * inv * step;
+    this.worldY += dy * inv * step;
+    this.faceToward(tx, ty);
+    return true;
+  }
+
+  protected updateAI(
     dt: number,
     playerX: number,
     playerY: number,

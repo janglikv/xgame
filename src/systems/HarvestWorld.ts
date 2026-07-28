@@ -1,5 +1,13 @@
 import type { Container } from 'pixi.js';
 import {
+  GRASS_GREEN_LAND_MARGIN,
+  GRASS_MAX_COUNT,
+  GRASS_MIN_SPACING,
+  GRASS_SPREAD_ATTEMPTS,
+  GRASS_SPREAD_RADIUS_MAX,
+  GRASS_SPREAD_RADIUS_MIN,
+} from '../data/grassProfiles';
+import {
   HARVEST_MELEE_DAMAGE,
   HarvestableTree,
 } from '../entities/HarvestableTree';
@@ -11,8 +19,10 @@ import {
 import type { PlayerCharacterBase } from '../entities/PlayerCharacterBase';
 import {
   addRuntimeTreeObstacle,
+  allocGrassId,
   grassIdOf,
   grassSizeOf,
+  isOnLand,
   normalizeGrasses,
   normalizeTrees,
   removeRuntimeTreeObstacleById,
@@ -37,7 +47,7 @@ export type HarvestWorldHooks = {
 };
 
 /**
- * 可砍树 + 装饰草地 + 掉落拾取：生成、近战、自动生长、摧毁掉落、进包。
+ * 可砍树 + 装饰草地 + 掉落拾取：生成、近战、自动生长、四面八方扩散、摧毁掉落、进包。
  * 投射物摧毁走 onTreeDestroyed（由 CombatSystem 回调）。
  */
 export class HarvestWorld {
@@ -108,10 +118,68 @@ export class HarvestWorld {
         this.hooks.afterWorldChange();
         this.hooks.persistMapDraft();
       },
+      onSpread: (source) => {
+        this.trySpreadFrom(source);
+      },
     });
     this.hooks.sortLayer.addChild(grass);
     this.grasses.push(grass);
     return grass;
+  }
+
+  /**
+   * 母株向四面八方尝试播种小草。
+   * 仅绿地上、保持间距，并写入地图草稿。
+   */
+  private trySpreadFrom(source: GrassEntity): void {
+    if (this.grasses.length >= GRASS_MAX_COUNT) return;
+
+    const mapDef = this.hooks.getMapDef();
+    const attempts = GRASS_SPREAD_ATTEMPTS[source.size] ?? 1;
+    const baseAngle = Math.random() * Math.PI * 2;
+    let spawned = 0;
+
+    for (let i = 0; i < attempts; i++) {
+      if (this.grasses.length >= GRASS_MAX_COUNT) break;
+
+      // 均分方位 + 随机抖动，形成四面八方扩散
+      const angle =
+        baseAngle +
+        (i * Math.PI * 2) / attempts +
+        (Math.random() - 0.5) * 0.7;
+      const dist =
+        GRASS_SPREAD_RADIUS_MIN +
+        Math.random() * (GRASS_SPREAD_RADIUS_MAX - GRASS_SPREAD_RADIUS_MIN);
+      const x = source.worldX + Math.cos(angle) * dist;
+      const y = source.worldY + Math.sin(angle) * dist;
+
+      // 仅限绿地（margin 排除金沙滩与海岸）
+      if (!isOnLand(x, y, mapDef, GRASS_GREEN_LAND_MARGIN)) continue;
+      if (this.isGrassTooClose(x, y, GRASS_MIN_SPACING)) continue;
+
+      if (!mapDef.grasses) mapDef.grasses = [];
+      const id = allocGrassId('gs');
+      const g: MapGrass = { x, y, size: 'small', id };
+      mapDef.grasses.push(g);
+      this.mountGrass(g);
+      spawned += 1;
+    }
+
+    if (spawned > 0) {
+      this.hooks.afterWorldChange();
+      this.hooks.persistMapDraft();
+    }
+  }
+
+  /** 与已有草丛是否过近 */
+  private isGrassTooClose(x: number, y: number, minDist: number): boolean {
+    const min2 = minDist * minDist;
+    for (const g of this.grasses) {
+      const dx = g.worldX - x;
+      const dy = g.worldY - y;
+      if (dx * dx + dy * dy < min2) return true;
+    }
+    return false;
   }
 
   /** 树被摧毁：掉木头（苹果树额外掉落苹果） + 移除 solid + 从草稿去掉 */
@@ -153,6 +221,22 @@ export class HarvestWorld {
     const p = new ItemPickup(x, y, itemId, { count });
     this.hooks.sortLayer.addChild(p);
     this.pickups.push(p);
+  }
+
+  /** 猪等生物吃掉地上掉落（不进玩家背包） */
+  consumePickup(pickup: ItemPickup | { isCollected: boolean }): void {
+    if (pickup.isCollected) return;
+    const p =
+      pickup instanceof ItemPickup
+        ? pickup
+        : this.pickups.find((item) => item === pickup);
+    if (!p || p.isCollected) return;
+    p.markCollected();
+    const idx = this.pickups.indexOf(p);
+    if (idx < 0) return;
+    this.hooks.sortLayer.removeChild(p);
+    p.destroy({ children: true });
+    this.pickups.splice(idx, 1);
   }
 
   /**
@@ -258,8 +342,10 @@ export class HarvestWorld {
     for (const tree of this.trees) {
       tree.update(deltaMS);
     }
-    for (const grass of this.grasses) {
-      grass.update(deltaMS);
+    // 固定本帧数量，避免扩散中途 push 导致同帧连更
+    const grassCount = this.grasses.length;
+    for (let i = 0; i < grassCount; i++) {
+      this.grasses[i]!.update(deltaMS);
     }
   }
 }

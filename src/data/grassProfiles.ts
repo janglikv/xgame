@@ -36,6 +36,36 @@ export const GRASS_GROWTH_TIME_SEC: Record<GrassSize, number | null> = {
   large: null,
 };
 
+/** 各体型向四周播种的间隔（秒），null 表示不扩散 */
+export const GRASS_SPREAD_TIME_SEC: Record<GrassSize, number | null> = {
+  small: 28,
+  medium: 20,
+  large: 12,
+};
+
+/** 一次扩散尝试的新草数量（按体型） */
+export const GRASS_SPREAD_ATTEMPTS: Record<GrassSize, number> = {
+  small: 1,
+  medium: 2,
+  large: 3,
+};
+
+/** 新草相对母株的距离（世界像素） */
+export const GRASS_SPREAD_RADIUS_MIN = 30;
+export const GRASS_SPREAD_RADIUS_MAX = 72;
+
+/** 草丛之间最小间距（世界像素），避免叠成一团 */
+export const GRASS_MIN_SPACING = 26;
+
+/**
+ * 判定「绿地」时相对海岸的内缩（世界像素）。
+ * 金沙滩约在岸线内侧 ~96px，用此 margin 把新草限制在绿地上。
+ */
+export const GRASS_GREEN_LAND_MARGIN = 100;
+
+/** 场上草丛数量上限，防止无限膨胀拖垮性能 */
+export const GRASS_MAX_COUNT = 500;
+
 /** 获取草的下一阶段体型 */
 export function nextGrassSize(size: GrassSize): GrassSize | null {
   if (size === 'small') return 'medium';

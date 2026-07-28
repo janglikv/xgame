@@ -8,7 +8,10 @@ import {
   applyKnockImpulse,
   stepKnockArc,
 } from '../entities/knockArc';
-import type { Spider } from '../entities/Spider';
+import type {
+  CreatureEcologyContext,
+  Spider,
+} from '../entities/Spider';
 import { EdgeKeys } from '../input/EdgeKeys';
 import { Keyboard } from '../input/Keyboard';
 import {
@@ -419,6 +422,30 @@ export class LevelScene extends Container implements GameScene {
     };
   }
 
+  /** 猪等生物的觅食上下文（每帧重建） */
+  private buildEcologyContext(): CreatureEcologyContext {
+    return {
+      pickups: this.harvest.pickups,
+      creatures: this.spiders,
+      consumePickup: (p) => {
+        const found = this.harvest.pickups.find((item) => item === p);
+        if (found) this.harvest.consumePickup(found);
+      },
+      removeCreature: (creature) => {
+        this.removeCreatureEntity(creature);
+      },
+    };
+  }
+
+  /** 生态捕食 / 死亡移除（不写回地图草稿） */
+  private removeCreatureEntity(creature: Spider): void {
+    const idx = this.spiders.indexOf(creature);
+    if (idx < 0) return;
+    creature.parent?.removeChild(creature);
+    creature.destroy({ children: true });
+    this.spiders.splice(idx, 1);
+  }
+
   private sortDepth(): void {
     this.sortLayer.sortChildren();
   }
@@ -643,6 +670,7 @@ export class LevelScene extends Container implements GameScene {
     this.worldMap.update(deltaMS);
 
     if (!god) {
+      const ecology = this.buildEcologyContext();
       for (let si = 0; si < this.spiders.length; si++) {
         const spider = this.spiders[si]!;
         if (!spider.isAlive) continue;
@@ -653,6 +681,7 @@ export class LevelScene extends Container implements GameScene {
           player.worldX,
           player.worldY,
           player.bodyProfileId,
+          ecology,
         );
         this.applySpiderSolid(spider, sFromX, sFromY, si);
         if (result.attackHit) {
