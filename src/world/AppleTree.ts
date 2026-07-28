@@ -1,17 +1,17 @@
 import { Graphics } from 'pixi.js';
 
-const APPLE_TREE_SCALE = 2.65;
-const TRUNK_H = 3.6;
+/** 程序化苹果树视觉尺寸（与松树保持同一画风规范） */
+const APPLE_TREE_SCALE = 2.7;
+const TRUNK_H = 3.4;
 
 const COLORS = {
-  canopyBack: 0x164619,
-  canopyDeep: 0x226926,
-  canopyMid: 0x358e3a,
-  canopyLight: 0x4fc055,
-  canopyHi: 0x86e68d,
-  trunkDark: 0x482916,
-  trunkMid: 0x6e3f22,
-  trunkHi: 0x985933,
+  canopyDeep: 0x1f5a1a,
+  canopy: 0x2d7a28,
+  canopyMid: 0x3d9634,
+  canopyLight: 0x58b848,
+  canopyHi: 0x7ed45f,
+  trunkDark: 0x4a2e18,
+  trunkHi: 0x8b5a32,
 } as const;
 
 export type AppleDot = {
@@ -29,7 +29,11 @@ export const APPLE_POSITIONS: ReadonlyArray<AppleDot> = [
 ];
 
 /**
- * 高颜值程序化苹果树绘制。
+ * 按松树画风重构的程序化苹果树绘制：
+ * 1. 采用松树同款黑框硬描边 (strokeBlack)。
+ * 2. 采用分层多边形 + 宝塔层叠结构的阔叶树冠。
+ * 3. 直立带有侧面高光硬朗树干与脚底椭圆阴影。
+ *
  * @param g Graphics 实例
  * @param shade 色调 (0: 默认, 1: 亮色, 2: 偏暗)
  * @param appleCount 树上挂着的红苹果数量
@@ -45,38 +49,36 @@ export function drawAppleTreeLocal(
 ): void {
   const scale = APPLE_TREE_SCALE;
   const trunkH = TRUNK_H * scale;
-  const trunkW = 3.8 * scale;
+  const trunkW = 3.6 * scale;
   const x = ox;
   const y = oy;
 
-  const backColor =
-    shade === 0 ? COLORS.canopyBack : shade === 1 ? 0x1d5821 : 0x123814;
-  const deepColor =
-    shade === 0 ? COLORS.canopyDeep : shade === 1 ? 0x2b782f : 0x19521d;
-  const midColor =
-    shade === 0 ? COLORS.canopyMid : shade === 1 ? 0x3ea244 : 0x27702c;
-  const liteColor =
-    shade === 0 ? COLORS.canopyLight : shade === 1 ? 0x5bce62 : 0x3da045;
+  const deep =
+    shade === 0 ? COLORS.canopyDeep : shade === 1 ? 0x1a5016 : 0x245c1f;
+  const mid =
+    shade === 0 ? COLORS.canopy : shade === 1 ? COLORS.canopyMid : 0x348a2c;
+  const lite =
+    shade === 0 ? COLORS.canopyLight : shade === 1 ? 0x4faa3e : COLORS.canopyHi;
 
   const outline = Math.max(1.8, 1.15 * scale);
   const strokeBlack = { width: outline, color: 0x000000, alpha: 1 };
 
-  // 脚底阴影
-  g.ellipse(x, y + 2, 13 * scale, 4.2 * scale).fill({
+  // 1. 脚底椭圆阴影（与松树一致）
+  g.ellipse(x, y + 2, 12 * scale, 3.8 * scale).fill({
     color: 0x000000,
-    alpha: 0.2,
+    alpha: 0.16,
   });
 
-  // 主树干（底部带轻微展开根基）
+  // 2. 直立硬朗树干（与松树同款风格：梯形底座 + 黑色硬边 + 左侧高光条）
   g.poly(
     [
-      x - trunkW * 0.75,
+      x - trunkW * 0.65,
       y,
       x - trunkW * 0.5,
       y - trunkH,
       x + trunkW * 0.5,
       y - trunkH,
-      x + trunkW * 0.75,
+      x + trunkW * 0.65,
       y,
     ],
     true,
@@ -84,7 +86,6 @@ export function drawAppleTreeLocal(
     .fill({ color: COLORS.trunkDark })
     .stroke(strokeBlack);
 
-  // 树干高光侧面
   g.poly(
     [
       x - trunkW * 0.45,
@@ -93,104 +94,123 @@ export function drawAppleTreeLocal(
       y - trunkH,
       x - trunkW * 0.2,
       y,
-      x - trunkW * 0.65,
+      x - trunkW * 0.55,
       y,
     ],
     true,
-  ).fill({ color: COLORS.trunkHi, alpha: 0.5 });
+  ).fill({ color: COLORS.trunkHi, alpha: 0.4 });
 
-  // 树枝主分叉
-  g.poly(
-    [
-      x - trunkW * 0.4,
-      y - trunkH + 2,
-      x - 7 * scale,
-      y - trunkH - 6 * scale,
-      x - 4 * scale,
-      y - trunkH - 6 * scale,
-      x,
-      y - trunkH + 2,
-    ],
-    true,
-  )
-    .fill({ color: COLORS.trunkMid })
-    .stroke(strokeBlack);
-
-  g.poly(
-    [
-      x,
-      y - trunkH + 2,
-      x + 4 * scale,
-      y - trunkH - 7 * scale,
-      x + 7 * scale,
-      y - trunkH - 7 * scale,
-      x + trunkW * 0.4,
-      y - trunkH + 2,
-    ],
-    true,
-  )
-    .fill({ color: COLORS.trunkMid })
-    .stroke(strokeBlack);
-
-  // 丰满多层次圆冠（前中后景）
-  const canopyY = y - trunkH * 0.65;
-  const clusters = [
-    // 后景（深绿底座）
-    { cx: x - 11 * scale, cy: canopyY - 4 * scale, r: 13.5 * scale, color: backColor },
-    { cx: x + 11 * scale, cy: canopyY - 5 * scale, r: 13 * scale, color: backColor },
-    // 中景
-    { cx: x - 12 * scale, cy: canopyY - 12 * scale, r: 12 * scale, color: deepColor },
-    { cx: x + 12 * scale, cy: canopyY - 13 * scale, r: 11.5 * scale, color: deepColor },
-    { cx: x - 6 * scale, cy: canopyY - 19 * scale, r: 11.5 * scale, color: midColor },
-    { cx: x + 6 * scale, cy: canopyY - 20 * scale, r: 11 * scale, color: midColor },
-    // 前景顶部
-    { cx: x, cy: canopyY - 26 * scale, r: 10.5 * scale, color: liteColor },
-    { cx: x - 3 * scale, cy: canopyY - 14 * scale, r: 10 * scale, color: liteColor },
+  // 3. 分层宝塔式阔叶树冠（松树层叠多边形画风，3 层云阔叶）
+  const layers: Array<{
+    baseY: number;
+    halfW: number;
+    height: number;
+    color: number;
+    crownPoly: number[];
+  }> = [
+    // 底层（深绿阔冠）：带齿角多边形层叠
+    {
+      baseY: y - trunkH * 0.35,
+      halfW: 16 * scale,
+      height: 14 * scale,
+      color: deep,
+      crownPoly: [
+        x, y - trunkH * 0.35 - 14 * scale,
+        x - 9 * scale, y - trunkH * 0.35 - 12 * scale,
+        x - 16 * scale, y - trunkH * 0.35 - 4 * scale,
+        x - 12 * scale, y - trunkH * 0.35,
+        x + 12 * scale, y - trunkH * 0.35,
+        x + 16 * scale, y - trunkH * 0.35 - 4 * scale,
+        x + 9 * scale, y - trunkH * 0.35 - 12 * scale,
+      ],
+    },
+    // 中层（主绿树冠）
+    {
+      baseY: y - trunkH * 0.35 - 7 * scale,
+      halfW: 13.5 * scale,
+      height: 13 * scale,
+      color: mid,
+      crownPoly: [
+        x, y - trunkH * 0.35 - 20 * scale,
+        x - 7.5 * scale, y - trunkH * 0.35 - 18 * scale,
+        x - 13.5 * scale, y - trunkH * 0.35 - 11 * scale,
+        x - 10 * scale, y - trunkH * 0.35 - 7 * scale,
+        x + 10 * scale, y - trunkH * 0.35 - 7 * scale,
+        x + 13.5 * scale, y - trunkH * 0.35 - 11 * scale,
+        x + 7.5 * scale, y - trunkH * 0.35 - 18 * scale,
+      ],
+    },
+    // 顶层（亮绿树冠）
+    {
+      baseY: y - trunkH * 0.35 - 15 * scale,
+      halfW: 10.5 * scale,
+      height: 12 * scale,
+      color: lite,
+      crownPoly: [
+        x, y - trunkH * 0.35 - 27 * scale,
+        x - 6 * scale, y - trunkH * 0.35 - 24 * scale,
+        x - 10.5 * scale, y - trunkH * 0.35 - 18 * scale,
+        x - 7.5 * scale, y - trunkH * 0.35 - 15 * scale,
+        x + 7.5 * scale, y - trunkH * 0.35 - 15 * scale,
+        x + 10.5 * scale, y - trunkH * 0.35 - 18 * scale,
+        x + 6 * scale, y - trunkH * 0.35 - 24 * scale,
+      ],
+    },
   ];
 
-  for (const c of clusters) {
-    g.circle(c.cx, c.cy, c.r)
-      .fill({ color: c.color })
+  for (const layer of layers) {
+    g.poly(layer.crownPoly, true)
+      .fill({ color: layer.color })
       .stroke(strokeBlack);
   }
 
-  // 树冠顶部娇嫩高光斑
-  g.circle(x - 3 * scale, canopyY - 29 * scale, 4.5 * scale).fill({
-    color: COLORS.canopyHi,
-    alpha: 0.55,
-  });
-  g.circle(x + 5 * scale, canopyY - 22 * scale, 3.5 * scale).fill({
-    color: COLORS.canopyHi,
-    alpha: 0.45,
-  });
+  // 4. 树冠最顶部亮点帽（松树同款顶部亮冠）
+  const tipBase = y - trunkH * 0.35 - 24 * scale;
+  g.poly(
+    [
+      x,
+      tipBase - 5 * scale,
+      x - 4.5 * scale,
+      tipBase + 3 * scale,
+      x + 4.5 * scale,
+      tipBase + 3 * scale,
+    ],
+    true,
+  )
+    .fill({ color: COLORS.canopyHi, alpha: 0.6 })
+    .stroke({ width: outline * 0.85, color: 0x000000, alpha: 0.9 });
 
-  // 鲜红大苹果绘制（按数量画前 count 个）
+  // 5. 鲜红大苹果悬挂（带松树风格的硬线边框框线）
   const count = Math.min(APPLE_POSITIONS.length, Math.max(0, appleCount));
   for (let i = 0; i < count; i++) {
     const pos = APPLE_POSITIONS[i]!;
     const fx = x + pos.ox;
     const fy = y + pos.oy;
-    const fr = 5.2 * (scale / 2.65);
+    const fr = 5.0 * (scale / 2.7);
 
-    // 鲜红饱满果实
-    g.circle(fx, fy, fr).fill({ color: 0xef3333 }).stroke({
-      width: 1.2,
-      color: 0x440808,
-      alpha: 0.9,
-    });
-    // 苹果高光点
-    g.circle(fx - fr * 0.3, fy - fr * 0.3, fr * 0.38).fill({
+    // 苹果主体（带硬线描边）
+    g.circle(fx, fy, fr)
+      .fill({ color: 0xef3333 })
+      .stroke({ width: 1.2, color: 0x000000, alpha: 0.95 });
+
+    // 苹果亮斑
+    g.circle(fx - fr * 0.3, fy - fr * 0.3, fr * 0.36).fill({
       color: 0xffffff,
-      alpha: 0.55,
+      alpha: 0.65,
     });
-    // 果柄
+
+    // 黑色果柄线
     g.moveTo(fx, fy - fr).lineTo(fx + 1, fy - fr - 2.5).stroke({
       width: 1.2,
-      color: 0x331c0c,
+      color: 0x000000,
     });
-    // 小树叶
-    g.poly([fx + 1, fy - fr - 2.5, fx + 3.5, fy - fr - 3.5, fx + 2.5, fy - fr - 1], true).fill({
-      color: 0x58cc2a,
-    });
+
+    // 果叶（硬边小多边形）
+    g.poly(
+      [fx + 1, fy - fr - 2.5, fx + 3.5, fy - fr - 3.5, fx + 2.5, fy - fr - 1],
+      true,
+    )
+      .fill({ color: 0x7ed45f })
+      .stroke({ width: 0.8, color: 0x000000, alpha: 0.8 });
   }
 }
