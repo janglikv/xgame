@@ -13,6 +13,7 @@ import {
   HARVEST_MELEE_DAMAGE,
   HarvestableTree,
 } from '../entities/HarvestableTree';
+import { DungEntity } from '../entities/DungEntity';
 import { GrassEntity } from '../entities/GrassEntity';
 import type { Spider } from '../entities/Spider';
 import {
@@ -61,6 +62,7 @@ export class HarvestWorld {
   readonly trees: HarvestableTree[] = [];
   readonly grasses: GrassEntity[] = [];
   readonly pickups: ItemPickup[] = [];
+  readonly dungs: DungEntity[] = [];
 
   constructor(private readonly hooks: HarvestWorldHooks) {}
 
@@ -191,13 +193,54 @@ export class HarvestWorld {
     }
   }
 
-  /** 与已有草丛是否过近 */
+  /** 排泄生出一堆天然有机肥料粑粑 */
+  spawnDung(x: number, y: number): DungEntity | null {
+    const mapDef = this.hooks.getMapDef();
+    if (!isOnGreenLand(x, y, mapDef, 255)) return null;
+
+    const dung = new DungEntity(x, y, {
+      onDepleted: (d) => {
+        const idx = this.dungs.indexOf(d);
+        if (idx >= 0) this.dungs.splice(idx, 1);
+        d.parent?.removeChild(d);
+        d.destroy({ children: true });
+      },
+    });
+    this.hooks.sortLayer.addChild(dung);
+    this.dungs.push(dung);
+    this.hooks.afterWorldChange();
+    return dung;
+  }
+
+  /** 获取处于某个坐标处的粑粑肥力实体（若有） */
+  private findFertileDung(x: number, y: number): DungEntity | null {
+    for (const d of this.dungs) {
+      if (d.nutrient <= 0) continue;
+      const dx = d.worldX - x;
+      const dy = d.worldY - y;
+      if (dx * dx + dy * dy <= d.radius * d.radius) {
+        return d;
+      }
+    }
+    return null;
+  }
+
+  /** 与已有草丛是否过近（在粑粑肥力影响圈 120px 范畴内，密度限制允许压缩至 1/3，即草密度解禁允许翻 3 倍！） */
   private isGrassTooClose(x: number, y: number, minDist: number): boolean {
-    const min2 = minDist * minDist;
+    const dung = this.findFertileDung(x, y);
+    // 在粑粑肥力光环内，最小距离缩小为 1/3（如 48px -> 16px），草的密度允许翻三倍！
+    const effectiveMinDist = dung ? Math.max(12, minDist / 3) : minDist;
+    const min2 = effectiveMinDist * effectiveMinDist;
+
     for (const g of this.grasses) {
       const dx = g.worldX - x;
       const dy = g.worldY - y;
       if (dx * dx + dy * dy < min2) return true;
+    }
+
+    // 成功在肥沃的粑粑光环圈内落子生长新草，消耗 1 点养分
+    if (dung) {
+      dung.consumeNutrient(1);
     }
     return false;
   }
@@ -405,6 +448,9 @@ export class HarvestWorld {
   tickTrees(deltaMS: number, creatures?: ReadonlyArray<Spider>): void {
     for (const tree of this.trees) {
       tree.update(deltaMS);
+    }
+    for (const dung of this.dungs.slice()) {
+      dung.update(deltaMS);
     }
     const dt = deltaMS / 1000;
     // 场景为空白（全岛无草）时，在绿色陆地上随机孵化 1 棵生命火种小草

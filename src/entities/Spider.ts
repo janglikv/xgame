@@ -260,6 +260,8 @@ export type CreatureEcologyContext = {
   creatures: ReadonlyArray<Spider>;
   /** 地图定义（用于动物避开海岸与海面） */
   mapDef?: import('../data/maps').LevelMapDef;
+  /** 牛马拉粑粑生成天然肥料 */
+  spawnDung?: (x: number, y: number) => void;
   /** 吃掉地上的苹果等 */
   consumePickup: (pickup: {
     itemId: string;

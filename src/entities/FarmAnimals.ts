@@ -872,6 +872,8 @@ abstract class GrassEater extends Spider {
   private readonly ecoCfg: HerbivoreEco;
   /** 认领的草 id（最多 4） */
   private pastureIds: string[] = [];
+  /** 排泄粑粑倒计时（30s ~ 50s） */
+  private poopTimer = 20 + Math.random() * 25;
 
   protected constructor(
     worldX: number,
@@ -914,6 +916,18 @@ abstract class GrassEater extends Spider {
     );
   }
 
+  private tickPoop(dt: number): void {
+    if (!this.isAlive || this.destroyed || !this.ecology?.spawnDung) return;
+    this.poopTimer -= dt;
+    if (this.poopTimer <= 0) {
+      this.poopTimer = 35 + Math.random() * 25;
+      const backAngle = (this.facingDir > 0 ? Math.PI : 0) + (Math.random() - 0.5) * 0.5;
+      const dungX = this.worldX + Math.cos(backAngle) * 12;
+      const dungY = this.worldY + Math.sin(backAngle) * 12;
+      this.ecology.spawnDung(dungX, dungY);
+    }
+  }
+
   protected override updateAI(
     dt: number,
     playerX: number,
@@ -923,6 +937,8 @@ abstract class GrassEater extends Spider {
     if (this.locked) {
       return super.updateAI(dt, playerX, playerY, playerBodyProfileId);
     }
+
+    this.tickPoop(dt);
 
     const cfg = this.ecoCfg;
     this.hunger = Math.min(1, this.hunger + cfg.hungerPerSec * dt);

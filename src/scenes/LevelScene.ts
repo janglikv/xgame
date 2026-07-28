@@ -460,6 +460,7 @@ export class LevelScene extends Container implements GameScene {
       })),
       creatures: this.spiders,
       mapDef: this.mapDef,
+      spawnDung: (x, y) => this.harvest.spawnDung(x, y),
       consumePickup: (p) => {
         const found = this.harvest.pickups.find((item) => item === p);
         if (found) this.harvest.consumePickup(found);
