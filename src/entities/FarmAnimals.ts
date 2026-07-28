@@ -102,39 +102,7 @@ const SLEEP_FX = {
   fontSize: 13,
 } as const;
 
-/** 一棵苹果树只养一只猪：key → 认领者 */
-const appleTreeClaims = new Map<string, Pig>();
 
-function appleTreeClaimKey(tree: { worldX: number; worldY: number }): string {
-  // 量化坐标，避免浮点抖动导致同一棵树多 key
-  return `${Math.round(tree.worldX / 8) * 8}_${Math.round(tree.worldY / 8) * 8}`;
-}
-
-function releaseAppleTreeClaim(pig: Pig): void {
-  for (const [key, owner] of appleTreeClaims) {
-    if (owner === pig) appleTreeClaims.delete(key);
-  }
-}
-
-/**
- * 尝试认领苹果树。已被其它存活猪占用则失败。
- * 自己已占用则刷新为成功。
- */
-function tryClaimAppleTree(pig: Pig, tree: EcologyTree): boolean {
-  if (!tree.isAlive || tree.kind !== 'apple') return false;
-  const key = appleTreeClaimKey(tree);
-  const owner = appleTreeClaims.get(key);
-  if (owner && owner !== pig) {
-    // 主人已死 / 已销毁 → 释放
-    if (!owner.isAlive || owner.destroyed) {
-      appleTreeClaims.delete(key);
-    } else {
-      return false;
-    }
-  }
-  appleTreeClaims.set(key, pig);
-  return true;
-}
 
 /**
  * 把目标点推出所有树干 solid（再加 body 裕量）。
@@ -433,9 +401,6 @@ export class Pig extends Spider {
     playerBodyProfileId: BodyProfileId | null = null,
     ecology: CreatureEcologyContext | null = null,
   ) {
-    if (!this.isAlive || this.destroyed) {
-      releaseAppleTreeClaim(this);
-    }
     const result = super.update(
       deltaMS,
       playerWorldX,
@@ -444,7 +409,6 @@ export class Pig extends Spider {
       ecology,
     );
     if (this.destroyed) {
-      releaseAppleTreeClaim(this);
       return result;
     }
     this.tickSleepFx(deltaMS / 1000);
@@ -465,17 +429,23 @@ export class Pig extends Spider {
   }
 
   private napSpot(tree: EcologyTree): { x: number; y: number } {
-    // 树前下方站位，再推离 solid
+    // 根据猪的唯一坐标产生小幅散列偏移（-18~18px），允许多只猪共同围绕同一棵苹果树安睡
+    const hash =
+      (Math.abs(Math.sin(this.worldX * 12.9898 + this.worldY * 78.233)) *
+        43758.5453) %
+      1;
+    const offsetX = (hash - 0.5) * 36;
+    const offsetY = PIG_ECO.napOffsetY + (((hash * 17) % 1) - 0.5) * 12;
+
     return clearOfTreeSolids(
-      tree.worldX,
-      tree.worldY + PIG_ECO.napOffsetY,
+      tree.worldX + offsetX,
+      tree.worldY + offsetY,
       26,
     );
   }
 
-  /** 放弃当前认领的树（树没了 / 被抢 / 死亡） */
+  /** 放弃当前选中的树（树被摧毁 / 死亡） */
   private releaseHomeTree(): void {
-    releaseAppleTreeClaim(this);
     this.homeTree = null;
     this.setSleeping(false);
   }
@@ -485,8 +455,8 @@ export class Pig extends Spider {
     dt: number,
     tree: EcologyTree,
   ): { moved: boolean; attackHit: SpiderAttackHit | null } {
-    // 途中若认领失效（树死了或被其它猪占了）立刻另找
-    if (!tree.isAlive || !tryClaimAppleTree(this, tree)) {
+    // 检查树是否仍然存活
+    if (!tree.isAlive) {
       this.releaseHomeTree();
       return { moved: false, attackHit: null };
     }
@@ -519,7 +489,7 @@ export class Pig extends Spider {
   }
 
   private refreshHomeTree(eco: CreatureEcologyContext): void {
-    // 已有家：校验树还在、认领仍属于自己
+    // 已有家：校验树还在
     if (this.homeTree) {
       const live = eco.trees.find(
         (t) =>
@@ -530,37 +500,27 @@ export class Pig extends Spider {
             t.worldY - this.homeTree!.worldY,
           ) < 12,
       );
-      if (live && tryClaimAppleTree(this, live)) {
+      if (live) {
         this.homeTree = live;
         return;
       }
       this.releaseHomeTree();
     }
 
-    // 只认领「空闲」苹果树：一棵树一只猪
+    // 取消独占限制：寻找感知范围内最近的存活苹果树，多只猪可共用同一棵苹果树
     let best: EcologyTree | null = null;
     let bestScore = Infinity;
     for (const t of eco.trees) {
       if (!t.isAlive || t.kind !== 'apple') continue;
       const d = Math.hypot(t.worldX - this.worldX, t.worldY - this.worldY);
       if (d >= PIG_ECO.treeSense) continue;
-      // 已被其它猪占用则跳过
-      const key = appleTreeClaimKey(t);
-      const owner = appleTreeClaims.get(key);
-      if (owner && owner !== this && owner.isAlive && !owner.destroyed) {
-        continue;
-      }
       if (d < bestScore) {
         bestScore = d;
         best = t;
       }
     }
 
-    if (best && tryClaimAppleTree(this, best)) {
-      this.homeTree = best;
-    } else {
-      this.homeTree = null;
-    }
+    this.homeTree = best;
   }
 
   private clearFoodTarget(): void {
