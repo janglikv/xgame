@@ -1,7 +1,6 @@
 import type { Container } from 'pixi.js';
 import {
   HARVEST_MELEE_DAMAGE,
-  HARVEST_RANGE,
   HarvestableTree,
 } from '../entities/HarvestableTree';
 import {
@@ -14,6 +13,7 @@ import {
   removeRuntimeTreeObstacleById,
   treeIdOf,
   treeKindOf,
+  treeSizeOf,
   type LevelMapDef,
   type MapTree,
 } from '../data/maps';
@@ -52,8 +52,9 @@ export class HarvestWorld {
 
   mountTree(t: MapTree): HarvestableTree {
     const id = treeIdOf(t);
+    const size = treeSizeOf(t);
     const tree = new HarvestableTree(t.x, t.y, {
-      woodDrop: 1 + (Math.abs(Math.round(t.x) + Math.round(t.y)) % 2),
+      size,
       treeId: id,
     });
     this.hooks.sortLayer.addChild(tree);
@@ -100,15 +101,17 @@ export class HarvestWorld {
     if (player.entranceLocks.attack) return false;
 
     let best: HarvestableTree | null = null;
-    let bestD = HARVEST_RANGE;
+    let bestScore = Number.POSITIVE_INFINITY;
     for (const tree of this.trees) {
       if (!tree.isAlive) continue;
       const d = Math.hypot(
         tree.worldX - player.worldX,
         tree.worldY - player.worldY,
       );
-      if (d <= bestD) {
-        bestD = d;
+      if (d > tree.interactR) continue;
+      // 优先更近；同距时大树可砍区更大也能命中
+      if (d < bestScore) {
+        bestScore = d;
         best = tree;
       }
     }

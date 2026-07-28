@@ -1,7 +1,19 @@
-import type { LevelMapDef, MapTree, TreeKind } from './types';
+import { treeSolidR as solidRFromProfile } from '../treeProfiles';
+import type { LevelMapDef, MapTree, TreeKind, TreeSize } from './types';
 
-/** 树干 solid 半径（世界像素，相对脚底） */
+/** 中树默认 solid 半径（世界像素，相对脚底） */
 export const TREE_SOLID_R = 14;
+
+/** 各体型 solid 半径（与视觉 scale 同源，见 treeProfiles） */
+export function treeSolidR(size: TreeSize): number {
+  return solidRFromProfile(size);
+}
+
+export function treeSizeOf(t: MapTree): TreeSize {
+  const s = t.size;
+  if (s === 'sapling' || s === 'medium' || s === 'large') return s;
+  return 'medium';
+}
 
 /** 两棵树过近时 normalize 去重的距离² */
 const TREE_DEDUP_DIST2 = 8 * 8;
@@ -395,6 +407,7 @@ export function normalizeTrees(def: LevelMapDef): MapTree[] {
       x: t.x,
       y: t.y,
       kind: 'harvest',
+      size: treeSizeOf(t),
       id,
     });
   }
@@ -411,6 +424,7 @@ function coerceTree(raw: MapTree | Record<string, unknown>, def: LevelMapDef): M
       x: o.x,
       y: o.y,
       kind: o.kind === 'pine' || o.kind === 'harvest' ? o.kind : undefined,
+      size: coerceTreeSize(o.size),
       id: typeof o.id === 'string' ? o.id : undefined,
     };
   }
@@ -426,11 +440,17 @@ function coerceTree(raw: MapTree | Record<string, unknown>, def: LevelMapDef): M
       x,
       y,
       kind: o.kind === 'pine' || o.kind === 'harvest' ? o.kind : undefined,
+      size: coerceTreeSize(o.size),
       id: typeof o.id === 'string' ? o.id : undefined,
     };
   }
 
   return null;
+}
+
+function coerceTreeSize(raw: unknown): TreeSize | undefined {
+  if (raw === 'sapling' || raw === 'medium' || raw === 'large') return raw;
+  return undefined;
 }
 
 export type TreeObstacle = {
@@ -441,14 +461,14 @@ export type TreeObstacle = {
   id: string;
 };
 
-/** 由地图树生成 solid 圆列表 */
+/** 由地图树生成 solid 圆列表（半径随体型） */
 export function buildTreeObstacles(def: LevelMapDef): TreeObstacle[] {
   const out: TreeObstacle[] = [];
   for (const t of normalizeTrees(def)) {
     out.push({
       x: t.x,
       y: t.y,
-      r: TREE_SOLID_R,
+      r: treeSolidR(treeSizeOf(t)),
       id: treeIdOf(t),
     });
   }
@@ -530,6 +550,7 @@ export function cloneLevelDef(def: LevelMapDef): LevelMapDef {
       x: t.x,
       y: t.y,
       kind: t.kind,
+      size: t.size,
       id: t.id,
     })),
     enemies:

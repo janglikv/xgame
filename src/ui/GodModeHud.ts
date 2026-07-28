@@ -2,7 +2,9 @@ import { Assets, Container, Graphics, Sprite, Text, Texture } from 'pixi.js';
 import { drawPineLocal } from '../world/PineTree';
 
 export type GodBrush =
-  | 'harvest'
+  | 'tree-sapling'
+  | 'tree-medium'
+  | 'tree-large'
   | 'spider'
   | 'flame-flower'
   | 'wooden-dummy'
@@ -58,7 +60,7 @@ export class GodModeHud extends Container {
 
   private readonly groupsContainer: Container;
 
-  private activeBrush: GodBrush = 'harvest';
+  private activeBrush: GodBrush = 'tree-medium';
   private isMainCollapsed = false;
   private onSelectBrush?: (brush: GodBrush) => void;
 
@@ -68,7 +70,11 @@ export class GodModeHud extends Container {
       version: 'v1.0',
       name: '基础植被',
       collapsed: false,
-      items: [{ brush: 'harvest', label: '可砍树' }],
+      items: [
+        { brush: 'tree-sapling', label: '小树苗' },
+        { brush: 'tree-medium', label: '中树' },
+        { brush: 'tree-large', label: '大树' },
+      ],
     },
     {
       id: 'v1.1',
@@ -416,17 +422,29 @@ export class GodModeHud extends Container {
       .stroke({ width: 1, color: 0x483a63, alpha: 0.5 });
     iconContainer.addChild(iconBg);
 
-    if (brush === 'harvest') {
+    if (
+      brush === 'tree-sapling' ||
+      brush === 'tree-medium' ||
+      brush === 'tree-large'
+    ) {
       const treeGfx = new Graphics();
       drawPineLocal(treeGfx, 0, 0, 0);
       treeGfx.position.set(16, 27);
-      treeGfx.scale.set(0.32);
+      // 图标内用不同缩放区分体型
+      const iconScale =
+        brush === 'tree-sapling' ? 0.2 : brush === 'tree-large' ? 0.48 : 0.3;
+      treeGfx.scale.set(iconScale);
       iconContainer.addChild(treeGfx);
-      // 可砍树标记：右下角资源印记
+      const badgeColor =
+        brush === 'tree-sapling'
+          ? 0x8fd46a
+          : brush === 'tree-large'
+            ? 0xc4782a
+            : 0xd69a19;
       const badge = new Graphics();
       badge
         .circle(25, 25, 5.5)
-        .fill({ color: 0xd69a19 })
+        .fill({ color: badgeColor })
         .stroke({ width: 1, color: 0xffffff });
       iconContainer.addChild(badge);
     } else if (

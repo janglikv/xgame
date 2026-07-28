@@ -3,14 +3,15 @@ import type { PlayerCharacterBase } from '../entities/PlayerCharacterBase';
 import type { HarvestableTree } from '../entities/HarvestableTree';
 import type { Spider } from '../entities/Spider';
 import {
-  TREE_SOLID_R,
   addRuntimeTreeObstacle,
   allocTreeId,
   isOnLand,
   removeRuntimeTreeObstacleById,
   treeIdOf,
+  treeSolidR,
   type LevelMapDef,
   type MapTree,
+  type TreeSize,
 } from '../data/maps';
 import type { GodBrush, GodModeHud } from '../ui/GodModeHud';
 import type { LevelCamera } from '../scenes/LevelCamera';
@@ -37,7 +38,7 @@ export type GodModeDeps = {
  * 上帝模式：摆放/擦除树与敌人、改出生点，自动 saveMapDraft。
  */
 export class GodModeController {
-  brush: GodBrush = 'harvest';
+  brush: GodBrush = 'tree-medium';
   enabled = false;
 
   constructor(private readonly deps: GodModeDeps) {}
@@ -84,22 +85,34 @@ export class GodModeController {
     const mapDef = this.deps.getMapDef();
     if (!isOnLand(w.x, w.y, mapDef, 0)) return;
 
-    if (this.brush === 'harvest') {
-      this.placeHarvestTree(w.x, w.y);
+    if (
+      this.brush === 'tree-sapling' ||
+      this.brush === 'tree-medium' ||
+      this.brush === 'tree-large'
+    ) {
+      const size: TreeSize =
+        this.brush === 'tree-sapling'
+          ? 'sapling'
+          : this.brush === 'tree-large'
+            ? 'large'
+            : 'medium';
+      this.placeHarvestTree(w.x, w.y, size);
       return;
     }
     this.placeEnemy(w.x, w.y, this.brush);
   }
 
-  placeHarvestTree(x: number, y: number): void {
+  placeHarvestTree(x: number, y: number, size: TreeSize = 'medium'): void {
     const mapDef = this.deps.getMapDef();
-    const id = allocTreeId('harv');
-    const t: MapTree = { x, y, kind: 'harvest', id };
+    const id = allocTreeId(
+      size === 'sapling' ? 'sap' : size === 'large' ? 'big' : 'harv',
+    );
+    const t: MapTree = { x, y, kind: 'harvest', size, id };
     mapDef.trees.push(t);
     addRuntimeTreeObstacle({
       x,
       y,
-      r: TREE_SOLID_R,
+      r: treeSolidR(size),
       id,
     });
     this.deps.harvest.mountTree(t);

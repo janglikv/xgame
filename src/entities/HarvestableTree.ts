@@ -1,23 +1,24 @@
 import { Container, Graphics } from 'pixi.js';
+import type { TreeSize } from '../data/maps/types';
+import { TREE_SIZE_PROFILE } from '../data/treeProfiles';
 import { HealthBar } from '../ui/HealthBar';
 import { drawPineLocal } from '../world/PineTree';
 
-/** 可砍树默认生命（约 3 次近战 / 数发飞剑） */
-const DEFAULT_MAX_HP = 36;
-/** 受击半径（脚底圆心，世界像素） */
-const HURT_R = 22;
-/** 近战可砍距离（玩家脚底 → 树脚底） */
-export const HARVEST_RANGE = 56;
 /** 近战单次伤害 */
 export const HARVEST_MELEE_DAMAGE = 12;
 /** 飞剑命中伤害（与 SPEAR 量级接近，略低） */
 export const HARVEST_SPEAR_DAMAGE = 10;
 /** 炸弹命中基础伤害 */
 export const HARVEST_BOMB_DAMAGE = 18;
+/** 兼容旧代码：中树默认交互距离 */
+export const HARVEST_RANGE = 56;
+
+export { TREE_SIZE_PROFILE };
 
 export type HarvestableTreeOptions = {
+  size?: TreeSize;
   maxHp?: number;
-  /** 掉落木头数量 */
+  /** 掉落木头数量；缺省按体型 */
   woodDrop?: number;
   /** 视觉色调（夜景偏冷） */
   tint?: number;
@@ -26,13 +27,17 @@ export type HarvestableTreeOptions = {
 };
 
 /**
- * 关卡内可交互幼松：有血量，可被近战 / 投射物破坏，倒地掉木头。
+ * 关卡内可交互树：小树苗 / 中树 / 大树。
+ * 有血量，可被近战 / 投射物破坏，倒地掉木头。
  * 原点 = 脚底；solid 由运行时树障碍表提供。
  */
 export class HarvestableTree extends Container {
   worldX: number;
   worldY: number;
-  readonly hurtR = HURT_R;
+  readonly size: TreeSize;
+  readonly hurtR: number;
+  /** 近战交互半径 */
+  readonly interactR: number;
   readonly woodDrop: number;
   /** 树 id；空串表示无 solid 绑定 */
   readonly treeId: string;
@@ -54,36 +59,46 @@ export class HarvestableTree extends Container {
     this.eventMode = 'none';
     this.worldX = worldX;
     this.worldY = worldY;
-    this.maxHp = options.maxHp ?? DEFAULT_MAX_HP;
+
+    const size: TreeSize =
+      options.size === 'sapling' ||
+      options.size === 'medium' ||
+      options.size === 'large'
+        ? options.size
+        : 'medium';
+    this.size = size;
+    const profile = TREE_SIZE_PROFILE[size];
+
+    this.maxHp = options.maxHp ?? profile.maxHp;
     this.hp = this.maxHp;
-    this.woodDrop = Math.max(1, options.woodDrop ?? 2);
+    this.woodDrop = Math.max(1, options.woodDrop ?? profile.woodDrop);
     this.treeId = options.treeId ?? '';
+    this.hurtR = profile.hurtR;
+    this.interactR = profile.interactR;
 
     this.gfx = new Graphics();
     this.gfx.label = 'HarvestTreeGfx';
     // shade=1 稍亮，和背景密林区分「可砍」
     drawPineLocal(this.gfx, 1);
-    this.gfx.scale.set(0.72);
-    if (options.tint !== undefined) {
-      this.gfx.tint = options.tint;
-    } else {
-      this.gfx.tint = 0x6a8a5a;
-    }
+    this.gfx.scale.set(profile.scale);
+    this.gfx.tint = options.tint ?? profile.tint;
     this.addChild(this.gfx);
 
     // 脚底提示环：可交互
     const ring = new Graphics();
     ring.label = 'HarvestHint';
-    ring.circle(0, 2, 10).stroke({ width: 1.5, color: 0xd4e8a8, alpha: 0.55 });
+    ring
+      .circle(0, 2, profile.ringR)
+      .stroke({ width: 1.5, color: 0xd4e8a8, alpha: 0.55 });
     this.addChild(ring);
 
     this.healthBar = new HealthBar({
       maxHp: this.maxHp,
-      width: 36,
+      width: profile.hpBarW,
       height: 5,
     });
     this.healthBar.setHealth(this.maxHp);
-    this.healthBar.position.set(0, -78);
+    this.healthBar.position.set(0, profile.hpBarY);
     this.healthBar.visible = false;
     this.addChild(this.healthBar);
 

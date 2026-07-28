@@ -16,6 +16,12 @@ export type EnemySpawn = {
 export type TreeKind = 'harvest' | 'pine';
 
 /**
+ * 可砍树体型：小树苗 / 中树 / 大树。
+ * 缺省 medium（兼容旧草稿）。
+ */
+export type TreeSize = 'sapling' | 'medium' | 'large';
+
+/**
  * 摆放的一棵树（世界坐标，脚底）。
  * 不再绑定网格；id 用于砍伐 / 上帝模式删除 solid。
  */
@@ -24,6 +30,8 @@ export type MapTree = {
   y: number;
   /** 缺省 harvest */
   kind?: TreeKind;
+  /** 体型；缺省 medium */
+  size?: TreeSize;
   /** 稳定 id；缺省由 normalize 生成 */
   id?: string;
 };

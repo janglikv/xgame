@@ -4,9 +4,12 @@ export type {
   EnemySpawn,
   MapTree,
   TreeKind,
+  TreeSize,
 } from './types';
 export {
   TREE_SOLID_R,
+  treeSolidR,
+  treeSizeOf,
   mapHalf,
   seaMarginPx,
   getMapGrid,

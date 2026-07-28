@@ -31,9 +31,11 @@ export function formatLevelDefTs(
   for (const t of trees) {
     const kind =
       t.kind && t.kind !== 'harvest' ? `, kind: ${JSON.stringify(t.kind)}` : '';
+    const size =
+      t.size && t.size !== 'medium' ? `, size: ${JSON.stringify(t.size)}` : '';
     const id = t.id ? `, id: ${JSON.stringify(t.id)}` : '';
     lines.push(
-      `    { x: ${roundN(t.x)}, y: ${roundN(t.y)}${kind}${id} },`,
+      `    { x: ${roundN(t.x)}, y: ${roundN(t.y)}${kind}${size}${id} },`,
     );
   }
   lines.push(`  ],`);
