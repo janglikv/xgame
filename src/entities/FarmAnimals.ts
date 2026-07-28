@@ -972,11 +972,11 @@ abstract class GrassEater extends Spider {
     eco: CreatureEcologyContext,
     senseRange: number,
   ): GrassPatch | null {
-    // 同步已有认领：草还在且仍归自己
+    // 同步已有认领：草还在、仍为大草 (large) 且仍归自己
     const stillMembers: CreatureEcologyContext['grasses'][number][] = [];
     for (const id of this.pastureIds) {
       const g = eco.grasses.find((x) => x.grassId === id);
-      if (!g) {
+      if (!g || g.size !== 'large') {
         grassClaims.delete(id);
         continue;
       }
@@ -986,7 +986,7 @@ abstract class GrassEater extends Spider {
     }
     this.pastureIds = stillMembers.map((g) => g.grassId);
 
-    // 补满到 4 棵：在现有中心附近找空闲草
+    // 补满到 4 棵：在现有中心附近找空闲大草
     if (this.pastureIds.length < PASTURE_GRASS_COUNT) {
       this.fillPasture(eco, senseRange, stillMembers);
     }
@@ -1007,8 +1007,7 @@ abstract class GrassEater extends Spider {
     let sumY = 0;
     let wSum = 0;
     for (const g of members) {
-      const w =
-        g.size === 'large' ? 1.5 : g.size === 'medium' ? 1.1 : 0.85;
+      const w = 1.5;
       sumX += g.worldX * w;
       sumY += g.worldY * w;
       wSum += w;
@@ -1021,7 +1020,7 @@ abstract class GrassEater extends Spider {
     };
   }
 
-  /** 从空闲草中凑满 4 棵 */
+  /** 从空闲大草中凑满 4 棵 */
   private fillPasture(
     eco: CreatureEcologyContext,
     senseRange: number,
@@ -1029,6 +1028,7 @@ abstract class GrassEater extends Spider {
   ): void {
     const free = eco.grasses.filter(
       (g) =>
+        g.size === 'large' &&
         g.grassId &&
         isGrassFreeOrMine(g.grassId, this) &&
         !this.pastureIds.includes(g.grassId),
@@ -1173,10 +1173,10 @@ abstract class GrassEater extends Spider {
       let best: CreatureEcologyContext['grasses'][number] | null = null;
       let bestD = cfg.eatRange;
       for (const g of patch.members) {
-        // 只啃自己牧场里的草
+        // 只啃自己牧场里的草，且只能吃成熟的大草 (large)
         if (!g.grassId || !this.pastureIds.includes(g.grassId)) continue;
         const live = eco.grasses.find((x) => x.grassId === g.grassId);
-        if (!live) continue;
+        if (!live || live.size !== 'large') continue;
         // GrassEntity 才有 isGrazable
         const grazable =
           'isGrazable' in live
