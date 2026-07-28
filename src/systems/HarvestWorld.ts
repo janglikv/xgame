@@ -225,11 +225,11 @@ export class HarvestWorld {
     return null;
   }
 
-  /** 与已有草丛是否过近（在粑粑肥力影响圈 120px 范畴内，密度限制允许压缩至 1/3，即草密度解禁允许翻 3 倍！） */
+  /** 与已有草丛是否过近（在粑粑肥力影响圈 120px 范畴内，草密度解禁允许翻 2 倍） */
   private isGrassTooClose(x: number, y: number, minDist: number): boolean {
     const dung = this.findFertileDung(x, y);
-    // 在粑粑肥力光环内，最小距离缩小为 1/3（如 48px -> 16px），草的密度允许翻三倍！
-    const effectiveMinDist = dung ? Math.max(12, minDist / 3) : minDist;
+    // 在粑粑肥力圈内，最小间距缩小为 1/2（如 48px -> 24px），草的密度允许翻两倍
+    const effectiveMinDist = dung ? Math.max(16, minDist / 2) : minDist;
     const min2 = effectiveMinDist * effectiveMinDist;
 
     for (const g of this.grasses) {
