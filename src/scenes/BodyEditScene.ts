@@ -29,6 +29,9 @@ import type { GameScene } from './types';
 const BG = 0x121820;
 const FLOOR = 0x1c2834;
 const GRID = 0x243040;
+const PICKER_W = 168;
+const DEFAULT_ZOOM = 1.55;
+const STAGE_FEET_Y = 40;
 
 type SubjectDef =
   | {
@@ -41,11 +44,11 @@ type SubjectDef =
   | {
       id: BodyProfileId;
       kind: 'pine';
-      /** drawPineLocal 后再乘此 scale */
       pineScale: number;
       tint: number;
     };
 
+/** 可编辑主体目录（只加这里即可扩展） */
 const SUBJECTS: ReadonlyArray<SubjectDef> = [
   {
     id: 'bomb-girl',
@@ -85,22 +88,26 @@ const SUBJECTS: ReadonlyArray<SubjectDef> = [
   {
     id: 'tree',
     kind: 'pine',
-    // 中树视觉 = 碰撞模板 1×
     pineScale: TREE_SIZE_PROFILE.medium.scale,
     tint: TREE_SIZE_PROFILE.medium.tint,
   },
 ];
 
-const SPACING = 180;
-const DEFAULT_ZOOM = 1.35;
-
 type Subject = {
   id: BodyProfileId;
+  def: SubjectDef;
   root: Container;
-  /** 贴图主体；程序树为 null */
   sprite: Sprite | null;
   worldX: number;
   worldY: number;
+  loaded: boolean;
+};
+
+type PickerRow = {
+  id: BodyProfileId;
+  root: Container;
+  bg: Graphics;
+  label: Text;
 };
 
 export type BodyEditSceneOptions = {
@@ -109,8 +116,8 @@ export type BodyEditSceneOptions = {
 };
 
 /**
- * 碰撞 / 受击体独立编辑场景。
- * 鼠标拖拽调参；工具条仅导出与增删形状，无快捷键。
+ * 碰撞 / 受击体编辑：左侧选主体 → 中间单独调整。
+ * 扩展时只往 SUBJECTS 追加项，无需排一排。
  */
 export class BodyEditScene extends Container implements GameScene {
   private readonly bg: Graphics;
@@ -118,6 +125,10 @@ export class BodyEditScene extends Container implements GameScene {
   private readonly floorGfx: Graphics;
   private readonly shapeGfx: Graphics;
   private readonly subjectLayer: Container;
+  private readonly pickerRoot: Container;
+  private readonly pickerScroll: Container;
+  private readonly pickerTitle: Text;
+  private readonly stageTitle: Text;
   private readonly hud: ColliderEditHud;
   private readonly backBtn: Container;
   private readonly editor = new ColliderEditController();
@@ -131,7 +142,10 @@ export class BodyEditScene extends Container implements GameScene {
   private camX = 0;
   private camY = 0;
   private subjects: Subject[] = [];
+  private pickerRows: PickerRow[] = [];
+  private activeIndex = 0;
   private statusT = 0;
+  private pickerScrollY = 0;
 
   constructor(width: number, height: number, options: BodyEditSceneOptions) {
     super();
@@ -161,6 +175,38 @@ export class BodyEditScene extends Container implements GameScene {
     this.shapeGfx = new Graphics();
     this.worldRoot.addChild(this.shapeGfx);
 
+    this.stageTitle = new Text({
+      text: '',
+      style: {
+        fontFamily: 'system-ui, sans-serif',
+        fontSize: 16,
+        fontWeight: '700',
+        fill: 0xc8d8f0,
+        stroke: { color: 0x000000, width: 3 },
+      },
+    });
+    this.stageTitle.anchor.set(0.5, 1);
+    this.addChild(this.stageTitle);
+
+    this.pickerRoot = new Container();
+    this.pickerRoot.label = 'SubjectPicker';
+    this.pickerRoot.eventMode = 'static';
+    this.addChild(this.pickerRoot);
+
+    this.pickerTitle = new Text({
+      text: '选择主体',
+      style: {
+        fontFamily: 'system-ui, sans-serif',
+        fontSize: 13,
+        fontWeight: '700',
+        fill: 0xa8c0d8,
+      },
+    });
+    this.pickerRoot.addChild(this.pickerTitle);
+
+    this.pickerScroll = new Container();
+    this.pickerRoot.addChild(this.pickerScroll);
+
     this.hud = new ColliderEditHud();
     this.hud.setHandlers({
       onExport: () => {
@@ -168,8 +214,7 @@ export class BodyEditScene extends Container implements GameScene {
       },
       onAdd: (kind) => {
         if (!this.editor.selectedId) {
-          const first = this.subjects[0];
-          if (first) this.editor.select(first.id, first.worldX, first.worldY);
+          this.selectSubject(this.activeIndex);
         }
         this.editor.addShape(kind);
         this.redrawShapes();
@@ -196,18 +241,18 @@ export class BodyEditScene extends Container implements GameScene {
     this.on('pointerupoutside', this.onPointerUp);
     window.addEventListener('wheel', this.onWheel, { passive: false });
 
-    this.layoutSubjects();
-    this.applyCamera();
+    this.buildSubjects();
+    this.buildPicker();
+    this.selectSubject(0);
     this.paintBg();
     this.layoutUi();
-    const first = this.subjects[0];
-    if (first) this.editor.select(first.id, first.worldX, first.worldY);
     this.redrawShapes();
   }
 
   async init(): Promise<void> {
     this.onBackground?.(BG);
-    await this.loadSprites();
+    // 预加载全部贴图；舞台只显示当前选中
+    await Promise.all(this.subjects.map((_, i) => this.ensureSubjectLoaded(i)));
     this.redrawShapes();
   }
 
@@ -218,10 +263,9 @@ export class BodyEditScene extends Container implements GameScene {
       if (this.statusT <= 0) this.hud.setStatus('');
     }
 
-    const id = this.editor.selectedId;
-    if (id) {
-      const s = this.subjects.find((x) => x.id === id);
-      if (s) this.editor.syncAnchor(s.worldX, s.worldY);
+    const active = this.activeSubject();
+    if (active && this.editor.selectedId === active.id) {
+      this.editor.syncAnchor(active.worldX, active.worldY);
     }
     this.redrawShapes();
   }
@@ -231,7 +275,7 @@ export class BodyEditScene extends Container implements GameScene {
     this.viewH = height;
     this.hitArea = new Rectangle(0, 0, width, height);
     this.paintBg();
-    this.layoutSubjects();
+    this.layoutStage();
     this.applyCamera();
     this.layoutUi();
     this.redrawShapes();
@@ -246,110 +290,193 @@ export class BodyEditScene extends Container implements GameScene {
     super.destroy(options);
   }
 
-  private async loadSprites(): Promise<void> {
-    await Promise.all(
-      this.subjects.map(async (s, i) => {
-        const def = SUBJECTS[i]!;
-        if (def.kind !== 'sprite' || !s.sprite) return;
-        try {
-          const outlined = await loadOutlinedTexture(
-            def.url,
-            OUTLINE_PX_CHARACTER,
-          );
-          const footY = paddedFootAnchorY(
-            def.footY,
-            outlined.contentHeight,
-            outlined.pad,
-          );
-          s.sprite.texture = outlined.texture;
-          s.sprite.anchor.set(0.5, footY);
-          s.sprite.scale.set(def.scale);
-          s.sprite.visible = true;
-        } catch {
-          s.sprite.texture = Texture.EMPTY;
-        }
-      }),
-    );
+  private activeSubject(): Subject | null {
+    return this.subjects[this.activeIndex] ?? null;
   }
 
-  private layoutSubjects(): void {
-    const n = SUBJECTS.length;
-    const totalW = (n - 1) * SPACING;
-    const groundY = 40;
+  private buildSubjects(): void {
+    for (const def of SUBJECTS) {
+      const root = new Container();
+      root.eventMode = 'none';
+      root.visible = false;
 
-    if (this.subjects.length === 0) {
-      for (let i = 0; i < n; i++) {
-        const def = SUBJECTS[i]!;
-        const root = new Container();
-        root.eventMode = 'none';
-
-        let sprite: Sprite | null = null;
-        if (def.kind === 'sprite') {
-          sprite = new Sprite(Texture.EMPTY);
-          sprite.anchor.set(0.5, def.footY);
-          sprite.scale.set(def.scale);
-          sprite.visible = false;
-          root.addChild(sprite);
-        } else {
-          const pine = new Graphics();
-          pine.label = 'BodyEditPine';
-          drawPineLocal(pine, 1);
-          pine.scale.set(def.pineScale);
-          pine.tint = def.tint;
-          root.addChild(pine);
-        }
-
-        const label = new Text({
-          text: getBodyProfile(def.id).label,
-          style: {
-            fontFamily: 'system-ui, sans-serif',
-            fontSize: 13,
-            fontWeight: '700',
-            fill: 0xc8d8f0,
-            stroke: { color: 0x000000, width: 3 },
-          },
-        });
-        label.anchor.set(0.5, 0);
-        label.position.set(0, 10);
-        root.addChild(label);
-
-        this.subjectLayer.addChild(root);
-        this.subjects.push({
-          id: def.id,
-          root,
-          sprite,
-          worldX: 0,
-          worldY: groundY,
-        });
+      let sprite: Sprite | null = null;
+      if (def.kind === 'sprite') {
+        sprite = new Sprite(Texture.EMPTY);
+        sprite.anchor.set(0.5, def.footY);
+        sprite.scale.set(def.scale);
+        sprite.visible = false;
+        root.addChild(sprite);
+      } else {
+        const pine = new Graphics();
+        pine.label = 'BodyEditPine';
+        drawPineLocal(pine, 1);
+        pine.scale.set(def.pineScale);
+        pine.tint = def.tint;
+        root.addChild(pine);
       }
+
+      this.subjectLayer.addChild(root);
+      this.subjects.push({
+        id: def.id,
+        def,
+        root,
+        sprite,
+        worldX: 0,
+        worldY: STAGE_FEET_Y,
+        loaded: def.kind === 'pine',
+      });
     }
+  }
+
+  private buildPicker(): void {
+    this.pickerRows = [];
+    this.pickerScroll.removeChildren();
+    let y = 0;
+    for (let i = 0; i < SUBJECTS.length; i++) {
+      const def = SUBJECTS[i]!;
+      const label = getBodyProfile(def.id).label;
+      const row = this.makePickerRow(label, def.id, i, y);
+      this.pickerRows.push(row);
+      this.pickerScroll.addChild(row.root);
+      y += row.root.height + 6;
+    }
+  }
+
+  private makePickerRow(
+    label: string,
+    id: BodyProfileId,
+    index: number,
+    y: number,
+  ): PickerRow {
+    const root = new Container();
+    root.eventMode = 'static';
+    root.cursor = 'pointer';
+    root.position.set(0, y);
+
+    const bg = new Graphics();
+    const t = new Text({
+      text: label,
+      style: {
+        fontFamily: 'system-ui, sans-serif',
+        fontSize: 13,
+        fontWeight: '700',
+        fill: 0xe8f0f8,
+      },
+    });
+    const padX = 12;
+    const padY = 9;
+    const w = PICKER_W - 20;
+    const h = t.height + padY * 2;
+    t.position.set(padX, padY);
+    root.addChild(bg, t);
+
+    bg.roundRect(0, 0, w, h, 8)
+      .fill({ color: 0x1a2836, alpha: 0.95 })
+      .stroke({ width: 1.2, color: 0x3a5068, alpha: 0.85 });
+
+    root.on('pointertap', (e) => {
+      e.stopPropagation();
+      void this.selectSubject(index);
+    });
+
+    return { id, root, bg, label: t };
+  }
+
+  private async selectSubject(index: number): Promise<void> {
+    if (index < 0 || index >= this.subjects.length) return;
+    this.activeIndex = index;
 
     for (let i = 0; i < this.subjects.length; i++) {
       const s = this.subjects[i]!;
-      s.worldX = -totalW / 2 + i * SPACING;
-      s.worldY = groundY;
-      s.root.position.set(s.worldX, s.worldY);
+      s.root.visible = i === index;
     }
 
+    await this.ensureSubjectLoaded(index);
+
+    const s = this.subjects[index]!;
+    s.worldX = 0;
+    s.worldY = STAGE_FEET_Y;
+    s.root.position.set(s.worldX, s.worldY);
+
+    this.editor.select(s.id, s.worldX, s.worldY);
     this.camX = 0;
-    this.camY = groundY - 30;
-    this.drawFloor(totalW);
+    this.camY = STAGE_FEET_Y - 36;
+    this.layoutStage();
+    this.applyCamera();
+    this.refreshPickerStyles();
+    this.stageTitle.text = getBodyProfile(s.id).label;
+    this.redrawShapes();
   }
 
-  private drawFloor(totalW: number): void {
+  private async ensureSubjectLoaded(index: number): Promise<void> {
+    const s = this.subjects[index];
+    if (!s || s.loaded) return;
+    const def = s.def;
+    if (def.kind !== 'sprite' || !s.sprite) {
+      s.loaded = true;
+      return;
+    }
+    try {
+      const outlined = await loadOutlinedTexture(
+        def.url,
+        OUTLINE_PX_CHARACTER,
+      );
+      const footY = paddedFootAnchorY(
+        def.footY,
+        outlined.contentHeight,
+        outlined.pad,
+      );
+      s.sprite.texture = outlined.texture;
+      s.sprite.anchor.set(0.5, footY);
+      s.sprite.scale.set(def.scale);
+      s.sprite.visible = true;
+    } catch {
+      s.sprite.texture = Texture.EMPTY;
+    }
+    s.loaded = true;
+  }
+
+  private refreshPickerStyles(): void {
+    for (let i = 0; i < this.pickerRows.length; i++) {
+      const row = this.pickerRows[i]!;
+      const active = i === this.activeIndex;
+      const w = PICKER_W - 20;
+      const h = row.label.height + 18;
+      row.bg
+        .clear()
+        .roundRect(0, 0, w, h, 8)
+        .fill({
+          color: active ? 0x2a4a68 : 0x1a2836,
+          alpha: 0.96,
+        })
+        .stroke({
+          width: active ? 1.8 : 1.2,
+          color: active ? 0x6ab0e8 : 0x3a5068,
+          alpha: active ? 1 : 0.85,
+        });
+      row.label.style.fill = active ? 0xffffff : 0xc8d4e0;
+    }
+  }
+
+  private layoutStage(): void {
+    this.drawFloor();
+  }
+
+  private drawFloor(): void {
     const g = this.floorGfx;
     g.clear();
-    const pad = 120;
-    const left = -totalW / 2 - pad;
-    const right = totalW / 2 + pad;
-    const y0 = 40;
+    const half = 220;
+    const left = -half;
+    const right = half;
+    const y0 = STAGE_FEET_Y;
     g.rect(left, y0 - 4, right - left, 8).fill({ color: FLOOR, alpha: 0.95 });
     for (let x = Math.ceil(left / 40) * 40; x <= right; x += 40) {
-      g.moveTo(x, y0 - 80)
-        .lineTo(x, y0 + 40)
+      g.moveTo(x, y0 - 120)
+        .lineTo(x, y0 + 50)
         .stroke({ width: 1, color: GRID, alpha: 0.35 });
     }
-    for (let y = y0 - 80; y <= y0 + 40; y += 40) {
+    for (let y = y0 - 120; y <= y0 + 50; y += 40) {
       g.moveTo(left, y)
         .lineTo(right, y)
         .stroke({ width: 1, color: GRID, alpha: 0.25 });
@@ -358,20 +485,50 @@ export class BodyEditScene extends Container implements GameScene {
 
   private applyCamera(): void {
     const z = this.zoom;
+    // 舞台中心偏右，给左侧列表留空
+    const stageCx = PICKER_W + (this.viewW - PICKER_W) / 2;
     this.worldRoot.scale.set(z);
     this.worldRoot.position.set(
-      this.viewW / 2 - this.camX * z,
+      stageCx - this.camX * z,
       this.viewH / 2 - this.camY * z,
     );
   }
 
   private paintBg(): void {
     this.bg.clear().rect(0, 0, this.viewW, this.viewH).fill({ color: BG });
+    // 左侧选择栏底板
+    this.bg
+      .rect(0, 0, PICKER_W, this.viewH)
+      .fill({ color: 0x0e141c, alpha: 0.92 });
+    this.bg
+      .moveTo(PICKER_W, 0)
+      .lineTo(PICKER_W, this.viewH)
+      .stroke({ width: 1.5, color: 0x2a3a4a, alpha: 0.9 });
   }
 
   private layoutUi(): void {
     this.hud.layout(this.viewW, this.viewH);
+    // 工具条避开左侧栏
+    this.hud.position.set(PICKER_W + 12, 12);
     this.backBtn.position.set(this.viewW - 100, 12);
+
+    this.pickerRoot.position.set(10, 56);
+    this.pickerTitle.position.set(0, 0);
+    this.pickerScroll.position.set(0, 28);
+    this.clampPickerScroll();
+
+    this.stageTitle.position.set(
+      PICKER_W + (this.viewW - PICKER_W) / 2,
+      56,
+    );
+  }
+
+  private clampPickerScroll(): void {
+    const listH = this.pickerScroll.height;
+    const viewH = Math.max(80, this.viewH - 100);
+    const minY = Math.min(0, viewH - listH);
+    this.pickerScrollY = Math.max(minY, Math.min(0, this.pickerScrollY));
+    this.pickerScroll.position.y = 28 + this.pickerScrollY;
   }
 
   private makeBackButton(): Container {
@@ -408,23 +565,30 @@ export class BodyEditScene extends Container implements GameScene {
     screenY: number,
   ): { x: number; y: number } {
     const z = Math.max(this.zoom, 1e-4);
+    const stageCx = PICKER_W + (this.viewW - PICKER_W) / 2;
     return {
-      x: this.camX + (screenX - this.viewW / 2) / z,
+      x: this.camX + (screenX - stageCx) / z,
       y: this.camY + (screenY - this.viewH / 2) / z,
     };
   }
 
   private collectTargets(): SelectableBody[] {
-    return this.subjects.map((s) => ({
-      profileId: s.id,
-      worldX: s.worldX,
-      worldY: s.worldY,
-    }));
+    const s = this.activeSubject();
+    if (!s) return [];
+    return [
+      {
+        profileId: s.id,
+        worldX: s.worldX,
+        worldY: s.worldY,
+      },
+    ];
   }
 
   private readonly onPointerDown = (e: {
     global: { x: number; y: number };
   }): void => {
+    // 点在左侧列表区域不进世界编辑
+    if (e.global.x < PICKER_W) return;
     const w = this.screenToWorld(e.global.x, e.global.y);
     this.editor.onPointerDown(w.x, w.y, this.collectTargets());
     this.redrawShapes();
@@ -448,8 +612,14 @@ export class BodyEditScene extends Container implements GameScene {
 
   private readonly onWheel = (e: WheelEvent): void => {
     e.preventDefault();
+    // 指针在左侧列表：滚动主体列表
+    if (e.clientX < PICKER_W + 8) {
+      this.pickerScrollY -= e.deltaY * 0.5;
+      this.clampPickerScroll();
+      return;
+    }
     const factor = e.deltaY > 0 ? 1 / 1.08 : 1.08;
-    this.zoom = Math.min(3, Math.max(0.55, this.zoom * factor));
+    this.zoom = Math.min(3.2, Math.max(0.55, this.zoom * factor));
     this.applyCamera();
   };
 
@@ -464,10 +634,10 @@ export class BodyEditScene extends Container implements GameScene {
     const g = this.shapeGfx;
     g.clear();
 
-    for (const s of this.subjects) {
-      const selected = this.editor.selectedId === s.id;
-      this.drawProfile(g, s.worldX, s.worldY, s.id, selected);
-    }
+    const s = this.activeSubject();
+    if (!s) return;
+
+    this.drawProfile(g, s.worldX, s.worldY, s.id, true);
 
     if (this.editor.selectedId && this.editor.selectedShape) {
       this.drawHandles(
@@ -491,13 +661,10 @@ export class BodyEditScene extends Container implements GameScene {
     const p = getBodyProfile(id);
     const mode = this.editor.editPart;
 
-    // 非当前编辑层：淡化只读；当前层：可强调
     for (let i = 0; i < p.solid.length; i++) {
       const layerActive = mode === 'solid';
       const shapeActive =
-        selected &&
-        layerActive &&
-        this.editor.selectedIndex === i;
+        selected && layerActive && this.editor.selectedIndex === i;
       this.drawShape(
         g,
         feetX,
@@ -510,9 +677,7 @@ export class BodyEditScene extends Container implements GameScene {
     for (let i = 0; i < p.hurt.length; i++) {
       const layerActive = mode === 'hurt';
       const shapeActive =
-        selected &&
-        layerActive &&
-        this.editor.selectedIndex === i;
+        selected && layerActive && this.editor.selectedIndex === i;
       this.drawShape(
         g,
         feetX,
@@ -576,7 +741,11 @@ export class BodyEditScene extends Container implements GameScene {
     this.dot(g, cx, cy, 0xffffff, true);
     if (s.type === 'circle') {
       this.dot(g, cx + s.r, cy, 0xffffff, true);
-      g.circle(cx, cy, s.r).stroke({ width: 1.5, color: 0xffffff, alpha: 0.45 });
+      g.circle(cx, cy, s.r).stroke({
+        width: 1.5,
+        color: 0xffffff,
+        alpha: 0.45,
+      });
     } else {
       this.dot(g, cx + s.w * 0.5, cy + s.h * 0.5, 0xffffff, true);
       this.dot(g, cx - s.w * 0.5, cy - s.h * 0.5, 0xffffff, false);
