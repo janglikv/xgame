@@ -7,6 +7,7 @@ import {
   GRASS_SPREAD_ATTEMPTS,
   GRASS_SPREAD_RADIUS_MAX,
   GRASS_SPREAD_RADIUS_MIN,
+  TREE_GRASS_COMPETITION_RADIUS,
 } from '../data/grassProfiles';
 import {
   HARVEST_MELEE_DAMAGE,
@@ -164,6 +165,8 @@ export class HarvestWorld {
 
         // 仅限真正的绿色草地（严格排除黄色沙滩与海岸）
         if (!isOnGreenLand(x, y, mapDef, 255)) continue;
+        // 树木遮荫/养分竞争拦截：树附近不能长草
+        if (this.isGrassTooCloseToTrees(x, y)) continue;
         // 严格检查 48px 最小密度间距
         if (this.isGrassTooClose(x, y, GRASS_MIN_SPACING)) continue;
 
@@ -190,6 +193,19 @@ export class HarvestWorld {
       const dx = g.worldX - x;
       const dy = g.worldY - y;
       if (dx * dx + dy * dy < min2) return true;
+    }
+    return false;
+  }
+
+  /** 检查坐标 (x, y) 是否距离任何树木过近（树木遮荫与养分竞争，草无法存活生长） */
+  isGrassTooCloseToTrees(x: number, y: number): boolean {
+    for (const tree of this.trees) {
+      const radius = TREE_GRASS_COMPETITION_RADIUS[tree.size] ?? 72;
+      const dx = tree.worldX - x;
+      const dy = tree.worldY - y;
+      if (dx * dx + dy * dy <= radius * radius) {
+        return true;
+      }
     }
     return false;
   }
@@ -398,6 +414,11 @@ export class HarvestWorld {
 
       // 精准绿色草地检查：一旦脱离草地落入黄色沙滩或海洋带，草无法存活，直接触发枯萎离场
       if (!isOnGreenLand(g.worldX, g.worldY, mapDef, 255)) {
+        g.wither();
+      }
+
+      // 树木遮荫与养分竞争检查：草在树附近（树冠遮挡范畴内）无法存活，直接触发枯萎离场
+      if (this.isGrassTooCloseToTrees(g.worldX, g.worldY)) {
         g.wither();
       }
 

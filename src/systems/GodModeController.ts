@@ -179,6 +179,8 @@ export class GodModeController {
     const mapDef = this.deps.getMapDef();
     // 仅真正的绿色草地上可种（严格排除沙滩与海）
     if (!isOnGreenLand(x, y, mapDef, 255)) return;
+    // 树木遮荫与养分竞争拦截：树附近不能种草
+    if (this.deps.harvest.isGrassTooCloseToTrees(x, y)) return;
     if (!mapDef.grasses) mapDef.grasses = [];
     const id = allocGrassId(
       size === 'small' ? 'gs' : size === 'large' ? 'bg' : 'grs',
