@@ -163,7 +163,7 @@ export class HarvestWorld {
         const y = source.worldY + Math.sin(angle) * dist;
 
         // 仅限真正的绿色草地（严格排除黄色沙滩与海岸）
-        if (!isOnGreenLand(x, y, mapDef, 85)) continue;
+        if (!isOnGreenLand(x, y, mapDef, 255)) continue;
         // 严格检查 48px 最小密度间距
         if (this.isGrassTooClose(x, y, GRASS_MIN_SPACING)) continue;
 
@@ -397,7 +397,7 @@ export class HarvestWorld {
       if (!g) continue;
 
       // 精准绿色草地检查：一旦脱离草地落入黄色沙滩或海洋带，草无法存活，直接触发枯萎离场
-      if (!isOnGreenLand(g.worldX, g.worldY, mapDef, 85)) {
+      if (!isOnGreenLand(g.worldX, g.worldY, mapDef, 255)) {
         g.wither();
       }
 

@@ -327,7 +327,7 @@ export function isOnGreenLand(
   x: number,
   y: number,
   def: LevelMapDef,
-  greenMargin = 85,
+  greenMargin = 255,
 ): boolean {
   const land = landRectOf(def);
   if (land.w <= 0 || land.h <= 0) return false;

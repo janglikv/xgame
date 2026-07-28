@@ -317,7 +317,7 @@ export class WorldMap extends Container {
   private drawLandMask(g: Graphics): void {
     const r = this.landRect();
     if (r.w <= 0 || r.h <= 0) return;
-    const soilContour = generateOrganicContour(r, -90, this.seed, 220);
+    const soilContour = generateOrganicContour(r, -270, this.seed, 220);
     if (soilContour.length < 3) return;
 
     g.beginPath();
@@ -342,8 +342,8 @@ export class WorldMap extends Container {
     const r = this.landRect();
     if (r.w <= 0 || r.h <= 0) return;
 
-    // 1) 泥土草根过渡包边 - 向内缩进 -90px
-    const soilContour = generateOrganicContour(r, -90, this.seed, 220);
+    // 1) 泥土草根过渡包边 - 向内缩进 -270px (沙滩扩大 3 倍)
+    const soilContour = generateOrganicContour(r, -270, this.seed, 220);
     if (soilContour.length < 3) return;
 
     g.beginPath();
@@ -354,8 +354,8 @@ export class WorldMap extends Container {
     g.closePath();
     g.fill({ color: 0x5b9d36, alpha: 0.95 });
 
-    // 2) 岛屿主草地 - 向内缩进 -96px，留出超大面积阳光金沙滩！
-    const grassContour = generateOrganicContour(r, -96, this.seed, 220);
+    // 2) 岛屿主草地 - 向内缩进 -288px，留出 3 倍面积超辽阔阳光金沙滩！
+    const grassContour = generateOrganicContour(r, -288, this.seed, 220);
     g.beginPath();
     g.moveTo(grassContour[0]!.x, grassContour[0]!.y);
     for (let i = 1; i < grassContour.length; i++) {
@@ -366,7 +366,7 @@ export class WorldMap extends Container {
 
     // 3) 程序化低频噪声草色斑块 (Grass Noise Patches Field) - 消除单色平淡感
     const step = 36;
-    const margin = 110;
+    const margin = 310;
     const startX = r.x + margin;
     const endX = r.x + r.w - margin;
     const startY = r.y + margin;
@@ -396,8 +396,8 @@ export class WorldMap extends Container {
       }
     }
 
-    // 4) 草地中央柔和阳光光斑 - 向内缩进 -130px
-    const innerGrass = generateOrganicContour(r, -130, this.seed, 220);
+    // 4) 草地中央柔和阳光光斑 - 向内缩进 -390px
+    const innerGrass = generateOrganicContour(r, -390, this.seed, 220);
     g.beginPath();
     g.moveTo(innerGrass[0]!.x, innerGrass[0]!.y);
     for (let i = 1; i < innerGrass.length; i++) {

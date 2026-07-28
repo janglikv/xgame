@@ -191,8 +191,8 @@ export class OceanLayer extends Container {
     // 3.5) 沙滩程序化低频 Noise 斑驳 (Dune Color Patches Field)
     this.drawSandNoisePatches(g);
 
-    // 4) 亮沙边高光与细腻内金沙
-    const innerBeachContour = generateOrganicContour(this.land, -35, this.seed, 220);
+    // 4) 亮沙边高光与细腻内金沙 (扩大 3 倍)
+    const innerBeachContour = generateOrganicContour(this.land, -105, this.seed, 220);
     drawPolygon(g, innerBeachContour, PALETTE.lightSand, 0.85);
 
     // 5) 大密度沙滩颗粒与贝壳碎石细致噪点 (Sand Grain Noise Particles & Shells)
@@ -207,8 +207,8 @@ export class OceanLayer extends Container {
 
     // 沙滩与浅海交界外圈 (offset 56)
     const outerContour = generateOrganicContour(this.land, 56, this.seed, 220);
-    // 草地边界内圈 (offset -90)
-    const innerContour = generateOrganicContour(this.land, -90, this.seed, 220);
+    // 草地边界内圈 (offset -270，扩大 3 倍)
+    const innerContour = generateOrganicContour(this.land, -270, this.seed, 220);
 
     g.clear();
     g.beginPath();
@@ -280,16 +280,16 @@ export class OceanLayer extends Container {
       0x4a3417,              // 深调暗晶微粒
     ];
 
-    const numGrains = 2000;
+    const numGrains = 4500;
     const coastlineLen = this.organicCoastlineBase.length;
 
     for (let i = 0; i < numGrains; i++) {
       const idx = Math.floor(rng() * coastlineLen);
       const pt = this.organicCoastlineBase[idx]!;
 
-      const rOffset = -40 + rng() * 110;
+      const rOffset = -120 + rng() * 320;
       const angle = rng() * Math.PI * 2;
-      const rDist = rng() * 18;
+      const rDist = rng() * 30;
 
       const sx = pt.x + Math.cos(angle) * rDist;
       const sy = pt.y + Math.sin(angle) * rDist + rOffset * 0.5;

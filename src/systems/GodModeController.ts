@@ -178,7 +178,7 @@ export class GodModeController {
   placeGrass(x: number, y: number, size: GrassSize = 'medium'): void {
     const mapDef = this.deps.getMapDef();
     // 仅真正的绿色草地上可种（严格排除沙滩与海）
-    if (!isOnGreenLand(x, y, mapDef, 85)) return;
+    if (!isOnGreenLand(x, y, mapDef, 255)) return;
     if (!mapDef.grasses) mapDef.grasses = [];
     const id = allocGrassId(
       size === 'small' ? 'gs' : size === 'large' ? 'bg' : 'grs',
