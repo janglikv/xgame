@@ -392,9 +392,15 @@ export class HarvestWorld {
     const overcrowdDistSq =
       GRASS_OVERCROWD_CHECK_RADIUS * GRASS_OVERCROWD_CHECK_RADIUS;
 
+    const mapDef = this.hooks.getMapDef();
     for (let i = 0; i < grassCount; i++) {
       const g = this.grasses[i];
       if (!g) continue;
+
+      // 沙滩/海洋环境检查：沙滩上缺乏养分与水分，小草无法存活，直接触发枯萎死亡
+      if (!isOnLand(g.worldX, g.worldY, mapDef, GRASS_GREEN_LAND_MARGIN)) {
+        g.wither();
+      }
 
       // 统计周围 90px 范围内的同伴草数量
       let neighbors = 0;

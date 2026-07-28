@@ -72,9 +72,9 @@ export const GRASS_OVERCROWD_MAX_NEIGHBORS = 5;
 
 /**
  * 判定「绿地」时相对海岸的内缩（世界像素）。
- * 适度放宽绿地边界，让草能在广阔区域自然繁衍。
+ * 金沙滩约在岸线内侧 ~96px，小于此距离的位置为沙滩/海岸。
  */
-export const GRASS_GREEN_LAND_MARGIN = 40;
+export const GRASS_GREEN_LAND_MARGIN = 96;
 
 /** 场上草丛数量上限，防止无限膨胀拖垮性能 */
 export const GRASS_MAX_COUNT = 1200;
