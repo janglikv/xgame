@@ -297,25 +297,34 @@ export class HarvestWorld {
   }
 
   /**
-   * 牛马等吃掉一丛草：从实体层与地图草稿移除并持久化。
-   * 接受 GrassEntity 或同源引用。
+   * 牛马啃草：体型缩小一级（大→中→小），小草不消失。
+   * 写回地图草稿尺寸并持久化。
+   * @returns 啃之前的体型；失败返回 null
    */
-  consumeGrass(grass: GrassEntity | { grassId: string }): void {
+  consumeGrass(
+    grass: GrassEntity | { grassId: string },
+  ): 'small' | 'medium' | 'large' | null {
     const entity =
       grass instanceof GrassEntity
         ? grass
         : this.grasses.find((g) => g === grass || g.grassId === grass.grassId);
-    if (!entity) return;
+    if (!entity || !entity.isGrazable) return null;
+
+    const before = entity.graze();
+    if (!before) return null;
 
     const mapDef = this.hooks.getMapDef();
     if (entity.grassId && mapDef.grasses) {
-      mapDef.grasses = mapDef.grasses.filter(
-        (g) => grassIdOf(g) !== entity.grassId,
+      const found = mapDef.grasses.find(
+        (g) => grassIdOf(g) === entity.grassId,
       );
+      if (found) {
+        found.size = entity.size;
+      }
     }
-    this.removeGrassEntity(entity);
     this.hooks.afterWorldChange();
     this.hooks.persistMapDraft();
+    return before;
   }
 
   /** 掉落物漂浮 + 靠近自动进包 */

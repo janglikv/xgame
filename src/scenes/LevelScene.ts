@@ -438,9 +438,7 @@ export class LevelScene extends Container implements GameScene {
         const found = this.harvest.pickups.find((item) => item === p);
         if (found) this.harvest.consumePickup(found);
       },
-      consumeGrass: (g) => {
-        this.harvest.consumeGrass(g);
-      },
+      consumeGrass: (g) => this.harvest.consumeGrass(g),
       removeCreature: (creature) => {
         this.removeCreatureEntity(creature);
       },

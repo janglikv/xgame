@@ -265,8 +265,13 @@ export type CreatureEcologyContext = {
     worldY: number;
     isCollected: boolean;
   }) => void;
-  /** 吃掉一丛草（从世界与地图草稿移除） */
-  consumeGrass: (grass: EcologyGrass) => void;
+  /**
+   * 啃一丛草（变小不消失）。
+   * 返回啃之前的体型；不可啃时 null。
+   */
+  consumeGrass: (
+    grass: EcologyGrass,
+  ) => 'small' | 'medium' | 'large' | null;
   /** 移除死亡生物（猪吃鸡 / 饿死等） */
   removeCreature: (creature: Spider) => void;
 };

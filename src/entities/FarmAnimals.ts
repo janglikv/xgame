@@ -827,63 +827,76 @@ type HerbivoreEco = {
   eatRange: number;
   /** 觅食移速 */
   forageSpeed: number;
-  /** 吃掉不同体型草减少的饥饿 */
+  /** 啃不同体型草（按啃前体型）减少的饥饿 */
   grassFeed: { small: number; medium: number; large: number };
-  /** 开局饥饿（方便观察觅食） */
+  /** 开局饥饿 */
   startHunger: number;
 };
 
 const COW_ECO: HerbivoreEco = {
-  /** ~40 秒饿死 */
-  hungerPerSec: 0.025,
-  seekGrassAt: 0.25,
-  grassSense: 560,
-  eatRange: 36,
-  forageSpeed: 78,
-  grassFeed: { small: 0.28, medium: 0.45, large: 0.7 },
-  startHunger: 0.35,
+  hungerPerSec: 0.02,
+  seekGrassAt: 0.28,
+  grassSense: 580,
+  eatRange: 38,
+  forageSpeed: 72,
+  grassFeed: { small: 0.22, medium: 0.4, large: 0.62 },
+  startHunger: 0.25,
 };
 
 const HORSE_ECO: HerbivoreEco = {
-  /** ~32 秒饿死，比牛更急 */
-  hungerPerSec: 0.031,
-  seekGrassAt: 0.22,
-  grassSense: 620,
-  eatRange: 34,
-  forageSpeed: 118,
-  grassFeed: { small: 0.22, medium: 0.38, large: 0.58 },
-  startHunger: 0.35,
+  hungerPerSec: 0.024,
+  seekGrassAt: 0.26,
+  grassSense: 640,
+  eatRange: 36,
+  forageSpeed: 108,
+  grassFeed: { small: 0.18, medium: 0.34, large: 0.52 },
+  startHunger: 0.25,
 };
 
+/** 一头牛/马认领的草数量 */
+const PASTURE_GRASS_COUNT = 4;
+
 /**
- * 草丛舒适度：食草动物喜欢站在草丛「内部」
- * （邻草多、离密度中心近），而不是贴着外缘。
+ * 草场舒适度：在自己认领的 4 棵草内部活动。
  */
 const GRASS_COMFORT = {
-  /** 聚成一丛的邻草半径 */
-  clusterR: 210,
-  /** 最舒适的内核半径（贴密度中心） */
+  /** 组牧场时邻草搜索半径 */
+  clusterR: 200,
   coreR: 48,
-  /** 草丛内踱步半径（仍偏内部，别逛到外圈） */
-  strollR: 88,
-  /** 算进「草场」的距离（到舒适中心） */
-  enterR: 175,
-  /** 判定某点被草包围的检测半径 */
-  nestR: 95,
-  /** 航点：每多一株近邻草的加分 */
+  strollR: 92,
+  enterR: 180,
+  nestR: 100,
   densityScore: 42,
-  /** 航点：靠近舒适中心的加分（按距离衰减） */
   centerScore: 55,
-  /** 舒适内核内额外停顿 */
   restPauseMin: 0.55,
   restPauseMax: 1.9,
-  /** 草丛内踱步速度（比赶路慢，像在啃草） */
   strollSpeed: 46,
-  /** 每帧向舒适中心的轻吸力（世界像素/秒） */
   centerPull: 28,
-  /** 采样航点次数 */
   waypointSamples: 10,
 } as const;
+
+/** grassId → 认领的食草动物（牛马互斥，一草一主） */
+const grassClaims = new Map<string, GrassEater>();
+
+function releaseGrassClaims(owner: GrassEater): void {
+  for (const [id, who] of grassClaims) {
+    if (who === owner) grassClaims.delete(id);
+  }
+}
+
+function isGrassFreeOrMine(
+  grassId: string,
+  self: GrassEater,
+): boolean {
+  if (!grassId) return false;
+  const owner = grassClaims.get(grassId);
+  if (!owner || owner === self) return true;
+  if (!owner.isAlive || owner.destroyed) {
+    grassClaims.delete(grassId);
+    return true;
+  }
+  return false;
+}
 
 type GrassPatch = {
   members: CreatureEcologyContext['grasses'][number][];
@@ -892,11 +905,13 @@ type GrassPatch = {
 };
 
 /**
- * 食草基类：有草就钻进草丛内部待着；路过啃一口；没草就到处找；饿死。
+ * 食草基类：认领 4 棵草作牧场；在内部踱步啃草（草变小不消失）；饿死。
  */
 abstract class GrassEater extends Spider {
   private hunger: number;
   private readonly ecoCfg: HerbivoreEco;
+  /** 认领的草 id（最多 4） */
+  private pastureIds: string[] = [];
 
   protected constructor(
     worldX: number,
@@ -919,6 +934,26 @@ abstract class GrassEater extends Spider {
     return this.hunger;
   }
 
+  override update(
+    deltaMS: number,
+    playerWorldX: number,
+    playerWorldY: number,
+    playerBodyProfileId: BodyProfileId | null = null,
+    ecology: CreatureEcologyContext | null = null,
+  ) {
+    if (!this.isAlive || this.destroyed) {
+      releaseGrassClaims(this);
+      this.pastureIds = [];
+    }
+    return super.update(
+      deltaMS,
+      playerWorldX,
+      playerWorldY,
+      playerBodyProfileId,
+      ecology,
+    );
+  }
+
   protected override updateAI(
     dt: number,
     playerX: number,
@@ -934,6 +969,8 @@ abstract class GrassEater extends Spider {
 
     const eco = this.ecology;
     if (eco && this.hunger >= 1) {
+      releaseGrassClaims(this);
+      this.pastureIds = [];
       this.applyDamage(this.maximumHp + 1);
       if (!this.isAlive) {
         eco.removeCreature(this);
@@ -948,20 +985,20 @@ abstract class GrassEater extends Spider {
     );
 
     if (eco) {
-      const patch = this.findComfortPatch(eco, hs.sense);
+      const patch = this.refreshPasture(eco, hs.sense);
       if (patch) {
         return this.liveInGrassPatch(dt, patch, eco, hs);
       }
     }
 
-    // 没草：日常也到处走；越饿走得越远越快
+    // 没有空闲牧场：找草
     return {
       moved: this.updateSearchRoam(dt, {
         radius: hs.searchRadius,
         speed: hs.panicking ? hs.searchSpeed : ANIMAL_ROAM.idleSpeed,
         pauseMin: hs.panicking ? hs.pauseMin : ANIMAL_ROAM.idlePauseMin,
         pauseMax: hs.panicking ? hs.pauseMax : ANIMAL_ROAM.idlePauseMax,
-        preferFar: hs.panicking ? 0.78 : 0.6,
+        preferFar: hs.panicking ? 0.72 : 0.58,
         leisurely: !hs.panicking,
       }),
       attackHit: null,
@@ -969,78 +1006,116 @@ abstract class GrassEater extends Spider {
   }
 
   /**
-   * 找舒适草丛：优先邻草多的密区，中心取密度加权质心。
+   * 维护 4 草牧场：只占无人认领的草；牛马之间也互斥。
    */
-  private findComfortPatch(
+  private refreshPasture(
     eco: CreatureEcologyContext,
     senseRange: number,
   ): GrassPatch | null {
-    const grasses = eco.grasses;
-    if (grasses.length === 0) return null;
-
-    // 种子：感知内、邻草越多越好，略兼顾距离与同伴抢食
-    let seed: CreatureEcologyContext['grasses'][number] | null = null;
-    let bestSeedScore = -Infinity;
-    for (const g of grasses) {
-      const d = Math.hypot(g.worldX - this.worldX, g.worldY - this.worldY);
-      if (d >= senseRange) continue;
-      let neighbors = 0;
-      for (const o of grasses) {
-        if (o === g) continue;
-        if (
-          Math.hypot(o.worldX - g.worldX, o.worldY - g.worldY) <
-          GRASS_COMFORT.clusterR
-        ) {
-          neighbors += 1;
-        }
+    // 同步已有认领：草还在且仍归自己
+    const stillMembers: CreatureEcologyContext['grasses'][number][] = [];
+    for (const id of this.pastureIds) {
+      const g = eco.grasses.find((x) => x.grassId === id);
+      if (!g) {
+        grassClaims.delete(id);
+        continue;
       }
-      let crowd = 0;
-      for (const c of eco.creatures) {
-        if (c === this || !c.isAlive) continue;
-        if (c.label !== 'Cow' && c.label !== 'Horse') continue;
-        if (Math.hypot(c.worldX - g.worldX, c.worldY - g.worldY) < 100) {
-          crowd += 1;
-        }
-      }
-      // 密草丛加分，距离与抢食扣分
-      const score = neighbors * 55 - d * 0.35 - crowd * 40 + Math.random() * 8;
-      if (score > bestSeedScore) {
-        bestSeedScore = score;
-        seed = g;
-      }
+      if (!isGrassFreeOrMine(id, this)) continue;
+      grassClaims.set(id, this);
+      stillMembers.push(g);
     }
-    if (!seed) return null;
+    this.pastureIds = stillMembers.map((g) => g.grassId);
 
-    const members: CreatureEcologyContext['grasses'][number][] = [];
+    // 补满到 4 棵：在现有中心附近找空闲草
+    if (this.pastureIds.length < PASTURE_GRASS_COUNT) {
+      this.fillPasture(eco, senseRange, stillMembers);
+    }
+
+    if (this.pastureIds.length === 0) return null;
+
+    const members = this.pastureIds
+      .map((id) => eco.grasses.find((g) => g.grassId === id))
+      .filter((g): g is CreatureEcologyContext['grasses'][number] => !!g);
+
+    if (members.length === 0) {
+      releaseGrassClaims(this);
+      this.pastureIds = [];
+      return null;
+    }
+
     let sumX = 0;
     let sumY = 0;
-    let weightSum = 0;
-    for (const g of grasses) {
-      const d = Math.hypot(g.worldX - seed.worldX, g.worldY - seed.worldY);
-      if (d > GRASS_COMFORT.clusterR) continue;
-      members.push(g);
-      // 大草权重更高，把舒适中心拉向更「实」的内部
+    let wSum = 0;
+    for (const g of members) {
       const w =
         g.size === 'large' ? 1.5 : g.size === 'medium' ? 1.1 : 0.85;
       sumX += g.worldX * w;
       sumY += g.worldY * w;
-      weightSum += w;
-    }
-    if (members.length === 0) {
-      members.push(seed);
-      weightSum = 1;
-      sumX = seed.worldX;
-      sumY = seed.worldY;
+      wSum += w;
     }
 
     return {
       members,
-      centerX: sumX / weightSum,
-      centerY: sumY / weightSum,
+      centerX: sumX / wSum,
+      centerY: sumY / wSum,
     };
   }
 
-  /** 某点被草包围程度（越高越像草丛内部） */
+  /** 从空闲草中凑满 4 棵 */
+  private fillPasture(
+    eco: CreatureEcologyContext,
+    senseRange: number,
+    current: CreatureEcologyContext['grasses'][number][],
+  ): void {
+    const free = eco.grasses.filter(
+      (g) =>
+        g.grassId &&
+        isGrassFreeOrMine(g.grassId, this) &&
+        !this.pastureIds.includes(g.grassId),
+    );
+    if (free.length === 0) return;
+
+    // 有现有成员：围着它们补；否则以自己为中心找种子
+    let seed: CreatureEcologyContext['grasses'][number] | null =
+      current[0] ?? null;
+    if (!seed) {
+      let bestD = senseRange;
+      for (const g of free) {
+        const d = Math.hypot(g.worldX - this.worldX, g.worldY - this.worldY);
+        if (d < bestD) {
+          bestD = d;
+          seed = g;
+        }
+      }
+    }
+    if (!seed) return;
+
+    // 以种子为中心，按距离收纳空闲草直到 4
+    const ordered = free
+      .map((g) => ({
+        g,
+        d: Math.hypot(g.worldX - seed!.worldX, g.worldY - seed!.worldY),
+      }))
+      .filter((x) => x.d <= GRASS_COMFORT.clusterR * 1.35)
+      .sort((a, b) => a.d - b.d);
+
+    // 种子优先
+    if (seed.grassId && isGrassFreeOrMine(seed.grassId, this)) {
+      if (!this.pastureIds.includes(seed.grassId)) {
+        this.pastureIds.push(seed.grassId);
+        grassClaims.set(seed.grassId, this);
+      }
+    }
+
+    for (const { g } of ordered) {
+      if (this.pastureIds.length >= PASTURE_GRASS_COUNT) break;
+      if (!g.grassId || this.pastureIds.includes(g.grassId)) continue;
+      if (!isGrassFreeOrMine(g.grassId, this)) continue;
+      this.pastureIds.push(g.grassId);
+      grassClaims.set(g.grassId, this);
+    }
+  }
+
   private grassNestScore(
     x: number,
     y: number,
@@ -1052,7 +1127,6 @@ abstract class GrassEater extends Spider {
     for (const g of members) {
       const d = Math.hypot(g.worldX - x, g.worldY - y);
       if (d <= GRASS_COMFORT.nestR) {
-        // 越贴单株草略加分，但主要靠数量
         near += 1 + (1 - d / GRASS_COMFORT.nestR) * 0.35;
       }
     }
@@ -1063,7 +1137,6 @@ abstract class GrassEater extends Spider {
     return near * GRASS_COMFORT.densityScore + centerBonus;
   }
 
-  /** 在草丛内部采踱步点：偏好密区与舒适中心，躲开边缘 */
   private pickGrassInteriorWaypoint(patch: GrassPatch): void {
     const eco = this.ecology;
     let bestX = patch.centerX;
@@ -1071,7 +1144,6 @@ abstract class GrassEater extends Spider {
     let bestScore = -Infinity;
 
     for (let i = 0; i < GRASS_COMFORT.waypointSamples; i++) {
-      // 多数点落在内核～stroll 内环，很少采外缘
       const u = Math.random();
       const band =
         u < 0.55
@@ -1115,7 +1187,7 @@ abstract class GrassEater extends Spider {
     this.patrolTargetY = bestY;
   }
 
-  /** 待在草丛里：往舒适中心靠，内部踱步，路过就啃 */
+  /** 在自己的 4 草牧场内活动；啃草变小不消失 */
   private liveInGrassPatch(
     dt: number,
     patch: GrassPatch,
@@ -1138,23 +1210,37 @@ abstract class GrassEater extends Spider {
 
     const tryEat = (): boolean => {
       if (!hungry) return false;
-      // 吃草丛里最近一株够得着的
       let best: CreatureEcologyContext['grasses'][number] | null = null;
       let bestD = cfg.eatRange;
       for (const g of patch.members) {
-        const still = eco.grasses.some(
-          (x) => x === g || x.grassId === g.grassId,
+        // 只啃自己牧场里的草
+        if (!g.grassId || !this.pastureIds.includes(g.grassId)) continue;
+        const live = eco.grasses.find((x) => x.grassId === g.grassId);
+        if (!live) continue;
+        // GrassEntity 才有 isGrazable
+        const grazable =
+          'isGrazable' in live
+            ? (live as { isGrazable: boolean }).isGrazable
+            : true;
+        if (!grazable) continue;
+        const d = Math.hypot(
+          live.worldX - this.worldX,
+          live.worldY - this.worldY,
         );
-        if (!still) continue;
-        const d = Math.hypot(g.worldX - this.worldX, g.worldY - this.worldY);
         if (d <= bestD) {
           bestD = d;
-          best = g;
+          best = live;
         }
       }
       if (!best) return false;
-      const feed = cfg.grassFeed[best.size] ?? cfg.grassFeed.medium;
-      eco.consumeGrass(best);
+      // 按啃前体型回饱；草只会变小
+      const sizeBefore = best.size;
+      const result = eco.consumeGrass(best);
+      if (!result) return false;
+      const feed =
+        cfg.grassFeed[result] ??
+        cfg.grassFeed[sizeBefore] ??
+        cfg.grassFeed.medium;
       this.hunger = Math.max(0, this.hunger - feed);
       return true;
     };
@@ -1163,7 +1249,6 @@ abstract class GrassEater extends Spider {
       return { moved: false, attackHit: null };
     }
 
-    // 还在草丛外：直奔舒适中心（不是单株边缘）
     if (distCenter > GRASS_COMFORT.enterR) {
       this.aiState = 'chase';
       this.patrolPause = 0;
@@ -1180,7 +1265,6 @@ abstract class GrassEater extends Spider {
 
     this.aiState = 'patrol';
 
-    // 航点若落在草丛外（刚从搜索态切过来），立刻重采内部点
     const targetOut =
       Math.hypot(
         this.patrolTargetX - patch.centerX,
@@ -1192,7 +1276,6 @@ abstract class GrassEater extends Spider {
       this.patrolPause = 0;
     }
 
-    // 轻吸向舒适中心（不算走路，避免站着时仍播走路晃动）
     if (distCenter > GRASS_COMFORT.coreR * 0.85) {
       const pull = GRASS_COMFORT.centerPull * (hungry ? 1.15 : 1) * dt;
       const inv = 1 / distCenter;
@@ -1200,7 +1283,6 @@ abstract class GrassEater extends Spider {
       this.worldY += (patch.centerY - this.worldY) * inv * pull;
     }
 
-    // 舒适内核：更爱停着反刍；外缘则快点走进去
     const cozy = nestHere >= GRASS_COMFORT.densityScore * 1.2;
     const pauseMin = cozy
       ? GRASS_COMFORT.restPauseMin

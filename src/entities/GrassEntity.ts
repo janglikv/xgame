@@ -6,6 +6,7 @@ import {
   GRASS_SPREAD_TIME_SEC,
   grassBodyShapeScale,
   nextGrassSize,
+  prevGrassSize,
 } from '../data/grassProfiles';
 import { drawGrassLocal } from '../world/GrassPatch';
 
@@ -45,6 +46,8 @@ export class GrassEntity extends Container {
   private growthTimer: number | null = null;
   private spreadTimer: number | null = null;
   private growthAnimT = 0;
+  /** 被啃后的冷却（秒），期间不可再啃 */
+  private grazeLockT = 0;
   private onGrown?: (grass: GrassEntity) => void;
   private onSpread?: (grass: GrassEntity) => void;
 
@@ -119,15 +122,25 @@ export class GrassEntity extends Container {
     }
   }
 
+  /** 是否可被牛马啃食（冷却中不可） */
+  get isGrazable(): boolean {
+    return this.grazeLockT <= 0;
+  }
+
+  private applySize(size: GrassSize): void {
+    this.size = size;
+    const profile = GRASS_SIZE_PROFILE[size];
+    this.bodyShapeScale = grassBodyShapeScale(size);
+    this.gfx.tint = profile.tint;
+    this.gfx.scale.set(profile.scale);
+  }
+
   /** 手动或倒计时触发生长 */
   grow(): boolean {
     const next = nextGrassSize(this.size);
     if (!next) return false;
 
-    this.size = next;
-    const profile = GRASS_SIZE_PROFILE[next];
-    this.bodyShapeScale = grassBodyShapeScale(next);
-    this.gfx.tint = profile.tint;
+    this.applySize(next);
     this.resetGrowthTimer();
     this.resetSpreadTimer();
 
@@ -135,6 +148,26 @@ export class GrassEntity extends Container {
     this.growthAnimT = 0.4;
     this.onGrown?.(this);
     return true;
+  }
+
+  /**
+   * 被啃食：体型大→中→小，小草只抖一下不消失。
+   * @returns 啃之前的体型（用于回饱量）
+   */
+  graze(): GrassSize | null {
+    if (this.grazeLockT > 0) return null;
+    const before = this.size;
+    const smaller = prevGrassSize(this.size);
+    if (smaller) {
+      this.applySize(smaller);
+    }
+    // 冷却 + 回弹动画；小草也会被「轻啃」后慢慢再长
+    this.grazeLockT = 5.5 + Math.random() * 1.5;
+    this.growthAnimT = 0.35;
+    this.resetGrowthTimer();
+    this.resetSpreadTimer();
+    this.onGrown?.(this);
+    return before;
   }
 
   /** 脚底坐标写到显示与 zIndex */
@@ -148,6 +181,10 @@ export class GrassEntity extends Container {
     const dt = deltaMS / 1000;
     this.swayT += dt;
     this.syncToWorld();
+
+    if (this.grazeLockT > 0) {
+      this.grazeLockT = Math.max(0, this.grazeLockT - dt);
+    }
 
     // 自动生长计时
     if (this.growthTimer !== null) {

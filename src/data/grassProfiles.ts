@@ -72,3 +72,10 @@ export function nextGrassSize(size: GrassSize): GrassSize | null {
   if (size === 'medium') return 'large';
   return null;
 }
+
+/** 被啃后体型降一级；已是小草则保持 small（不消失） */
+export function prevGrassSize(size: GrassSize): GrassSize | null {
+  if (size === 'large') return 'medium';
+  if (size === 'medium') return 'small';
+  return null;
+}
