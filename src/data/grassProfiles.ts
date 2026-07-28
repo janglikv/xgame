@@ -57,11 +57,11 @@ export const GRASS_SPREAD_RADIUS_MAX = 220;
 /** 草丛之间最小间距（世界像素）：拉大至 48px，严格控制密度避免过密挤作一团 */
 export const GRASS_MIN_SPACING = 48;
 
-/** 树木对草的遮荫/养分竞争死区基础半径（按树体型：小树 48 / 中树 72 / 大树 110） */
+/** 树木对草的遮荫/养分竞争死区基础半径（按树体型：小树 85 / 中树 135 / 大树 210） */
 export const TREE_GRASS_COMPETITION_RADIUS: Record<string, number> = {
-  sapling: 48,
-  medium: 72,
-  large: 110,
+  sapling: 85,
+  medium: 135,
+  large: 210,
 };
 
 /** 各体型基础自然寿命（秒） */
