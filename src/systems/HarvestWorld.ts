@@ -296,6 +296,28 @@ export class HarvestWorld {
     this.grasses.splice(idx, 1);
   }
 
+  /**
+   * 牛马等吃掉一丛草：从实体层与地图草稿移除并持久化。
+   * 接受 GrassEntity 或同源引用。
+   */
+  consumeGrass(grass: GrassEntity | { grassId: string }): void {
+    const entity =
+      grass instanceof GrassEntity
+        ? grass
+        : this.grasses.find((g) => g === grass || g.grassId === grass.grassId);
+    if (!entity) return;
+
+    const mapDef = this.hooks.getMapDef();
+    if (entity.grassId && mapDef.grasses) {
+      mapDef.grasses = mapDef.grasses.filter(
+        (g) => grassIdOf(g) !== entity.grassId,
+      );
+    }
+    this.removeGrassEntity(entity);
+    this.hooks.afterWorldChange();
+    this.hooks.persistMapDraft();
+  }
+
   /** 掉落物漂浮 + 靠近自动进包 */
   update(deltaMS: number, playerX: number, playerY: number): void {
     const r2 = PICKUP_RADIUS * PICKUP_RADIUS;

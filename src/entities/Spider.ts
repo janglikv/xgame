@@ -201,8 +201,16 @@ export type SpiderUpdateResult = {
   attackHit: SpiderAttackHit | null;
 };
 
+/** 生态可食草丛（牛马等）；结构与 GrassEntity 对齐，避免 Spider 依赖草实体类 */
+export type EcologyGrass = {
+  worldX: number;
+  worldY: number;
+  size: 'small' | 'medium' | 'large';
+  grassId: string;
+};
+
 /**
- * 生物生态上下文（猪觅食等）：由场景每帧注入。
+ * 生物生态上下文（猪觅食、牛马吃草等）：由场景每帧注入。
  * 不强制所有单位使用。
  */
 export type CreatureEcologyContext = {
@@ -213,6 +221,8 @@ export type CreatureEcologyContext = {
     worldY: number;
     isCollected: boolean;
   }>;
+  /** 场上草地（牛马觅食） */
+  grasses: ReadonlyArray<EcologyGrass>;
   /** 场上其它生物（含自己，调用方过滤） */
   creatures: ReadonlyArray<Spider>;
   /** 吃掉地上的苹果等 */
@@ -222,7 +232,9 @@ export type CreatureEcologyContext = {
     worldY: number;
     isCollected: boolean;
   }) => void;
-  /** 移除死亡生物（猪吃鸡等） */
+  /** 吃掉一丛草（从世界与地图草稿移除） */
+  consumeGrass: (grass: EcologyGrass) => void;
+  /** 移除死亡生物（猪吃鸡 / 饿死等） */
   removeCreature: (creature: Spider) => void;
 };
 

@@ -422,14 +422,18 @@ export class LevelScene extends Container implements GameScene {
     };
   }
 
-  /** 猪等生物的觅食上下文（每帧重建） */
+  /** 猪 / 牛 / 马等生物的觅食上下文（每帧重建） */
   private buildEcologyContext(): CreatureEcologyContext {
     return {
       pickups: this.harvest.pickups,
+      grasses: this.harvest.grasses,
       creatures: this.spiders,
       consumePickup: (p) => {
         const found = this.harvest.pickups.find((item) => item === p);
         if (found) this.harvest.consumePickup(found);
+      },
+      consumeGrass: (g) => {
+        this.harvest.consumeGrass(g);
       },
       removeCreature: (creature) => {
         this.removeCreatureEntity(creature);
@@ -671,9 +675,10 @@ export class LevelScene extends Container implements GameScene {
 
     if (!god) {
       const ecology = this.buildEcologyContext();
-      for (let si = 0; si < this.spiders.length; si++) {
-        const spider = this.spiders[si]!;
-        if (!spider.isAlive) continue;
+      // 快照：生态可能中途 removeCreature（吃鸡 / 饿死），避免下标错位
+      const tickList = this.spiders.slice();
+      for (const spider of tickList) {
+        if (!spider.isAlive || !this.spiders.includes(spider)) continue;
         const sFromX = spider.worldX;
         const sFromY = spider.worldY;
         const result = spider.update(
@@ -683,6 +688,8 @@ export class LevelScene extends Container implements GameScene {
           player.bodyProfileId,
           ecology,
         );
+        const si = this.spiders.indexOf(spider);
+        if (si < 0 || !spider.isAlive) continue;
         this.applySpiderSolid(spider, sFromX, sFromY, si);
         if (result.attackHit) {
           this.applySpiderAttack(result.attackHit);
