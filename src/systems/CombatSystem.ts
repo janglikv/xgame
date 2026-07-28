@@ -474,10 +474,19 @@ export class CombatSystem {
           for (let t = world.harvestTrees.length - 1; t >= 0; t--) {
             const tree = world.harvestTrees[t]!;
             if (!tree.isAlive) continue;
-            const dx = spear.groundX - tree.worldX;
-            const dy = spear.groundY - tree.worldY;
-            const r = SPEAR_HIT_R + tree.hurtR;
-            if (dx * dx + dy * dy > r * r) continue;
+            if (
+              !circleHitsHurt(
+                spear.groundX,
+                spear.groundY,
+                SPEAR_HIT_R,
+                tree.worldX,
+                tree.worldY,
+                tree.bodyProfileId,
+                tree.bodyShapeScale,
+              )
+            ) {
+              continue;
+            }
 
             const alive = tree.applyDamage(HARVEST_SPEAR_DAMAGE);
             if (!alive) {
@@ -541,11 +550,16 @@ export class CombatSystem {
     for (let i = world.harvestTrees.length - 1; i >= 0; i--) {
       const tree = world.harvestTrees[i]!;
       if (!tree.isAlive) continue;
-      const dx = bomb.groundX - tree.worldX;
-      const dy = bomb.groundY - tree.worldY;
-      // 炸弹外缘略宽：用 hurtR + 固定爆炸半径近似
-      const r = tree.hurtR + 52;
-      if (dx * dx + dy * dy > r * r) continue;
+      const inner = distancePastHurt(
+        bomb.groundX,
+        bomb.groundY,
+        tree.worldX,
+        tree.worldY,
+        tree.bodyProfileId,
+        tree.bodyShapeScale,
+      );
+      // 与蜘蛛一致：爆炸半径由 bomb.evaluateHit 的距离语义；此处用表面内距粗滤
+      if (inner > 52) continue;
 
       anyFx = true;
       const alive = tree.applyDamage(HARVEST_BOMB_DAMAGE);

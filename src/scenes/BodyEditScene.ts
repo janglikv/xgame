@@ -11,6 +11,7 @@ import {
   type BodyProfileId,
   type BodyShape,
 } from '../data/bodyProfiles';
+import { TREE_SIZE_PROFILE } from '../data/treeProfiles';
 import { copyBodyProfilesTs } from '../data/exportBodyProfiles';
 import {
   ColliderEditController,
@@ -22,57 +23,82 @@ import {
   OUTLINE_PX_CHARACTER,
   paddedFootAnchorY,
 } from '../utils/outlineTexture';
+import { drawPineLocal } from '../world/PineTree';
 import type { GameScene } from './types';
 
 const BG = 0x121820;
 const FLOOR = 0x1c2834;
 const GRID = 0x243040;
 
-const SUBJECTS: ReadonlyArray<{
-  id: BodyProfileId;
-  url: string;
-  scale: number;
-  footY: number;
-}> = [
+type SubjectDef =
+  | {
+      id: BodyProfileId;
+      kind: 'sprite';
+      url: string;
+      scale: number;
+      footY: number;
+    }
+  | {
+      id: BodyProfileId;
+      kind: 'pine';
+      /** drawPineLocal 后再乘此 scale */
+      pineScale: number;
+      tint: number;
+    };
+
+const SUBJECTS: ReadonlyArray<SubjectDef> = [
   {
     id: 'bomb-girl',
+    kind: 'sprite',
     url: '/assets/bomb-girl/preview.png',
     scale: 0.07,
     footY: 0.92,
   },
   {
     id: 'ice-ranger',
+    kind: 'sprite',
     url: '/assets/ice-ranger/preview.png',
     scale: 0.066,
     footY: 0.92,
   },
   {
     id: 'spider',
+    kind: 'sprite',
     url: '/assets/spider/spider.png',
     scale: 0.1,
     footY: 0.88,
   },
   {
     id: 'flame-flower',
+    kind: 'sprite',
     url: '/assets/flame-flower/flame-flower.png',
     scale: 0.09,
     footY: 0.94,
   },
   {
     id: 'wooden-dummy',
+    kind: 'sprite',
     url: '/assets/wooden-dummy/wooden-dummy.png',
     scale: 0.09,
     footY: 0.96,
   },
+  {
+    id: 'tree',
+    kind: 'pine',
+    // 中树视觉 = 碰撞模板 1×
+    pineScale: TREE_SIZE_PROFILE.medium.scale,
+    tint: TREE_SIZE_PROFILE.medium.tint,
+  },
 ];
 
-const SPACING = 200;
+const SPACING = 180;
 const DEFAULT_ZOOM = 1.35;
 
 type Subject = {
   id: BodyProfileId;
   root: Container;
-  sprite: Sprite;
+  /** 贴图主体；程序树为 null */
+  sprite: Sprite | null;
   worldX: number;
   worldY: number;
 };
@@ -224,6 +250,7 @@ export class BodyEditScene extends Container implements GameScene {
     await Promise.all(
       this.subjects.map(async (s, i) => {
         const def = SUBJECTS[i]!;
+        if (def.kind !== 'sprite' || !s.sprite) return;
         try {
           const outlined = await loadOutlinedTexture(
             def.url,
@@ -255,11 +282,22 @@ export class BodyEditScene extends Container implements GameScene {
         const def = SUBJECTS[i]!;
         const root = new Container();
         root.eventMode = 'none';
-        const sprite = new Sprite(Texture.EMPTY);
-        sprite.anchor.set(0.5, def.footY);
-        sprite.scale.set(def.scale);
-        sprite.visible = false;
-        root.addChild(sprite);
+
+        let sprite: Sprite | null = null;
+        if (def.kind === 'sprite') {
+          sprite = new Sprite(Texture.EMPTY);
+          sprite.anchor.set(0.5, def.footY);
+          sprite.scale.set(def.scale);
+          sprite.visible = false;
+          root.addChild(sprite);
+        } else {
+          const pine = new Graphics();
+          pine.label = 'BodyEditPine';
+          drawPineLocal(pine, 1);
+          pine.scale.set(def.pineScale);
+          pine.tint = def.tint;
+          root.addChild(pine);
+        }
 
         const label = new Text({
           text: getBodyProfile(def.id).label,

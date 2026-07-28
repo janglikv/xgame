@@ -12,7 +12,9 @@ export type BodyProfileId =
   | 'ice-ranger'
   | 'spider'
   | 'flame-flower'
-  | 'wooden-dummy';
+  | 'wooden-dummy'
+  /** 可砍树模板（中树基准）；小/大树仅乘缩放 */
+  | 'tree';
 
 /** 圆形：圆心 = 脚底 + (ox, oy) */
 export type CircleShape = {
@@ -87,6 +89,13 @@ export const BODY_PROFILES: Record<BodyProfileId, BodyProfile> = {
       { type: 'rect', ox: 0.8, oy: -44.47, w: 50.49, h: 8.51 },
     ],
   },
+  /** 可砍树（中树视觉为 1×；小/大树运行时按 scale 比例缩放本模板） */
+  tree: {
+    id: 'tree',
+    label: '树',
+    solid: [{ type: 'circle', ox: 0, oy: 0, r: 14 }],
+    hurt: [{ type: 'circle', ox: 0, oy: -18, r: 22 }],
+  },
 };
 
 /** 运行时覆盖（编辑器本局，不写盘） */
@@ -98,7 +107,31 @@ export const BODY_PROFILE_IDS: readonly BodyProfileId[] = [
   'spider',
   'flame-flower',
   'wooden-dummy',
+  'tree',
 ];
+
+/** 可砍树统一碰撞模板 id */
+export const TREE_BODY_PROFILE_ID: BodyProfileId = 'tree';
+
+/** 按比例缩放形状（树体型用） */
+export function scaleBodyShape(s: BodyShape, scale: number): BodyShape {
+  if (scale === 1) return cloneShape(s);
+  if (s.type === 'circle') {
+    return {
+      type: 'circle',
+      ox: s.ox * scale,
+      oy: s.oy * scale,
+      r: Math.max(1, s.r * scale),
+    };
+  }
+  return {
+    type: 'rect',
+    ox: s.ox * scale,
+    oy: s.oy * scale,
+    w: Math.max(1, s.w * scale),
+    h: Math.max(1, s.h * scale),
+  };
+}
 
 export function cloneShape(s: BodyShape): BodyShape {
   return s.type === 'circle' ? { ...s } : { ...s };
@@ -296,6 +329,7 @@ function distancePastShape(
 
 /**
  * 圆攻击体是否命中目标任意 hurt 形状。
+ * @param shapeScale 形状整体缩放（树体型：相对中树）
  */
 export function circleHitsHurt(
   ax: number,
@@ -304,6 +338,7 @@ export function circleHitsHurt(
   feetX: number,
   feetY: number,
   id: BodyProfileId,
+  shapeScale = 1,
 ): boolean {
   const hurts = getBodyProfile(id).hurt;
   if (hurts.length === 0) {
@@ -313,13 +348,15 @@ export function circleHitsHurt(
     return dx * dx + dy * dy <= r * r;
   }
   for (const h of hurts) {
-    if (circleHitsShape(ax, ay, ar, feetX, feetY, h)) return true;
+    const shape = scaleBodyShape(h, shapeScale);
+    if (circleHitsShape(ax, ay, ar, feetX, feetY, shape)) return true;
   }
   return false;
 }
 
 /**
  * 爆炸：到 hurt 表面的最短内距（多形状取最小）。
+ * @param shapeScale 形状整体缩放（树体型：相对中树）
  */
 export function distancePastHurt(
   ax: number,
@@ -327,6 +364,7 @@ export function distancePastHurt(
   feetX: number,
   feetY: number,
   id: BodyProfileId,
+  shapeScale = 1,
 ): number {
   const hurts = getBodyProfile(id).hurt;
   if (hurts.length === 0) {
@@ -334,7 +372,8 @@ export function distancePastHurt(
   }
   let best = Infinity;
   for (const h of hurts) {
-    const d = distancePastShape(ax, ay, feetX, feetY, h);
+    const shape = scaleBodyShape(h, shapeScale);
+    const d = distancePastShape(ax, ay, feetX, feetY, shape);
     if (d < best) best = d;
   }
   return best;

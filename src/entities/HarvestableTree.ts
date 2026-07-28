@@ -1,6 +1,14 @@
 import { Container, Graphics } from 'pixi.js';
+import {
+  TREE_BODY_PROFILE_ID,
+  type BodyProfileId,
+} from '../data/bodyProfiles';
 import type { TreeSize } from '../data/maps/types';
-import { TREE_SIZE_PROFILE } from '../data/treeProfiles';
+import {
+  TREE_SIZE_PROFILE,
+  treeBodyShapeScale,
+  treeHurtR,
+} from '../data/treeProfiles';
 import { HealthBar } from '../ui/HealthBar';
 import { drawPineLocal } from '../world/PineTree';
 
@@ -28,13 +36,17 @@ export type HarvestableTreeOptions = {
 
 /**
  * 关卡内可交互树：小树苗 / 中树 / 大树。
- * 有血量，可被近战 / 投射物破坏，倒地掉木头。
- * 原点 = 脚底；solid 由运行时树障碍表提供。
+ * 碰撞模板统一为 `tree`（编辑器编中树）；小/大只乘 bodyShapeScale。
  */
 export class HarvestableTree extends Container {
   worldX: number;
   worldY: number;
   readonly size: TreeSize;
+  /** 始终为 TREE_BODY_PROFILE_ID */
+  readonly bodyProfileId: BodyProfileId;
+  /** 相对中树的形状缩放 */
+  readonly bodyShapeScale: number;
+  /** 受击近似半径（模板 × 体型缩放） */
   readonly hurtR: number;
   /** 近战交互半径 */
   readonly interactR: number;
@@ -67,13 +79,15 @@ export class HarvestableTree extends Container {
         ? options.size
         : 'medium';
     this.size = size;
+    this.bodyProfileId = TREE_BODY_PROFILE_ID;
+    this.bodyShapeScale = treeBodyShapeScale(size);
     const profile = TREE_SIZE_PROFILE[size];
 
     this.maxHp = options.maxHp ?? profile.maxHp;
     this.hp = this.maxHp;
     this.woodDrop = Math.max(1, options.woodDrop ?? profile.woodDrop);
     this.treeId = options.treeId ?? '';
-    this.hurtR = profile.hurtR;
+    this.hurtR = treeHurtR(size);
     this.interactR = profile.interactR;
 
     this.gfx = new Graphics();
