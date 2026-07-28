@@ -159,8 +159,8 @@ export class HarvestWorld {
     for (let q = 0; q < targetQuota; q++) {
       if (this.grasses.length >= GRASS_MAX_COUNT) break;
 
-      // 为每个播种名额最多采样 5 次，确保在 80~220px 的远距离内找到符合 48px 密度限制的落点
-      for (let attempt = 0; attempt < 5; attempt++) {
+      // 为每个播种名额最多采样 8 次，确保在 80~220px 的远距离内找到符合 48px 密度限制的落点
+      for (let attempt = 0; attempt < 8; attempt++) {
         const angle = Math.random() * Math.PI * 2;
         const dist =
           GRASS_SPREAD_RADIUS_MIN +

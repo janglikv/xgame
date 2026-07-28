@@ -43,11 +43,11 @@ export const GRASS_SPREAD_TIME_SEC: Record<GrassSize, number | null> = {
   large: 30,
 };
 
-/** 一次扩散尝试的新草数量（按体型） */
+/** 一次扩散尝试的新草数量（按体型：翻倍为 small:2, medium:4, large:6） */
 export const GRASS_SPREAD_ATTEMPTS: Record<GrassSize, number> = {
-  small: 1,
-  medium: 2,
-  large: 3,
+  small: 2,
+  medium: 4,
+  large: 6,
 };
 
 /** 新草相对母株的距离（世界像素）：播种距离大幅拉远 (80~220px) */
