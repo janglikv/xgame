@@ -50,12 +50,12 @@ export const GRASS_SPREAD_ATTEMPTS: Record<GrassSize, number> = {
   large: 3,
 };
 
-/** 新草相对母株的距离（世界像素） */
-export const GRASS_SPREAD_RADIUS_MIN = 30;
-export const GRASS_SPREAD_RADIUS_MAX = 72;
+/** 新草相对母株的距离（世界像素）：播种距离大幅拉远 (80~220px) */
+export const GRASS_SPREAD_RADIUS_MIN = 80;
+export const GRASS_SPREAD_RADIUS_MAX = 220;
 
-/** 草丛之间最小间距（世界像素），避免叠成一团 */
-export const GRASS_MIN_SPACING = 24;
+/** 草丛之间最小间距（世界像素）：拉大至 48px，严格控制密度避免过密挤作一团 */
+export const GRASS_MIN_SPACING = 48;
 
 /**
  * 判定「绿地」时相对海岸的内缩（世界像素）。

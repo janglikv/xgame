@@ -135,34 +135,34 @@ export class HarvestWorld {
     if (this.grasses.length >= GRASS_MAX_COUNT) return;
 
     const mapDef = this.hooks.getMapDef();
-    const attempts = GRASS_SPREAD_ATTEMPTS[source.size] ?? 1;
-    const baseAngle = Math.random() * Math.PI * 2;
+    const targetQuota = GRASS_SPREAD_ATTEMPTS[source.size] ?? 1;
     let spawned = 0;
 
-    for (let i = 0; i < attempts; i++) {
+    for (let q = 0; q < targetQuota; q++) {
       if (this.grasses.length >= GRASS_MAX_COUNT) break;
 
-      // 均分方位 + 随机抖动，形成四面八方扩散
-      const angle =
-        baseAngle +
-        (i * Math.PI * 2) / attempts +
-        (Math.random() - 0.5) * 0.7;
-      const dist =
-        GRASS_SPREAD_RADIUS_MIN +
-        Math.random() * (GRASS_SPREAD_RADIUS_MAX - GRASS_SPREAD_RADIUS_MIN);
-      const x = source.worldX + Math.cos(angle) * dist;
-      const y = source.worldY + Math.sin(angle) * dist;
+      // 为每个播种名额最多采样 5 次，确保在 80~220px 的远距离内找到符合 48px 密度限制的落点
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const angle = Math.random() * Math.PI * 2;
+        const dist =
+          GRASS_SPREAD_RADIUS_MIN +
+          Math.random() * (GRASS_SPREAD_RADIUS_MAX - GRASS_SPREAD_RADIUS_MIN);
+        const x = source.worldX + Math.cos(angle) * dist;
+        const y = source.worldY + Math.sin(angle) * dist;
 
-      // 仅限绿地（margin 排除金沙滩与海岸）
-      if (!isOnLand(x, y, mapDef, GRASS_GREEN_LAND_MARGIN)) continue;
-      if (this.isGrassTooClose(x, y, GRASS_MIN_SPACING)) continue;
+        // 仅限绿地（margin 排除金沙滩与海岸）
+        if (!isOnLand(x, y, mapDef, GRASS_GREEN_LAND_MARGIN)) continue;
+        // 严格检查 48px 最小密度间距
+        if (this.isGrassTooClose(x, y, GRASS_MIN_SPACING)) continue;
 
-      if (!mapDef.grasses) mapDef.grasses = [];
-      const id = allocGrassId('gs');
-      const g: MapGrass = { x, y, size: 'small', id };
-      mapDef.grasses.push(g);
-      this.mountGrass(g);
-      spawned += 1;
+        if (!mapDef.grasses) mapDef.grasses = [];
+        const id = allocGrassId('gs');
+        const g: MapGrass = { x, y, size: 'small', id };
+        mapDef.grasses.push(g);
+        this.mountGrass(g);
+        spawned += 1;
+        break; // 成功放置 1 株后进入下一个名额
+      }
     }
 
     if (spawned > 0) {
