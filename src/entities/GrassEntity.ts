@@ -2,6 +2,7 @@ import { Container, Graphics } from 'pixi.js';
 import type { GrassSize } from '../data/maps/types';
 import {
   GRASS_GROWTH_TIME_SEC,
+  GRASS_LIFESPAN_BASE_SEC,
   GRASS_SIZE_PROFILE,
   GRASS_SPREAD_TIME_SEC,
   grassBodyShapeScale,
@@ -14,7 +15,7 @@ export type GrassEntityOptions = {
   size?: GrassSize;
   tint?: number;
   grassId?: string;
-  /** 是否允许自动生长 / 扩散，默认 true */
+  /** 是否允许自动生长 / 扩散 / 自然老化，默认 true */
   enableGrowth?: boolean;
   /** 自定义生长倒计时（秒） */
   growthTimeSec?: number;
@@ -24,11 +25,13 @@ export type GrassEntityOptions = {
   onGrown?: (grass: GrassEntity) => void;
   /** 到点向四周播种时的回调（由场景决定落点与是否可种） */
   onSpread?: (grass: GrassEntity) => void;
+  /** 自然老死或过密枯萎时的回调 */
+  onWither?: (grass: GrassEntity) => void;
 };
 
 /**
  * 关卡内草地：小草 / 中草 / 大草。
- * 支持生长：小草 ➔ 中草 ➔ 大草；并周期性向四面八方扩散新小草。
+ * 支持生长：小草 ➔ 中草 ➔ 大草；周期性播种；带有自然寿命与过密枯萎倒计时。
  * 完全无碰撞体。
  */
 export class GrassEntity extends Container {
@@ -45,11 +48,15 @@ export class GrassEntity extends Container {
   private enableGrowth: boolean;
   private growthTimer: number | null = null;
   private spreadTimer: number | null = null;
+  private lifeTimer = 100;
+  private isWithering = false;
+  private witherAnimT = 0;
   private growthAnimT = 0;
   /** 被啃后的冷却（秒），期间不可再啃 */
   private grazeLockT = 0;
   private onGrown?: (grass: GrassEntity) => void;
   private onSpread?: (grass: GrassEntity) => void;
+  private onWither?: (grass: GrassEntity) => void;
 
   constructor(
     worldX: number,
@@ -76,8 +83,13 @@ export class GrassEntity extends Container {
     this.enableGrowth = options.enableGrowth ?? true;
     this.onGrown = options.onGrown;
     this.onSpread = options.onSpread;
+    this.onWither = options.onWither;
     this.resetGrowthTimer(options.growthTimeSec);
     this.resetSpreadTimer(options.spreadTimeSec);
+
+    // 随机寿命 (基础寿命 ±25% 抖动)
+    const baseLife = GRASS_LIFESPAN_BASE_SEC[size] ?? 100;
+    this.lifeTimer = baseLife * (0.8 + Math.random() * 0.4);
 
     this.gfx = new Graphics();
     this.gfx.label = 'GrassGfx';
@@ -177,6 +189,22 @@ export class GrassEntity extends Container {
     this.zIndex = this.worldY;
   }
 
+  /** 触发枯萎老死流程 */
+  wither(): void {
+    if (this.isWithering) return;
+    this.isWithering = true;
+    this.witherAnimT = 0.8;
+  }
+
+  /**
+   * 当处在过密环境时，加速消耗寿命
+   * @param factor 消耗速率倍率（如 3.0）
+   */
+  applyOvercrowded(factor: number, dt: number): void {
+    if (this.isWithering || !this.enableGrowth) return;
+    this.lifeTimer -= dt * (factor - 1);
+  }
+
   update(deltaMS: number): void {
     const dt = deltaMS / 1000;
     this.swayT += dt;
@@ -184,6 +212,28 @@ export class GrassEntity extends Container {
 
     if (this.grazeLockT > 0) {
       this.grazeLockT = Math.max(0, this.grazeLockT - dt);
+    }
+
+    // 枯萎中淡出动画
+    if (this.isWithering) {
+      this.witherAnimT = Math.max(0, this.witherAnimT - dt);
+      const ratio = this.witherAnimT / 0.8; // 1 -> 0
+      this.gfx.alpha = ratio;
+      // 发黄干枯变色
+      this.gfx.tint = 0x8a7238;
+      if (this.witherAnimT <= 0) {
+        this.onWither?.(this);
+      }
+      return;
+    }
+
+    // 自然寿命衰减
+    if (this.enableGrowth) {
+      this.lifeTimer -= dt;
+      if (this.lifeTimer <= 0) {
+        this.wither();
+        return;
+      }
     }
 
     // 自动生长计时

@@ -3,6 +3,8 @@ import {
   GRASS_GREEN_LAND_MARGIN,
   GRASS_MAX_COUNT,
   GRASS_MIN_SPACING,
+  GRASS_OVERCROWD_CHECK_RADIUS,
+  GRASS_OVERCROWD_MAX_NEIGHBORS,
   GRASS_SPREAD_ATTEMPTS,
   GRASS_SPREAD_RADIUS_MAX,
   GRASS_SPREAD_RADIUS_MIN,
@@ -120,6 +122,17 @@ export class HarvestWorld {
       },
       onSpread: (source) => {
         this.trySpreadFrom(source);
+      },
+      onWither: (withered) => {
+        const mapDef = this.hooks.getMapDef();
+        if (withered.grassId && mapDef.grasses) {
+          mapDef.grasses = mapDef.grasses.filter(
+            (item) => grassIdOf(item) !== withered.grassId,
+          );
+        }
+        this.removeGrassEntity(withered);
+        this.hooks.afterWorldChange();
+        this.hooks.persistMapDraft();
       },
     });
     this.hooks.sortLayer.addChild(grass);
@@ -373,10 +386,36 @@ export class HarvestWorld {
     for (const tree of this.trees) {
       tree.update(deltaMS);
     }
-    // 固定本帧数量，避免扩散中途 push 导致同帧连更
+    const dt = deltaMS / 1000;
+    // 固定本帧数量，避免扩散或老死导致数组变动影响迭代
     const grassCount = this.grasses.length;
+    const overcrowdDistSq =
+      GRASS_OVERCROWD_CHECK_RADIUS * GRASS_OVERCROWD_CHECK_RADIUS;
+
     for (let i = 0; i < grassCount; i++) {
-      this.grasses[i]!.update(deltaMS);
+      const g = this.grasses[i];
+      if (!g) continue;
+
+      // 统计周围 90px 范围内的同伴草数量
+      let neighbors = 0;
+      for (let j = 0; j < grassCount; j++) {
+        if (i === j) continue;
+        const other = this.grasses[j];
+        if (!other) continue;
+        const dx = other.worldX - g.worldX;
+        const dy = other.worldY - g.worldY;
+        if (dx * dx + dy * dy <= overcrowdDistSq) {
+          neighbors += 1;
+          if (neighbors > GRASS_OVERCROWD_MAX_NEIGHBORS) break;
+        }
+      }
+
+      // 如果过度拥挤（邻居 > 5），加速其寿命流逝（3.5 倍加速衰亡）
+      if (neighbors > GRASS_OVERCROWD_MAX_NEIGHBORS) {
+        g.applyOvercrowded(3.5, dt);
+      }
+
+      g.update(deltaMS);
     }
   }
 }

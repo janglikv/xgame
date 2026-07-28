@@ -57,6 +57,19 @@ export const GRASS_SPREAD_RADIUS_MAX = 220;
 /** 草丛之间最小间距（世界像素）：拉大至 48px，严格控制密度避免过密挤作一团 */
 export const GRASS_MIN_SPACING = 48;
 
+/** 各体型基础自然寿命（秒） */
+export const GRASS_LIFESPAN_BASE_SEC: Record<GrassSize, number> = {
+  small: 75,
+  medium: 120,
+  large: 180,
+};
+
+/** 过密判定检测半径（世界像素） */
+export const GRASS_OVERCROWD_CHECK_RADIUS = 90;
+
+/** 半径内邻居草超过此数量时，判定为过密并加速枯萎 */
+export const GRASS_OVERCROWD_MAX_NEIGHBORS = 5;
+
 /**
  * 判定「绿地」时相对海岸的内缩（世界像素）。
  * 适度放宽绿地边界，让草能在广阔区域自然繁衍。
