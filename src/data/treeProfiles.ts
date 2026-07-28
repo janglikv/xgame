@@ -81,3 +81,17 @@ export function treeHurtR(size: TreeSize): number {
     Math.round(profileHurtR(TREE_BODY_PROFILE_ID) * treeBodyShapeScale(size)),
   );
 }
+
+/** 各体型生长到下一阶段的时间（秒），null 表示已是最终期 */
+export const TREE_GROWTH_TIME_SEC: Record<TreeSize, number | null> = {
+  sapling: 20,
+  medium: 35,
+  large: null,
+};
+
+/** 获取树的下一阶段体型 */
+export function nextTreeSize(size: TreeSize): TreeSize | null {
+  if (size === 'sapling') return 'medium';
+  if (size === 'medium') return 'large';
+  return null;
+}

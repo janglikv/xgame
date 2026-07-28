@@ -12,6 +12,7 @@ import {
   type BodyShape,
 } from '../data/bodyProfiles';
 import { TREE_SIZE_PROFILE } from '../data/treeProfiles';
+import { GRASS_SIZE_PROFILE } from '../data/grassProfiles';
 import { copyBodyProfilesTs } from '../data/exportBodyProfiles';
 import {
   ColliderEditController,
@@ -24,6 +25,7 @@ import {
   paddedFootAnchorY,
 } from '../utils/outlineTexture';
 import { drawPineLocal } from '../world/PineTree';
+import { drawGrassLocal } from '../world/GrassPatch';
 import type { GameScene } from './types';
 
 const BG = 0x121820;
@@ -45,6 +47,12 @@ type SubjectDef =
       id: BodyProfileId;
       kind: 'pine';
       pineScale: number;
+      tint: number;
+    }
+  | {
+      id: BodyProfileId;
+      kind: 'grass';
+      grassScale: number;
       tint: number;
     };
 
@@ -90,6 +98,12 @@ const SUBJECTS: ReadonlyArray<SubjectDef> = [
     kind: 'pine',
     pineScale: TREE_SIZE_PROFILE.medium.scale,
     tint: TREE_SIZE_PROFILE.medium.tint,
+  },
+  {
+    id: 'grass',
+    kind: 'grass',
+    grassScale: GRASS_SIZE_PROFILE.medium.scale,
+    tint: GRASS_SIZE_PROFILE.medium.tint,
   },
 ];
 
@@ -307,13 +321,20 @@ export class BodyEditScene extends Container implements GameScene {
         sprite.scale.set(def.scale);
         sprite.visible = false;
         root.addChild(sprite);
-      } else {
+      } else if (def.kind === 'pine') {
         const pine = new Graphics();
         pine.label = 'BodyEditPine';
         drawPineLocal(pine, 1);
         pine.scale.set(def.pineScale);
         pine.tint = def.tint;
         root.addChild(pine);
+      } else if (def.kind === 'grass') {
+        const grass = new Graphics();
+        grass.label = 'BodyEditGrass';
+        drawGrassLocal(grass, 0);
+        grass.scale.set(def.grassScale);
+        grass.tint = def.tint;
+        root.addChild(grass);
       }
 
       this.subjectLayer.addChild(root);
@@ -324,7 +345,7 @@ export class BodyEditScene extends Container implements GameScene {
         sprite,
         worldX: 0,
         worldY: STAGE_FEET_Y,
-        loaded: def.kind === 'pine',
+        loaded: def.kind !== 'sprite',
       });
     }
   }

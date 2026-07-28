@@ -1,5 +1,13 @@
 /** 当前支持的敌人种类（上帝模式放置 / 关卡刷怪） */
-export type EnemyKind = 'spider' | 'flame-flower' | 'wooden-dummy';
+export type EnemyKind =
+  | 'spider'
+  | 'flame-flower'
+  | 'wooden-dummy'
+  | 'chicken'
+  | 'pig'
+  | 'cow'
+  | 'horse'
+  | 'bear';
 
 /** 敌人出生点（世界坐标，须在陆地上） */
 export type EnemySpawn = {
@@ -11,8 +19,14 @@ export type EnemySpawn = {
 /** 可砍树体型：小树苗 / 中树 / 大树 */
 export type TreeSize = 'sapling' | 'medium' | 'large';
 
+/** 树木种类：松树 / 苹果树 */
+export type TreeKind = 'pine' | 'apple';
+
+/** 草地体型：小草 / 中草 / 大草 */
+export type GrassSize = 'small' | 'medium' | 'large';
+
 /**
- * 摆放的一棵可砍树（世界坐标，脚底）。
+ * 摆放的一颗可砍树（世界坐标，脚底）。
  * id 用于砍伐 / 上帝模式删除 solid。
  */
 export type MapTree = {
@@ -20,7 +34,21 @@ export type MapTree = {
   y: number;
   /** 体型；缺省 medium */
   size?: TreeSize;
+  /** 树种类；缺省 pine */
+  kind?: TreeKind;
   /** 稳定 id；缺省由 normalize 生成 */
+  id?: string;
+};
+
+/**
+ * 摆放的一丛草地（世界坐标，脚底，无碰撞体）。
+ */
+export type MapGrass = {
+  x: number;
+  y: number;
+  /** 体型；缺省 medium */
+  size?: GrassSize;
+  /** 稳定 id */
   id?: string;
 };
 
@@ -44,6 +72,8 @@ export type LevelMapDef = {
   spawn: { x: number; y: number };
   /** 摆放的可砍树 */
   trees: MapTree[];
+  /** 摆放的无碰撞草地 */
+  grasses?: MapGrass[];
   /** 敌人出生列表（可为空数组） */
   enemies: EnemySpawn[];
 };

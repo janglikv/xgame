@@ -364,7 +364,6 @@ export class LevelScene extends Container implements GameScene {
 
     this.stepCamera(0, true);
     await Promise.all(this.spiders.map((s) => s.load()));
-    this.player?.startEntrance(this.entranceContext());
     if (this.player) this.syncAmmoHud(this.player);
     this.syncWorldActors();
     this.sortDepth();

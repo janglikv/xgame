@@ -3,17 +3,25 @@ import {
   HARVEST_MELEE_DAMAGE,
   HarvestableTree,
 } from '../entities/HarvestableTree';
+import { GrassEntity } from '../entities/GrassEntity';
 import {
   ItemPickup,
   PICKUP_RADIUS,
 } from '../entities/ItemPickup';
 import type { PlayerCharacterBase } from '../entities/PlayerCharacterBase';
 import {
+  addRuntimeTreeObstacle,
+  grassIdOf,
+  grassSizeOf,
+  normalizeGrasses,
   normalizeTrees,
   removeRuntimeTreeObstacleById,
   treeIdOf,
+  treeKindOf,
   treeSizeOf,
+  treeSolidR,
   type LevelMapDef,
+  type MapGrass,
   type MapTree,
 } from '../data/maps';
 import type { Inventory } from './Inventory';
@@ -29,35 +37,84 @@ export type HarvestWorldHooks = {
 };
 
 /**
- * 可砍树 + 掉落拾取：生成、近战、摧毁掉落、进包。
+ * 可砍树 + 装饰草地 + 掉落拾取：生成、近战、自动生长、摧毁掉落、进包。
  * 投射物摧毁走 onTreeDestroyed（由 CombatSystem 回调）。
  */
 export class HarvestWorld {
   readonly trees: HarvestableTree[] = [];
+  readonly grasses: GrassEntity[] = [];
   readonly pickups: ItemPickup[] = [];
 
   constructor(private readonly hooks: HarvestWorldHooks) {}
 
-  /** 从地图 def.trees 刷可砍树 */
+  /** 从地图刷可砍树与无碰撞草地 */
   spawnFromMap(mapDef: LevelMapDef): void {
     for (const t of normalizeTrees(mapDef)) {
       this.mountTree(t);
+    }
+    for (const g of normalizeGrasses(mapDef)) {
+      this.mountGrass(g);
     }
   }
 
   mountTree(t: MapTree): HarvestableTree {
     const id = treeIdOf(t);
     const size = treeSizeOf(t);
+    const kind = treeKindOf(t);
     const tree = new HarvestableTree(t.x, t.y, {
       size,
+      kind,
       treeId: id,
+      onGrown: (grownTree) => {
+        const mapDef = this.hooks.getMapDef();
+        const found = mapDef.trees.find(
+          (item) => treeIdOf(item) === grownTree.treeId,
+        );
+        if (found) {
+          found.size = grownTree.size;
+        }
+        addRuntimeTreeObstacle({
+          x: grownTree.worldX,
+          y: grownTree.worldY,
+          r: treeSolidR(grownTree.size),
+          id: grownTree.treeId,
+        });
+        this.hooks.afterWorldChange();
+        this.hooks.persistMapDraft();
+      },
+      onAppleDrop: (worldX, worldY) => {
+        this.spawnPickup(worldX, worldY, 'apple', 1);
+      },
     });
     this.hooks.sortLayer.addChild(tree);
     this.trees.push(tree);
     return tree;
   }
 
-  /** 树被摧毁：掉木头 + 移除 solid + 从草稿去掉 */
+  mountGrass(g: MapGrass): GrassEntity {
+    const id = grassIdOf(g);
+    const size = grassSizeOf(g);
+    const grass = new GrassEntity(g.x, g.y, {
+      size,
+      grassId: id,
+      onGrown: (grownGrass) => {
+        const mapDef = this.hooks.getMapDef();
+        const found = (mapDef.grasses ?? []).find(
+          (item) => grassIdOf(item) === grownGrass.grassId,
+        );
+        if (found) {
+          found.size = grownGrass.size;
+        }
+        this.hooks.afterWorldChange();
+        this.hooks.persistMapDraft();
+      },
+    });
+    this.hooks.sortLayer.addChild(grass);
+    this.grasses.push(grass);
+    return grass;
+  }
+
+  /** 树被摧毁：掉木头（苹果树额外掉落苹果） + 移除 solid + 从草稿去掉 */
   onTreeDestroyed(tree: HarvestableTree): void {
     if (tree.treeId) {
       removeRuntimeTreeObstacleById(tree.treeId);
@@ -75,12 +132,22 @@ export class HarvestWorld {
       const py = tree.worldY + Math.sin(ang) * dist * 0.65;
       this.spawnPickup(px, py, 'wood', 1);
     }
+    if (tree.treeKind === 'apple' && tree.size === 'large') {
+      const appleCount = 1 + Math.floor(Math.random() * 3);
+      for (let i = 0; i < appleCount; i++) {
+        const ang = Math.random() * Math.PI * 2;
+        const dist = 12 + Math.random() * 16;
+        const px = tree.worldX + Math.cos(ang) * dist;
+        const py = tree.worldY + Math.sin(ang) * dist * 0.65;
+        this.spawnPickup(px, py, 'apple', 1);
+      }
+    }
   }
 
   spawnPickup(
     x: number,
     y: number,
-    itemId: 'wood',
+    itemId: 'wood' | 'apple',
     count: number,
   ): void {
     const p = new ItemPickup(x, y, itemId, { count });
@@ -136,6 +203,15 @@ export class HarvestWorld {
     this.trees.splice(idx, 1);
   }
 
+  /** 移除草地实体 */
+  removeGrassEntity(grass: GrassEntity): void {
+    const idx = this.grasses.indexOf(grass);
+    if (idx < 0) return;
+    grass.parent?.removeChild(grass);
+    grass.destroy({ children: true });
+    this.grasses.splice(idx, 1);
+  }
+
   /** 掉落物漂浮 + 靠近自动进包 */
   update(deltaMS: number, playerX: number, playerY: number): void {
     const r2 = PICKUP_RADIUS * PICKUP_RADIUS;
@@ -170,6 +246,9 @@ export class HarvestWorld {
     for (const tree of this.trees) {
       tree.syncToWorld();
     }
+    for (const grass of this.grasses) {
+      grass.syncToWorld();
+    }
     for (const p of this.pickups) {
       p.syncToWorld();
     }
@@ -178,6 +257,9 @@ export class HarvestWorld {
   tickTrees(deltaMS: number): void {
     for (const tree of this.trees) {
       tree.update(deltaMS);
+    }
+    for (const grass of this.grasses) {
+      grass.update(deltaMS);
     }
   }
 }

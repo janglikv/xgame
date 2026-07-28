@@ -1,22 +1,40 @@
 import type { Container } from 'pixi.js';
 import type { PlayerCharacterBase } from '../entities/PlayerCharacterBase';
 import type { HarvestableTree } from '../entities/HarvestableTree';
+import type { GrassEntity } from '../entities/GrassEntity';
 import type { Spider } from '../entities/Spider';
 import {
   addRuntimeTreeObstacle,
+  allocGrassId,
   allocTreeId,
+  grassIdOf,
   isOnLand,
   removeRuntimeTreeObstacleById,
   treeIdOf,
   treeSolidR,
+  type EnemyKind,
+  type GrassSize,
   type LevelMapDef,
+  type MapGrass,
   type MapTree,
+  type TreeKind,
   type TreeSize,
 } from '../data/maps';
 import type { GodBrush, GodModeHud } from '../ui/GodModeHud';
 import type { LevelCamera } from '../scenes/LevelCamera';
 import { createEnemyAt, DEFAULT_SPIDER_SCALE } from './enemyFactory';
 import type { HarvestWorld } from './HarvestWorld';
+
+const ENEMY_BRUSHES = new Set<GodBrush>([
+  'spider',
+  'flame-flower',
+  'wooden-dummy',
+  'chicken',
+  'pig',
+  'cow',
+  'horse',
+  'bear',
+]);
 
 export type GodModeDeps = {
   getMapDef: () => LevelMapDef;
@@ -35,7 +53,7 @@ export type GodModeDeps = {
 };
 
 /**
- * 上帝模式：摆放/擦除树与敌人、改出生点，自动 saveMapDraft。
+ * 上帝模式：摆放/擦除松树、苹果树、无碰撞草地与敌人、改出生点，自动 saveMapDraft。
  */
 export class GodModeController {
   brush: GodBrush = 'tree-medium';
@@ -88,26 +106,60 @@ export class GodModeController {
     if (
       this.brush === 'tree-sapling' ||
       this.brush === 'tree-medium' ||
-      this.brush === 'tree-large'
+      this.brush === 'tree-large' ||
+      this.brush === 'apple-sapling' ||
+      this.brush === 'apple-medium' ||
+      this.brush === 'apple-large'
     ) {
-      const size: TreeSize =
-        this.brush === 'tree-sapling'
-          ? 'sapling'
-          : this.brush === 'tree-large'
-            ? 'large'
-            : 'medium';
-      this.placeHarvestTree(w.x, w.y, size);
+      const isApple = this.brush.startsWith('apple');
+      const size: TreeSize = this.brush.endsWith('sapling')
+        ? 'sapling'
+        : this.brush.endsWith('large')
+          ? 'large'
+          : 'medium';
+      this.placeHarvestTree(w.x, w.y, size, isApple ? 'apple' : 'pine');
       return;
     }
-    this.placeEnemy(w.x, w.y, this.brush);
+    if (
+      this.brush === 'grass-small' ||
+      this.brush === 'grass-medium' ||
+      this.brush === 'grass-large'
+    ) {
+      const size: GrassSize =
+        this.brush === 'grass-small'
+          ? 'small'
+          : this.brush === 'grass-large'
+            ? 'large'
+            : 'medium';
+      this.placeGrass(w.x, w.y, size);
+      return;
+    }
+    if (ENEMY_BRUSHES.has(this.brush)) {
+      this.placeEnemy(w.x, w.y, this.brush as EnemyKind);
+    }
   }
 
-  placeHarvestTree(x: number, y: number, size: TreeSize = 'medium'): void {
+  placeHarvestTree(
+    x: number,
+    y: number,
+    size: TreeSize = 'medium',
+    kind: TreeKind = 'pine',
+  ): void {
     const mapDef = this.deps.getMapDef();
-    const id = allocTreeId(
-      size === 'sapling' ? 'sap' : size === 'large' ? 'big' : 'harv',
-    );
-    const t: MapTree = { x, y, size, id };
+    const prefix =
+      kind === 'apple'
+        ? size === 'sapling'
+          ? 'apsap'
+          : size === 'large'
+            ? 'apbig'
+            : 'apple'
+        : size === 'sapling'
+          ? 'sap'
+          : size === 'large'
+            ? 'big'
+            : 'harv';
+    const id = allocTreeId(prefix);
+    const t: MapTree = { x, y, size, kind, id };
     mapDef.trees.push(t);
     addRuntimeTreeObstacle({
       x,
@@ -121,11 +173,21 @@ export class GodModeController {
     this.deps.persistMapDraft();
   }
 
-  placeEnemy(
-    x: number,
-    y: number,
-    kind: 'spider' | 'flame-flower' | 'wooden-dummy',
-  ): void {
+  placeGrass(x: number, y: number, size: GrassSize = 'medium'): void {
+    const mapDef = this.deps.getMapDef();
+    if (!mapDef.grasses) mapDef.grasses = [];
+    const id = allocGrassId(
+      size === 'small' ? 'gs' : size === 'large' ? 'bg' : 'grs',
+    );
+    const g: MapGrass = { x, y, size, id };
+    mapDef.grasses.push(g);
+    this.deps.harvest.mountGrass(g);
+    this.deps.syncWorldActors();
+    this.deps.sortDepth();
+    this.deps.persistMapDraft();
+  }
+
+  placeEnemy(x: number, y: number, kind: EnemyKind): void {
     const mapDef = this.deps.getMapDef();
     if (!mapDef.enemies) mapDef.enemies = [];
     mapDef.enemies.push({ kind, x, y });
@@ -173,6 +235,16 @@ export class GodModeController {
       }
     }
 
+    let bestGrass: GrassEntity | null = null;
+    let bestGrassD = PICK_R;
+    for (const g of harvest.grasses) {
+      const d = Math.hypot(g.worldX - x, g.worldY - y);
+      if (d < bestGrassD) {
+        bestGrassD = d;
+        bestGrass = g;
+      }
+    }
+
     let bestEnemy: Spider | null = null;
     let bestEnemyD = PICK_R;
     let bestEnemyI = -1;
@@ -187,9 +259,10 @@ export class GodModeController {
       }
     }
 
-    type Pick = { kind: 'tree' | 'enemy'; d: number };
+    type Pick = { kind: 'tree' | 'grass' | 'enemy'; d: number };
     const candidates: Pick[] = [];
     if (bestTree) candidates.push({ kind: 'tree', d: bestTreeD });
+    if (bestGrass) candidates.push({ kind: 'grass', d: bestGrassD });
     if (bestEnemy) candidates.push({ kind: 'enemy', d: bestEnemyD });
     if (candidates.length === 0) return;
     candidates.sort((a, b) => a.d - b.d);
@@ -203,6 +276,17 @@ export class GodModeController {
         );
       }
       harvest.removeTreeEntity(bestTree);
+      this.deps.persistMapDraft();
+      return;
+    }
+
+    if (pick.kind === 'grass' && bestGrass) {
+      if (bestGrass.grassId && mapDef.grasses) {
+        mapDef.grasses = mapDef.grasses.filter(
+          (g) => grassIdOf(g) !== bestGrass!.grassId,
+        );
+      }
+      harvest.removeGrassEntity(bestGrass);
       this.deps.persistMapDraft();
       return;
     }

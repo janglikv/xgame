@@ -23,6 +23,17 @@ function isLooseLevelDef(raw: unknown): raw is Record<string, unknown> {
   );
 }
 
+const ENEMY_KINDS = new Set<EnemySpawn['kind']>([
+  'spider',
+  'flame-flower',
+  'wooden-dummy',
+  'chicken',
+  'pig',
+  'cow',
+  'horse',
+  'bear',
+]);
+
 function parseEnemies(raw: unknown): EnemySpawn[] {
   if (!Array.isArray(raw)) return [];
   return raw.filter(
@@ -31,9 +42,7 @@ function parseEnemies(raw: unknown): EnemySpawn[] {
       typeof e === 'object' &&
       typeof (e as EnemySpawn).x === 'number' &&
       typeof (e as EnemySpawn).y === 'number' &&
-      ((e as EnemySpawn).kind === 'spider' ||
-        (e as EnemySpawn).kind === 'flame-flower' ||
-        (e as EnemySpawn).kind === 'wooden-dummy'),
+      ENEMY_KINDS.has((e as EnemySpawn).kind),
   );
 }
 
@@ -55,6 +64,7 @@ export function coerceLevelDef(raw: unknown): LevelMapDef | null {
     seaMargin,
     spawn: { x: spawn.x, y: spawn.y },
     trees: d.trees as MapTree[],
+    grasses: (Array.isArray(d.grasses) ? d.grasses : []) as any[],
     enemies: parseEnemies(d.enemies),
   };
 
@@ -64,6 +74,7 @@ export function coerceLevelDef(raw: unknown): LevelMapDef | null {
     seaMargin: seaMarginPx(stub),
     spawn: { x: spawn.x, y: spawn.y },
     trees: normalizeTrees(stub),
+    grasses: (Array.isArray(d.grasses) ? d.grasses : []) as any[],
     enemies: parseEnemies(d.enemies),
   };
 }

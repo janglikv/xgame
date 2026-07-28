@@ -75,7 +75,17 @@ export class DebugOverlay extends Container {
           ? '木桩'
           : spider.label === 'FlameFlower'
             ? '火焰花'
-            : '蜘蛛';
+            : spider.label === 'Chicken'
+              ? '鸡'
+              : spider.label === 'Pig'
+                ? '猪'
+                : spider.label === 'Cow'
+                  ? '牛'
+                  : spider.label === 'Horse'
+                    ? '马'
+                    : spider.label === 'Bear'
+                      ? '熊'
+                      : '蜘蛛';
       const hpStr = spider.invincible
         ? '无敌'
         : `HP:${Math.ceil(spider.currentHp)}`;

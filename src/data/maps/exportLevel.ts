@@ -1,5 +1,5 @@
 import type { LevelMapDef } from './types';
-import { normalizeTrees, seaMarginPx } from './walkMask';
+import { normalizeGrasses, normalizeTrees, seaMarginPx } from './walkMask';
 
 function roundN(n: number, digits = 2): number {
   const p = 10 ** digits;
@@ -14,11 +14,12 @@ export function formatLevelDefTs(
   exportName = 'LEVEL_1',
 ): string {
   const trees = normalizeTrees(def);
+  const grasses = normalizeGrasses(def);
   const lines: string[] = [];
   lines.push(`import type { LevelMapDef } from './types';`);
   lines.push('');
   lines.push(
-    `/** 上帝模式导出 — id: ${def.id} · 树 ${trees.length} · 海缘 ${seaMarginPx(def)}px */`,
+    `/** 上帝模式导出 — id: ${def.id} · 树 ${trees.length} · 草 ${grasses.length} · 海缘 ${seaMarginPx(def)}px */`,
   );
   lines.push(`export const ${exportName}: LevelMapDef = {`);
   lines.push(`  id: ${JSON.stringify(def.id)},`);
@@ -37,6 +38,17 @@ export function formatLevelDefTs(
     );
   }
   lines.push(`  ],`);
+  lines.push(`  grasses: [`);
+  for (const g of grasses) {
+    const size =
+      g.size && g.size !== 'medium' ? `, size: ${JSON.stringify(g.size)}` : '';
+    const id = g.id ? `, id: ${JSON.stringify(g.id)}` : '';
+    lines.push(
+      `    { x: ${roundN(g.x)}, y: ${roundN(g.y)}${size}${id} },`,
+    );
+  }
+  lines.push(`  ],`);
+  lines.push(`  enemies: [`);
   lines.push(`  enemies: [`);
   for (const e of def.enemies) {
     lines.push(

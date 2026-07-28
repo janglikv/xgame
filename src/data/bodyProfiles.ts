@@ -14,7 +14,8 @@ export type BodyProfileId =
   | 'flame-flower'
   | 'wooden-dummy'
   /** 可砍树模板（中树基准）；小/大树仅乘缩放 */
-  | 'tree';
+  | 'tree'
+  | 'grass';
 
 /** 圆形：圆心 = 脚底 + (ox, oy) */
 export type CircleShape = {
@@ -95,6 +96,12 @@ export const BODY_PROFILES: Record<BodyProfileId, BodyProfile> = {
     solid: [{ type: 'circle', ox: -0.47, oy: -1.92, r: 11.05 }],
     hurt: [{ type: 'circle', ox: 0, oy: -18, r: 22 }],
   },
+  "grass": {
+    id: "grass",
+    label: "草地",
+    solid: [],
+    hurt: [],
+  },
 };
 
 /** 运行时覆盖（编辑器本局，不写盘） */
@@ -107,6 +114,7 @@ export const BODY_PROFILE_IDS: readonly BodyProfileId[] = [
   'flame-flower',
   'wooden-dummy',
   'tree',
+  'grass',
 ];
 
 /** 可砍树统一碰撞模板 id */

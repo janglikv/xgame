@@ -4,10 +4,18 @@ export type {
   EnemySpawn,
   MapTree,
   TreeSize,
+  TreeKind,
+  MapGrass,
+  GrassSize,
 } from './types';
 export {
   treeSolidR,
   treeSizeOf,
+  treeKindOf,
+  allocGrassId,
+  grassIdOf,
+  grassSizeOf,
+  normalizeGrasses,
   mapHalf,
   seaMarginPx,
   landBounds,

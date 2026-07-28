@@ -44,15 +44,32 @@ export class ItemPickup extends Container {
     const def = getItemDef(itemId);
     const g = new Graphics();
     g.label = 'PickupGfx';
-    // 简易「原木」方块
-    g.roundRect(-9, -7, 18, 14, 3).fill({ color: def.color });
-    g.roundRect(-9, -7, 18, 14, 3).stroke({
-      width: 1.5,
-      color: def.outline,
-      alpha: 0.95,
-    });
-    g.circle(-4, 0, 2.2).fill({ color: def.outline, alpha: 0.35 });
-    g.circle(3, 1, 1.8).fill({ color: def.outline, alpha: 0.28 });
+
+    if (itemId === 'apple') {
+      // 苹果掉落物图形：红润鲜艳 + 顶尖嫩绿树叶与黑色微描边
+      g.circle(0, 1, 7.5).fill({ color: def.color });
+      g.circle(0, 1, 7.5).stroke({
+        width: 1.2,
+        color: def.outline,
+        alpha: 0.95,
+      });
+      // 左上果面反射高亮
+      g.circle(-2.5, -2, 2.2).fill({ color: 0xffffff, alpha: 0.45 });
+      // 顶端微果柄
+      g.moveTo(0, -6.5).lineTo(1, -9.5).stroke({ width: 1.5, color: 0x422612 });
+      // 小绿树叶
+      g.poly([1, -9.5, 5, -11, 4, -7.5], true).fill({ color: 0x64c832 });
+    } else {
+      // 简易「原木」方块
+      g.roundRect(-9, -7, 18, 14, 3).fill({ color: def.color });
+      g.roundRect(-9, -7, 18, 14, 3).stroke({
+        width: 1.5,
+        color: def.outline,
+        alpha: 0.95,
+      });
+      g.circle(-4, 0, 2.2).fill({ color: def.outline, alpha: 0.35 });
+      g.circle(3, 1, 1.8).fill({ color: def.outline, alpha: 0.28 });
+    }
     this.addChild(g);
 
     if (this.count > 1) {

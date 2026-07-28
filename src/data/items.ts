@@ -3,7 +3,7 @@
  * P0 仅木头；后续木斧等在此扩展。
  */
 
-export type ItemId = 'wood';
+export type ItemId = 'wood' | 'apple';
 
 export type ItemDef = {
   id: ItemId;
@@ -24,6 +24,13 @@ export const ITEMS: Record<ItemId, ItemDef> = {
     maxStack: 16,
     color: 0xc4a574,
     outline: 0x5c3d1e,
+  },
+  apple: {
+    id: 'apple',
+    label: '苹果',
+    maxStack: 16,
+    color: 0xef3636,
+    outline: 0x730e0e,
   },
 };
 

@@ -1,5 +1,5 @@
 import { treeSolidR as solidRFromProfile } from '../treeProfiles';
-import type { LevelMapDef, MapTree, TreeSize } from './types';
+import type { GrassSize, LevelMapDef, MapGrass, MapTree, TreeKind, TreeSize } from './types';
 
 /** 各体型 solid 半径（与视觉 scale 同源，见 treeProfiles） */
 export function treeSolidR(size: TreeSize): number {
@@ -10,6 +10,10 @@ export function treeSizeOf(t: MapTree): TreeSize {
   const s = t.size;
   if (s === 'sapling' || s === 'medium' || s === 'large') return s;
   return 'medium';
+}
+
+export function treeKindOf(t: MapTree): TreeKind {
+  return t.kind === 'apple' ? 'apple' : 'pine';
 }
 
 /** 两棵树过近时 normalize 去重的距离² */
@@ -339,10 +343,12 @@ export function normalizeTrees(def: LevelMapDef): MapTree[] {
     if (!raw || typeof raw !== 'object') continue;
     if (typeof raw.x !== 'number' || typeof raw.y !== 'number') continue;
     const size = treeSizeOf(raw);
+    const kind = treeKindOf(raw);
     const t: MapTree = {
       x: raw.x,
       y: raw.y,
       size,
+      kind,
       id: typeof raw.id === 'string' ? raw.id : undefined,
     };
     if (!isOnLand(t.x, t.y, def, 0)) continue;
@@ -362,7 +368,7 @@ export function normalizeTrees(def: LevelMapDef): MapTree[] {
     if (tooClose) continue;
 
     seenIds.add(id);
-    out.push({ x: t.x, y: t.y, size, id });
+    out.push({ x: t.x, y: t.y, size, kind, id });
   }
   return out;
 }
@@ -438,6 +444,49 @@ export function addRuntimeTreeObstacle(obs: TreeObstacle): void {
   runtimeTreeObstacles.push({ ...obs });
 }
 
+let grassIdSeq = 0;
+
+export function allocGrassId(prefix = 'g'): string {
+  grassIdSeq += 1;
+  return `${prefix}_${Date.now().toString(36)}_${grassIdSeq}`;
+}
+
+export function grassSizeOf(g: MapGrass): GrassSize {
+  if (g.size === 'small' || g.size === 'medium' || g.size === 'large') {
+    return g.size;
+  }
+  return 'medium';
+}
+
+export function grassIdOf(g: MapGrass): string {
+  if (g.id && g.id.length > 0) return g.id;
+  return `grass_${Math.round(g.x)}_${Math.round(g.y)}_${grassSizeOf(g)}`;
+}
+
+export function normalizeGrasses(def: LevelMapDef): MapGrass[] {
+  const out: MapGrass[] = [];
+  const seenIds = new Set<string>();
+  const rawList = def.grasses ?? [];
+
+  for (const raw of rawList) {
+    if (!raw || typeof raw !== 'object') continue;
+    if (typeof raw.x !== 'number' || typeof raw.y !== 'number') continue;
+    const size = grassSizeOf(raw);
+    const g: MapGrass = {
+      x: raw.x,
+      y: raw.y,
+      size,
+      id: typeof raw.id === 'string' ? raw.id : undefined,
+    };
+    if (!isOnLand(g.x, g.y, def, 0)) continue;
+    const id = grassIdOf(g);
+    if (seenIds.has(id)) continue;
+    seenIds.add(id);
+    out.push({ x: g.x, y: g.y, size, id });
+  }
+  return out;
+}
+
 export function isSpawnValid(def: LevelMapDef): boolean {
   return isOnLand(def.spawn.x, def.spawn.y, def, 8);
 }
@@ -452,7 +501,14 @@ export function cloneLevelDef(def: LevelMapDef): LevelMapDef {
       x: t.x,
       y: t.y,
       size: t.size,
+      kind: t.kind,
       id: t.id,
+    })),
+    grasses: normalizeGrasses(def).map((g) => ({
+      x: g.x,
+      y: g.y,
+      size: g.size,
+      id: g.id,
     })),
     enemies: (def.enemies ?? []).map((e) => ({ ...e })),
   };
@@ -474,6 +530,7 @@ export function emptyIslandDef(
     seaMargin,
     spawn: { x: 0, y: 0 },
     trees: [],
+    grasses: [],
     enemies: [],
   };
 }

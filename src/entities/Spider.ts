@@ -164,6 +164,21 @@ export type SpiderOptions = {
    * 缺省与 passive 相同。
    */
   immovable?: boolean;
+  /**
+   * 是否可近战攻击。false 时只巡视/追击，不进入扑咬、不造成伤害。
+   * 缺省 true（蜘蛛等）。
+   */
+  canAttack?: boolean;
+  /**
+   * 是否因靠近玩家而锁定。false 时只有被打才锁定，平时完全无视玩家。
+   * 缺省 true（蜘蛛等）。
+   */
+  aggroOnDetect?: boolean;
+  /**
+   * 脱战距离（世界像素）。已锁定时与玩家超过此距离则取消锁定、回巡视。
+   * ≤0 表示永不脱战（蜘蛛默认）。
+   */
+  leashRange?: number;
 };
 
 /** 蜘蛛 AI 状态 */
@@ -204,6 +219,12 @@ export class Spider extends Container implements WorldActor {
   readonly passive: boolean;
   /** 绝对固定：不被 solid 挤走，每帧钉回出生点 */
   readonly immovable: boolean;
+  /** 是否可近战攻击 */
+  readonly canAttack: boolean;
+  /** 是否因靠近而锁定玩家 */
+  readonly aggroOnDetect: boolean;
+  /** 脱战距离；≤0 永不脱战 */
+  readonly leashRange: number;
   /** 描边外扩后换算出的实际脚底锚点。 */
   private footAnchorY: number;
   /** 碰撞模板；子类外观决定 id */
@@ -279,6 +300,9 @@ export class Spider extends Container implements WorldActor {
     this.invincible = options.invincible ?? false;
     this.passive = options.passive ?? false;
     this.immovable = options.immovable ?? this.passive;
+    this.canAttack = options.canAttack ?? true;
+    this.aggroOnDetect = options.aggroOnDetect ?? true;
+    this.leashRange = options.leashRange ?? 0;
     this.worldX = worldX;
     this.worldY = worldY;
     this.homeX = worldX;
@@ -579,11 +603,26 @@ export class Spider extends Container implements WorldActor {
     const dirX = dx * inv;
     const dirY = dy * inv;
 
-    // 察觉 → 永久锁定
-    if (!this.locked && dist <= AI.detectRange) {
+    // 察觉 → 锁定（动物可关：只有被打才锁定）
+    if (
+      this.aggroOnDetect &&
+      !this.locked &&
+      dist <= AI.detectRange
+    ) {
       this.locked = true;
       this.aiState = 'chase';
       this.patrolPause = 0;
+    }
+
+    // 超出脱战距离：取消锁定，回巡视
+    if (this.locked && this.leashRange > 0 && dist > this.leashRange) {
+      this.locked = false;
+      this.aiState = 'patrol';
+      this.attackT = 0;
+      this.attackPose = 0;
+      this.attackDealt = false;
+      moved = this.updatePatrol(dt);
+      return { moved, attackHit };
     }
 
     // 未锁定：巡视领地
@@ -592,8 +631,8 @@ export class Spider extends Container implements WorldActor {
       return { moved, attackHit };
     }
 
-    // 攻击状态机
-    if (this.aiState === 'attack') {
+    // 攻击状态机（可攻击单位）
+    if (this.canAttack && this.aiState === 'attack') {
       this.attackT += dt;
       this.faceToward(playerX, playerY);
 
@@ -663,8 +702,12 @@ export class Spider extends Container implements WorldActor {
       }
     }
 
-    // 进入攻击：在范围内且冷却完毕
-    if (dist <= AI.attackRange && this.attackCd <= 0) {
+    // 进入攻击：可攻击、在范围内且冷却完毕
+    if (
+      this.canAttack &&
+      dist <= AI.attackRange &&
+      this.attackCd <= 0
+    ) {
       this.aiState = 'attack';
       this.attackT = 0;
       this.attackDealt = false;

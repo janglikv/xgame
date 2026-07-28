@@ -1,13 +1,26 @@
 import { Assets, Container, Graphics, Sprite, Text, Texture } from 'pixi.js';
 import { drawPineLocal } from '../world/PineTree';
+import { drawGrassLocal } from '../world/GrassPatch';
+import { drawAppleTreeLocal } from '../world/AppleTree';
 
 export type GodBrush =
   | 'tree-sapling'
   | 'tree-medium'
   | 'tree-large'
+  | 'apple-sapling'
+  | 'apple-medium'
+  | 'apple-large'
+  | 'grass-small'
+  | 'grass-medium'
+  | 'grass-large'
   | 'spider'
   | 'flame-flower'
   | 'wooden-dummy'
+  | 'chicken'
+  | 'pig'
+  | 'cow'
+  | 'horse'
+  | 'bear'
   | 'spawn'
   | 'erase';
 
@@ -74,6 +87,12 @@ export class GodModeHud extends Container {
         { brush: 'tree-sapling', label: '小树苗' },
         { brush: 'tree-medium', label: '中树' },
         { brush: 'tree-large', label: '大树' },
+        { brush: 'apple-sapling', label: '小苹果树苗' },
+        { brush: 'apple-medium', label: '中苹果树' },
+        { brush: 'apple-large', label: '大苹果树' },
+        { brush: 'grass-small', label: '小草' },
+        { brush: 'grass-medium', label: '中草' },
+        { brush: 'grass-large', label: '大草' },
       ],
     },
     {
@@ -85,6 +104,11 @@ export class GodModeHud extends Container {
         { brush: 'spider', label: '蜘蛛' },
         { brush: 'flame-flower', label: '火焰花' },
         { brush: 'wooden-dummy', label: '训练木桩' },
+        { brush: 'chicken', label: '鸡' },
+        { brush: 'pig', label: '猪' },
+        { brush: 'cow', label: '牛' },
+        { brush: 'horse', label: '马' },
+        { brush: 'bear', label: '熊' },
       ],
     },
     {
@@ -448,14 +472,73 @@ export class GodModeHud extends Container {
         .stroke({ width: 1, color: 0xffffff });
       iconContainer.addChild(badge);
     } else if (
+      brush === 'apple-sapling' ||
+      brush === 'apple-medium' ||
+      brush === 'apple-large'
+    ) {
+      const treeGfx = new Graphics();
+      const count = brush === 'apple-large' ? 2 : 0;
+      drawAppleTreeLocal(treeGfx, 0, count, 0, 0);
+      treeGfx.position.set(16, 27);
+      const iconScale =
+        brush === 'apple-sapling' ? 0.2 : brush === 'apple-large' ? 0.48 : 0.3;
+      treeGfx.scale.set(iconScale);
+      iconContainer.addChild(treeGfx);
+      const badgeColor =
+        brush === 'apple-sapling'
+          ? 0x8fd46a
+          : brush === 'apple-large'
+            ? 0xef3636
+            : 0xd69a19;
+      const badge = new Graphics();
+      badge
+        .circle(25, 25, 5.5)
+        .fill({ color: badgeColor })
+        .stroke({ width: 1, color: 0xffffff });
+      iconContainer.addChild(badge);
+    } else if (
+      brush === 'grass-small' ||
+      brush === 'grass-medium' ||
+      brush === 'grass-large'
+    ) {
+      const grassGfx = new Graphics();
+      drawGrassLocal(grassGfx, 0, 0, 0);
+      grassGfx.position.set(16, 26);
+      const iconScale =
+        brush === 'grass-small' ? 0.25 : brush === 'grass-large' ? 0.55 : 0.38;
+      grassGfx.scale.set(iconScale);
+      iconContainer.addChild(grassGfx);
+      const badgeColor =
+        brush === 'grass-small'
+          ? 0x8fd46a
+          : brush === 'grass-large'
+            ? 0x4f9e34
+            : 0x66bb48;
+      const badge = new Graphics();
+      badge
+        .circle(25, 25, 5.5)
+        .fill({ color: badgeColor })
+        .stroke({ width: 1, color: 0xffffff });
+      iconContainer.addChild(badge);
+    } else if (
       brush === 'spider' ||
       brush === 'flame-flower' ||
-      brush === 'wooden-dummy'
+      brush === 'wooden-dummy' ||
+      brush === 'chicken' ||
+      brush === 'pig' ||
+      brush === 'cow' ||
+      brush === 'horse' ||
+      brush === 'bear'
     ) {
       const urlMap: Record<string, string> = {
         spider: '/assets/spider/spider.png',
         'flame-flower': '/assets/flame-flower/flame-flower.png',
         'wooden-dummy': '/assets/wooden-dummy/wooden-dummy.png',
+        chicken: '/assets/chicken/chicken.png',
+        pig: '/assets/pig/pig.png',
+        cow: '/assets/cow/cow.png',
+        horse: '/assets/horse/horse.png',
+        bear: '/assets/bear/bear.png',
       };
       const url = urlMap[brush];
       if (url) {
