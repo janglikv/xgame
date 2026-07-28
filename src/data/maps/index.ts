@@ -23,6 +23,7 @@ export {
   isOcean,
   clampToWalkableWorld,
   isOnLand,
+  isOnGreenLand,
   allocTreeId,
   treeIdOf,
   normalizeTrees,

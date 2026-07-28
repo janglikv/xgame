@@ -1,5 +1,4 @@
 import type { Container } from 'pixi.js';
-import { GRASS_GREEN_LAND_MARGIN } from '../data/grassProfiles';
 import type { PlayerCharacterBase } from '../entities/PlayerCharacterBase';
 import type { HarvestableTree } from '../entities/HarvestableTree';
 import type { GrassEntity } from '../entities/GrassEntity';
@@ -10,6 +9,7 @@ import {
   allocTreeId,
   grassIdOf,
   isOnLand,
+  isOnGreenLand,
   removeRuntimeTreeObstacleById,
   treeIdOf,
   treeSolidR,
@@ -177,8 +177,8 @@ export class GodModeController {
 
   placeGrass(x: number, y: number, size: GrassSize = 'medium'): void {
     const mapDef = this.deps.getMapDef();
-    // 与自然扩散一致：仅绿地上可种（排除沙滩与海）
-    if (!isOnLand(x, y, mapDef, GRASS_GREEN_LAND_MARGIN)) return;
+    // 仅真正的绿色草地上可种（严格排除沙滩与海）
+    if (!isOnGreenLand(x, y, mapDef, 85)) return;
     if (!mapDef.grasses) mapDef.grasses = [];
     const id = allocGrassId(
       size === 'small' ? 'gs' : size === 'large' ? 'bg' : 'grs',

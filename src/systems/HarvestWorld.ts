@@ -1,6 +1,5 @@
 import type { Container } from 'pixi.js';
 import {
-  GRASS_GREEN_LAND_MARGIN,
   GRASS_MAX_COUNT,
   GRASS_MIN_SPACING,
   GRASS_OVERCROWD_CHECK_RADIUS,
@@ -24,7 +23,7 @@ import {
   allocGrassId,
   grassIdOf,
   grassSizeOf,
-  isOnLand,
+  isOnGreenLand,
   normalizeGrasses,
   normalizeTrees,
   removeRuntimeTreeObstacleById,
@@ -163,8 +162,8 @@ export class HarvestWorld {
         const x = source.worldX + Math.cos(angle) * dist;
         const y = source.worldY + Math.sin(angle) * dist;
 
-        // 仅限绿地（margin 排除金沙滩与海岸）
-        if (!isOnLand(x, y, mapDef, GRASS_GREEN_LAND_MARGIN)) continue;
+        // 仅限真正的绿色草地（严格排除黄色沙滩与海岸）
+        if (!isOnGreenLand(x, y, mapDef, 85)) continue;
         // 严格检查 48px 最小密度间距
         if (this.isGrassTooClose(x, y, GRASS_MIN_SPACING)) continue;
 
@@ -397,8 +396,8 @@ export class HarvestWorld {
       const g = this.grasses[i];
       if (!g) continue;
 
-      // 沙滩/海洋环境检查：沙滩上缺乏养分与水分，小草无法存活，直接触发枯萎死亡
-      if (!isOnLand(g.worldX, g.worldY, mapDef, GRASS_GREEN_LAND_MARGIN)) {
+      // 精准绿色草地检查：一旦脱离草地落入黄色沙滩或海洋带，草无法存活，直接触发枯萎离场
+      if (!isOnGreenLand(g.worldX, g.worldY, mapDef, 85)) {
         g.wither();
       }
 

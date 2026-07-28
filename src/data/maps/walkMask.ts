@@ -309,7 +309,7 @@ function clampAngle(a: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, a));
 }
 
-/** 陆地可走（不考虑树） */
+/** 陆地可走（不考虑树，包含沙滩与草地） */
 export function isOnLand(
   x: number,
   y: number,
@@ -317,6 +317,32 @@ export function isOnLand(
   bodyR = 0,
 ): boolean {
   return !isOcean(x, y, def, bodyR);
+}
+
+/**
+ * 专门判定坐标 (x, y) 是否位于真正的绿色草地上（严格避开黄色沙滩与海岸）
+ * @param greenMargin 内缩绿地边界的深程度（像素，默认 85px，沙滩在 85px 外侧）
+ */
+export function isOnGreenLand(
+  x: number,
+  y: number,
+  def: LevelMapDef,
+  greenMargin = 85,
+): boolean {
+  const land = landRectOf(def);
+  if (land.w <= 0 || land.h <= 0) return false;
+  const hit = projectToRoundedRectBoundary(
+    x,
+    y,
+    land.x,
+    land.y,
+    land.w,
+    land.h,
+    Math.min(land.w, land.h) * COAST_CORNER_RATIO,
+  );
+  // 点在沙滩或海里的标志：相对绿地边界过浅（>-greenMargin）
+  const distFromShore = hit.signedDist - organicShoreDistort(hit.u);
+  return distFromShore <= -greenMargin;
 }
 
 let treeIdSeq = 0;
