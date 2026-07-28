@@ -203,10 +203,10 @@ export class GrassEntity extends Container {
     this.lifeTimer -= dt * (factor - 1) * randomTolerance;
   }
 
-  /** 当处在粑粑肥力滋养范畴时，大幅延缓自然衰老（减缓 70% 的寿命流逝） */
+  /** 当处在粑粑肥力滋养范畴时，适度延缓自然衰老（减缓 30% 的寿命流逝） */
   applyFertilizerLongevity(dt: number): void {
     if (this.isWithering) return;
-    this.lifeTimer += dt * 0.7;
+    this.lifeTimer += dt * 0.3;
   }
 
   update(deltaMS: number): void {
