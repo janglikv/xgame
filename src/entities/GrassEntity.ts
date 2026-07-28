@@ -86,9 +86,9 @@ export class GrassEntity extends Container {
     this.resetGrowthTimer(options.growthTimeSec);
     this.resetSpreadTimer(options.spreadTimeSec);
 
-    // 随机寿命 (基础寿命 ±25% 抖动)
+    // 大幅拉大随机寿命离散度 (0.4 ~ 1.6 倍基础寿命，打破批量同生同灭)
     const baseLife = GRASS_LIFESPAN_BASE_SEC[size] ?? 100;
-    this.lifeTimer = baseLife * (0.8 + Math.random() * 0.4);
+    this.lifeTimer = baseLife * (0.4 + Math.random() * 1.2);
 
     this.gfx = new Graphics();
     this.gfx.label = 'GrassGfx';
@@ -109,8 +109,9 @@ export class GrassEntity extends Container {
     if (baseSec === null) {
       this.growthTimer = null;
     } else {
-      const jitter = (Math.random() - 0.5) * 0.3 * baseSec;
-      this.growthTimer = Math.max(2, baseSec + jitter);
+      // 扩大生长抖动至 ±60%，使同一批草的生长时间完全交错
+      const jitter = (Math.random() - 0.5) * 1.2 * baseSec;
+      this.growthTimer = Math.max(3, baseSec + jitter);
     }
   }
 
@@ -123,8 +124,9 @@ export class GrassEntity extends Container {
     if (baseSec === null) {
       this.spreadTimer = null;
     } else {
-      const jitter = (Math.random() - 0.5) * 0.35 * baseSec;
-      this.spreadTimer = Math.max(3, baseSec + jitter);
+      // 扩大播种抖动至 ±60%，错开播种节奏
+      const jitter = (Math.random() - 0.5) * 1.2 * baseSec;
+      this.spreadTimer = Math.max(4, baseSec + jitter);
     }
   }
 
@@ -191,12 +193,14 @@ export class GrassEntity extends Container {
   }
 
   /**
-   * 当处在过密环境时，加速消耗寿命
-   * @param factor 消耗速率倍率（如 3.0）
+   * 当处在过密环境时，加速消耗寿命（带空间离散耐受系数，避免同一区域过密草集体蒸发）
+   * @param factor 消耗速率倍率（如 3.5）
    */
   applyOvercrowded(factor: number, dt: number): void {
     if (this.isWithering || !this.enableGrowth) return;
-    this.lifeTimer -= dt * (factor - 1);
+    // 加入 0.5 ~ 1.5 随机离散耐受系数
+    const randomTolerance = 0.5 + Math.sin(this.worldX * 0.08 + this.worldY * 0.08 + this.swayT) * 0.5 + 0.5;
+    this.lifeTimer -= dt * (factor - 1) * randomTolerance;
   }
 
   update(deltaMS: number): void {
