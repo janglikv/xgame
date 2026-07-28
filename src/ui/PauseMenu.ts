@@ -106,7 +106,9 @@ export class PauseMenu extends Container {
 
     // 3. 时间倍率调节组 (- | 速度: 1.0x | +)
     this.speedDecBtn = this.createButton('-', 42, 42, 0x4a3a6e, 0x665294, () => {
-      TimeScaleConfig.decrease(0.5);
+      const current = TimeScaleConfig.getScale();
+      const step = current > 5.0 ? 1.0 : 0.5;
+      TimeScaleConfig.decrease(step);
       this.updateSpeedBtnText();
     });
 
@@ -124,7 +126,9 @@ export class PauseMenu extends Container {
     this.speedBtnLabel = this.speedMainBtn.label;
 
     this.speedIncBtn = this.createButton('+', 42, 42, 0x4a3a6e, 0x665294, () => {
-      TimeScaleConfig.increase(0.5);
+      const current = TimeScaleConfig.getScale();
+      const step = current >= 5.0 ? 1.0 : 0.5;
+      TimeScaleConfig.increase(step);
       this.updateSpeedBtnText();
     });
 
