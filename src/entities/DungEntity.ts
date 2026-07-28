@@ -15,7 +15,7 @@ export type DungOptions = {
  */
 export class DungEntity extends Container {
   readonly dungId: string;
-  readonly radius: number;
+  readonly baseRadius: number;
   worldX: number;
   worldY: number;
 
@@ -33,10 +33,17 @@ export class DungEntity extends Container {
     this.dungId = options.dungId ?? `dung_${Math.floor(Math.random() * 1000000)}`;
     this.maxNutrient = options.nutrient ?? 100;
     this.nutrient = this.maxNutrient;
-    this.radius = options.radius ?? 120;
+    this.baseRadius = options.radius ?? 120;
     this.onDepleted = options.onDepleted;
 
     this.position.set(worldX, worldY);
+  }
+
+  /** 动态有效肥力影响半径：随着养分消耗，影响范围从 120px 逐渐收缩缩小 */
+  get effectiveRadius(): number {
+    if (this.maxNutrient <= 0) return 0;
+    const ratio = Math.max(0, Math.min(1, this.nutrient / this.maxNutrient));
+    return Math.max(15, this.baseRadius * ratio);
   }
 
   /** 消耗养分（每次助长新草或加速消耗 1 点） */

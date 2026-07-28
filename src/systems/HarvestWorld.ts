@@ -212,13 +212,14 @@ export class HarvestWorld {
     return dung;
   }
 
-  /** 获取处于某个坐标处的粑粑肥力实体（若有） */
+  /** 获取处于某个坐标处的粑粑肥力实体（若有，作用半径随着养分消耗动态从 120px 逐渐收缩缩小） */
   private findFertileDung(x: number, y: number): DungEntity | null {
     for (const d of this.dungs) {
       if (d.nutrient <= 0) continue;
+      const r = d.effectiveRadius;
       const dx = d.worldX - x;
       const dy = d.worldY - y;
-      if (dx * dx + dy * dy <= d.radius * d.radius) {
+      if (dx * dx + dy * dy <= r * r) {
         return d;
       }
     }
