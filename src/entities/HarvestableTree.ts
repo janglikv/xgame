@@ -98,14 +98,6 @@ export class HarvestableTree extends Container {
     this.gfx.tint = options.tint ?? profile.tint;
     this.addChild(this.gfx);
 
-    // 脚底提示环：可交互
-    const ring = new Graphics();
-    ring.label = 'HarvestHint';
-    ring
-      .circle(0, 2, profile.ringR)
-      .stroke({ width: 1.5, color: 0xd4e8a8, alpha: 0.55 });
-    this.addChild(ring);
-
     this.healthBar = new HealthBar({
       maxHp: this.maxHp,
       width: profile.hpBarW,

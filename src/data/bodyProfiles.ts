@@ -47,53 +47,52 @@ export type BodyProfile = {
 
 /** 仓库内默认配置（碰撞编辑器导出） */
 export const BODY_PROFILES: Record<BodyProfileId, BodyProfile> = {
-  'bomb-girl': {
-    id: 'bomb-girl',
-    label: '炸炸',
+  "bomb-girl": {
+    id: "bomb-girl",
+    label: "炸炸",
     solid: [{ type: 'circle', ox: 0.21, oy: -9.42, r: 18 }],
     hurt: [
       { type: 'circle', ox: 0.5, oy: -35.99, r: 20.15 },
       { type: 'circle', ox: -0.52, oy: -14.09, r: 18.71 },
     ],
   },
-  'ice-ranger': {
-    id: 'ice-ranger',
-    label: '冰冰',
+  "ice-ranger": {
+    id: "ice-ranger",
+    label: "冰冰",
     solid: [{ type: 'circle', ox: 0.2, oy: -12.78, r: 19.4 }],
     hurt: [
       { type: 'circle', ox: -2.44, oy: -32.09, r: 22 },
       { type: 'circle', ox: 0, oy: -11.42, r: 20 },
     ],
   },
-  spider: {
-    id: 'spider',
-    label: '蜘蛛',
+  "spider": {
+    id: "spider",
+    label: "蜘蛛",
     solid: [{ type: 'circle', ox: -3.11, oy: -18.7, r: 23.06 }],
     hurt: [{ type: 'circle', ox: -1.67, oy: -22.58, r: 29.76 }],
   },
-  'flame-flower': {
-    id: 'flame-flower',
-    label: '火焰花',
+  "flame-flower": {
+    id: "flame-flower",
+    label: "火焰花",
     solid: [{ type: 'circle', ox: -6.25, oy: -17.95, r: 20 }],
     hurt: [
       { type: 'circle', ox: -7.56, oy: -17.33, r: 24 },
       { type: 'circle', ox: -11.59, oy: -50.19, r: 23.77 },
     ],
   },
-  'wooden-dummy': {
-    id: 'wooden-dummy',
-    label: '木桩',
+  "wooden-dummy": {
+    id: "wooden-dummy",
+    label: "木桩",
     solid: [{ type: 'circle', ox: 0.82, oy: -9.38, r: 18 }],
     hurt: [
       { type: 'rect', ox: 0, oy: -40.45, w: 21.31, h: 73.35 },
       { type: 'rect', ox: 0.8, oy: -44.47, w: 50.49, h: 8.51 },
     ],
   },
-  /** 可砍树（中树视觉为 1×；小/大树运行时按 scale 比例缩放本模板） */
-  tree: {
-    id: 'tree',
-    label: '树',
-    solid: [{ type: 'circle', ox: 0, oy: 0, r: 14 }],
+  "tree": {
+    id: "tree",
+    label: "树",
+    solid: [{ type: 'circle', ox: -0.47, oy: -1.92, r: 11.05 }],
     hurt: [{ type: 'circle', ox: 0, oy: -18, r: 22 }],
   },
 };

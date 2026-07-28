@@ -18,7 +18,6 @@ export type TreeSizeProfile = {
   interactR: number;
   hpBarY: number;
   hpBarW: number;
-  ringR: number;
   tint: number;
 };
 
@@ -40,7 +39,6 @@ function visualProfile(
     interactR: scaled(56, scale),
     hpBarY: -Math.round(108 * (scale / TREE_MEDIUM_VISUAL_SCALE)),
     hpBarW: scaled(36, scale),
-    ringR: scaled(10, scale),
     tint: extras.tint,
   };
 }

@@ -3,6 +3,7 @@ import { getActiveMapDef, setActiveMapDef } from '../data/maps/activeMap';
 import type { LevelMapDef } from '../data/maps/types';
 import {
   clampToWalkableWorld,
+  getRuntimeTreeObstacles,
   hitsTreeObstacle,
   isOcean,
   landRectOf,
@@ -10,6 +11,7 @@ import {
 } from '../data/maps/walkMask';
 import type { Vec2 } from '../utils/math';
 import { fbm2D, makeSeamlessNoiseTexture } from '../utils/noiseTexture';
+import { pushCircleOutMany, slideCircle } from './circleBody';
 import { generateOrganicContour, OceanLayer } from './OceanLayer';
 import { TreeRowChunk } from './TreeRowChunk';
 
@@ -76,17 +78,8 @@ export function bodyHitsTrees(
   return hitsTreeObstacle(x, y, r);
 }
 
-/** 仅树干 solid（不含海）——走路用，避免海岸被当轴对齐硬墙卡脚 */
-function bodyHitsTrunk(
-  x: number,
-  y: number,
-  radius = DEFAULT_BODY_RADIUS,
-): boolean {
-  return hitsTreeObstacle(x, y, Math.max(0, radius));
-}
-
 /**
- * 从 from 移向 to：树用轴分离滑动；海不在这里硬挡。
+ * 从 from 移向 to：树干为圆，沿切线滑动绕开；海不在这里硬挡。
  * 海岸由 resolveSolid → clampWorld 做法线钳制，可沿岸滑行不卡脚。
  */
 export function resolveTreeCollision(
@@ -96,25 +89,25 @@ export function resolveTreeCollision(
   toY: number,
   radius = DEFAULT_BODY_RADIUS,
 ): Vec2 {
-  if (!bodyHitsTrunk(toX, toY, radius)) {
+  const r = Math.max(0, radius);
+  const trees = getRuntimeTreeObstacles();
+  if (trees.length === 0) {
     return { x: toX, y: toY };
   }
 
-  const canX = !bodyHitsTrunk(toX, fromY, radius);
-  const canY = !bodyHitsTrunk(fromX, toY, radius);
-
-  if (canX && !canY) return { x: toX, y: fromY };
-  if (canY && !canX) return { x: fromX, y: toY };
-  if (canX && canY) {
-    const dx = Math.abs(toX - fromX);
-    const dy = Math.abs(toY - fromY);
-    return dx >= dy ? { x: toX, y: fromY } : { x: fromX, y: toY };
+  const slid = slideCircle(fromX, fromY, toX, toY, r, trees);
+  if (!hitsTreeObstacle(slid.x, slid.y, r)) {
+    return slid;
   }
 
-  if (bodyHitsTrunk(fromX, fromY, radius)) {
-    const escaped = tryEscapeTrees(fromX, fromY, radius);
-    if (escaped) return escaped;
+  // 多树夹缝仍穿透：径向再推；再不行星形脱困
+  const pushed = pushCircleOutMany(slid.x, slid.y, r, trees, 5);
+  if (!hitsTreeObstacle(pushed.x, pushed.y, r)) {
+    return pushed;
   }
+
+  const escaped = tryEscapeTrees(fromX, fromY, r);
+  if (escaped) return escaped;
 
   return { x: fromX, y: fromY };
 }
@@ -124,7 +117,7 @@ const BLINK_RAY_STEP = 4;
 
 /**
  * 闪现落点：沿 from→to 射线采样，返回最后一个不撞树的位置。
- * 与走路轴分离不同——贴墙时停在墙前，不会横向滑移或整段取消。
+ * 与走路切线滑动不同——贴墙时停在墙前，不会横向滑移或整段取消。
  * 坐标应为 solid 圆心（与 resolveSolid / bodyHitsTrees 一致）。
  */
 export function resolveBlinkAlongRay(
@@ -181,6 +174,15 @@ function tryEscapeTrees(
   y: number,
   radius: number,
 ): Vec2 | null {
+  const r = Math.max(0, radius);
+  const trees = getRuntimeTreeObstacles();
+  if (trees.length > 0) {
+    const pushed = pushCircleOutMany(x, y, r, trees, 6);
+    if (!hitsTreeObstacle(pushed.x, pushed.y, r)) {
+      return pushed;
+    }
+  }
+
   const steps = [8, 16, 28, 44, 64, 96];
   const dirs = [
     [1, 0],
@@ -196,7 +198,7 @@ function tryEscapeTrees(
     for (const [dx, dy] of dirs) {
       const nx = x + dx * dist;
       const ny = y + dy * dist;
-      if (!bodyHitsTrees(nx, ny, radius)) return { x: nx, y: ny };
+      if (!bodyHitsTrees(nx, ny, r)) return { x: nx, y: ny };
     }
   }
   return null;
