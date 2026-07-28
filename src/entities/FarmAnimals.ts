@@ -813,65 +813,16 @@ const HORSE_ECO: HerbivoreEco = {
   startHunger: 0.25,
 };
 
-/** 一头牛/马认领的草数量 */
-const PASTURE_GRASS_COUNT = 4;
+
+
 
 /**
- * 草场舒适度：在自己认领的 4 棵草内部活动。
- */
-const GRASS_COMFORT = {
-  /** 组牧场时邻草搜索半径 */
-  clusterR: 200,
-  coreR: 48,
-  strollR: 92,
-  enterR: 180,
-  nestR: 100,
-  densityScore: 42,
-  centerScore: 55,
-  restPauseMin: 0.55,
-  restPauseMax: 1.9,
-  strollSpeed: 46,
-  centerPull: 28,
-  waypointSamples: 10,
-} as const;
-
-/** grassId → 认领的食草动物（牛马互斥，一草一主） */
-const grassClaims = new Map<string, GrassEater>();
-
-function releaseGrassClaims(owner: GrassEater): void {
-  for (const [id, who] of grassClaims) {
-    if (who === owner) grassClaims.delete(id);
-  }
-}
-
-function isGrassFreeOrMine(
-  grassId: string,
-  self: GrassEater,
-): boolean {
-  if (!grassId) return false;
-  const owner = grassClaims.get(grassId);
-  if (!owner || owner === self) return true;
-  if (!owner.isAlive || owner.destroyed) {
-    grassClaims.delete(grassId);
-    return true;
-  }
-  return false;
-}
-
-type GrassPatch = {
-  members: CreatureEcologyContext['grasses'][number][];
-  centerX: number;
-  centerY: number;
-};
-
-/**
- * 食草基类：认领 4 棵草作牧场；在内部踱步啃草（草变小不消失）；饿死。
+ * 食草基类：自由寻找最近的大草走过去直接吃掉（草消失）；饿死。
+ * 无认领机制，无领地巡视。
  */
 abstract class GrassEater extends Spider {
   private hunger: number;
   private readonly ecoCfg: HerbivoreEco;
-  /** 认领的草 id（最多 4） */
-  private pastureIds: string[] = [];
   /** 排泄粑粑倒计时（15s ~ 30s，频率翻倍） */
   private poopTimer = 10 + Math.random() * 12.5;
 
@@ -894,26 +845,6 @@ abstract class GrassEater extends Spider {
 
   get hunger01(): number {
     return this.hunger;
-  }
-
-  override update(
-    deltaMS: number,
-    playerWorldX: number,
-    playerWorldY: number,
-    playerBodyProfileId: BodyProfileId | null = null,
-    ecology: CreatureEcologyContext | null = null,
-  ) {
-    if (!this.isAlive || this.destroyed) {
-      releaseGrassClaims(this);
-      this.pastureIds = [];
-    }
-    return super.update(
-      deltaMS,
-      playerWorldX,
-      playerWorldY,
-      playerBodyProfileId,
-      ecology,
-    );
   }
 
   private tickPoop(dt: number): void {
@@ -944,30 +875,49 @@ abstract class GrassEater extends Spider {
     this.hunger = Math.min(1, this.hunger + cfg.hungerPerSec * dt);
 
     const eco = this.ecology;
+
+    // 饿死
     if (eco && this.hunger >= 1) {
-      releaseGrassClaims(this);
-      this.pastureIds = [];
       this.applyDamage(this.maximumHp + 1);
-      if (!this.isAlive) {
-        eco.removeCreature(this);
-      }
+      if (!this.isAlive) eco.removeCreature(this);
       return { moved: false, attackHit: null };
     }
 
-    const hs = hungerSenseAndSearch(
-      this.hunger,
-      cfg.grassSense,
-      cfg.forageSpeed,
-    );
+    const hs = hungerSenseAndSearch(this.hunger, cfg.grassSense, cfg.forageSpeed);
 
-    if (eco) {
-      const patch = this.refreshPasture(eco, hs.sense);
-      if (patch) {
-        return this.liveInGrassPatch(dt, patch, eco, hs);
+    if (eco && this.hunger >= cfg.seekGrassAt) {
+      // 找感知范围内最近的大草
+      let best: CreatureEcologyContext['grasses'][number] | null = null;
+      let bestD = hs.sense;
+      for (const g of eco.grasses) {
+        if (g.size !== 'large') continue;
+        const grazable = 'isGrazable' in g ? (g as { isGrazable: boolean }).isGrazable : true;
+        if (!grazable) continue;
+        const d = Math.hypot(g.worldX - this.worldX, g.worldY - this.worldY);
+        if (d < bestD) { bestD = d; best = g; }
+      }
+
+      if (best) {
+        // 够近则直接吃掉（草立即消失）
+        if (bestD <= cfg.eatRange) {
+          const sizeBefore = best.size;
+          const result = eco.consumeGrass(best);
+          if (result) {
+            const feed = cfg.grassFeed[result] ?? cfg.grassFeed[sizeBefore] ?? cfg.grassFeed.medium;
+            this.hunger = Math.max(0, this.hunger - feed);
+          }
+          return { moved: false, attackHit: null };
+        }
+        // 向最近大草走去
+        this.aiState = 'chase';
+        const moved = this.moveTowardAvoidingTrees(
+          best.worldX, best.worldY, hs.approachSpeed, dt, 8, 20,
+        );
+        return { moved, attackHit: null };
       }
     }
 
-    // 没有空闲牧场：找草
+    // 无草可觅：随机漫步
     return {
       moved: this.updateSearchRoam(dt, {
         radius: hs.searchRadius,
@@ -979,326 +929,6 @@ abstract class GrassEater extends Spider {
       }),
       attackHit: null,
     };
-  }
-
-  /**
-   * 维护 4 草牧场：只占无人认领的草；牛马之间也互斥。
-   */
-  private refreshPasture(
-    eco: CreatureEcologyContext,
-    senseRange: number,
-  ): GrassPatch | null {
-    // 同步已有认领：草还在、仍为大草 (large) 且仍归自己
-    const stillMembers: CreatureEcologyContext['grasses'][number][] = [];
-    for (const id of this.pastureIds) {
-      const g = eco.grasses.find((x) => x.grassId === id);
-      if (!g || g.size !== 'large') {
-        grassClaims.delete(id);
-        continue;
-      }
-      if (!isGrassFreeOrMine(id, this)) continue;
-      grassClaims.set(id, this);
-      stillMembers.push(g);
-    }
-    this.pastureIds = stillMembers.map((g) => g.grassId);
-
-    // 补满到 4 棵：在现有中心附近找空闲大草
-    if (this.pastureIds.length < PASTURE_GRASS_COUNT) {
-      this.fillPasture(eco, senseRange, stillMembers);
-    }
-
-    if (this.pastureIds.length === 0) return null;
-
-    const members = this.pastureIds
-      .map((id) => eco.grasses.find((g) => g.grassId === id))
-      .filter((g): g is CreatureEcologyContext['grasses'][number] => !!g);
-
-    if (members.length === 0) {
-      releaseGrassClaims(this);
-      this.pastureIds = [];
-      return null;
-    }
-
-    let sumX = 0;
-    let sumY = 0;
-    let wSum = 0;
-    for (const g of members) {
-      const w = 1.5;
-      sumX += g.worldX * w;
-      sumY += g.worldY * w;
-      wSum += w;
-    }
-
-    return {
-      members,
-      centerX: sumX / wSum,
-      centerY: sumY / wSum,
-    };
-  }
-
-  /** 从空闲大草中凑满 4 棵 */
-  private fillPasture(
-    eco: CreatureEcologyContext,
-    senseRange: number,
-    current: CreatureEcologyContext['grasses'][number][],
-  ): void {
-    const free = eco.grasses.filter(
-      (g) =>
-        g.size === 'large' &&
-        g.grassId &&
-        isGrassFreeOrMine(g.grassId, this) &&
-        !this.pastureIds.includes(g.grassId),
-    );
-    if (free.length === 0) return;
-
-    // 有现有成员：围着它们补；否则以自己为中心找种子
-    let seed: CreatureEcologyContext['grasses'][number] | null =
-      current[0] ?? null;
-    if (!seed) {
-      let bestD = senseRange;
-      for (const g of free) {
-        const d = Math.hypot(g.worldX - this.worldX, g.worldY - this.worldY);
-        if (d < bestD) {
-          bestD = d;
-          seed = g;
-        }
-      }
-    }
-    if (!seed) return;
-
-    // 以种子为中心，按距离收纳空闲草直到 4
-    const ordered = free
-      .map((g) => ({
-        g,
-        d: Math.hypot(g.worldX - seed!.worldX, g.worldY - seed!.worldY),
-      }))
-      .filter((x) => x.d <= GRASS_COMFORT.clusterR * 1.35)
-      .sort((a, b) => a.d - b.d);
-
-    // 种子优先
-    if (seed.grassId && isGrassFreeOrMine(seed.grassId, this)) {
-      if (!this.pastureIds.includes(seed.grassId)) {
-        this.pastureIds.push(seed.grassId);
-        grassClaims.set(seed.grassId, this);
-      }
-    }
-
-    for (const { g } of ordered) {
-      if (this.pastureIds.length >= PASTURE_GRASS_COUNT) break;
-      if (!g.grassId || this.pastureIds.includes(g.grassId)) continue;
-      if (!isGrassFreeOrMine(g.grassId, this)) continue;
-      this.pastureIds.push(g.grassId);
-      grassClaims.set(g.grassId, this);
-    }
-  }
-
-  private grassNestScore(
-    x: number,
-    y: number,
-    members: CreatureEcologyContext['grasses'][number][],
-    centerX: number,
-    centerY: number,
-  ): number {
-    let near = 0;
-    for (const g of members) {
-      const d = Math.hypot(g.worldX - x, g.worldY - y);
-      if (d <= GRASS_COMFORT.nestR) {
-        near += 1 + (1 - d / GRASS_COMFORT.nestR) * 0.35;
-      }
-    }
-    const toCenter = Math.hypot(x - centerX, y - centerY);
-    const centerBonus =
-      GRASS_COMFORT.centerScore *
-      Math.max(0, 1 - toCenter / (GRASS_COMFORT.strollR * 1.25));
-    return near * GRASS_COMFORT.densityScore + centerBonus;
-  }
-
-  private pickGrassInteriorWaypoint(patch: GrassPatch): void {
-    const eco = this.ecology;
-    let bestX = patch.centerX;
-    let bestY = patch.centerY;
-    let bestScore = -Infinity;
-
-    for (let i = 0; i < GRASS_COMFORT.waypointSamples; i++) {
-      const u = Math.random();
-      const band =
-        u < 0.55
-          ? Math.random() * GRASS_COMFORT.coreR
-          : GRASS_COMFORT.coreR +
-            Math.random() * (GRASS_COMFORT.strollR - GRASS_COMFORT.coreR);
-      const ang = Math.random() * Math.PI * 2;
-      const x = patch.centerX + Math.cos(ang) * band;
-      const y = patch.centerY + Math.sin(ang) * band;
-
-      let score =
-        this.grassNestScore(
-          x,
-          y,
-          patch.members,
-          patch.centerX,
-          patch.centerY,
-        ) +
-        Math.random() * 12;
-
-      if (eco) {
-        let minPeer = Infinity;
-        for (const c of eco.creatures) {
-          if (c === this || !c.isAlive) continue;
-          const d = Math.hypot(c.worldX - x, c.worldY - y);
-          if (d < minPeer) minPeer = d;
-        }
-        if (Number.isFinite(minPeer)) {
-          score += Math.min(minPeer, 100) * 0.25;
-        }
-      }
-
-      if (score > bestScore) {
-        bestScore = score;
-        bestX = x;
-        bestY = y;
-      }
-    }
-
-    this.patrolTargetX = bestX;
-    this.patrolTargetY = bestY;
-  }
-
-  /** 在自己的 4 草牧场内活动；啃草变小不消失 */
-  private liveInGrassPatch(
-    dt: number,
-    patch: GrassPatch,
-    eco: CreatureEcologyContext,
-    hs: ReturnType<typeof hungerSenseAndSearch>,
-  ): { moved: boolean; attackHit: SpiderAttackHit | null } {
-    const cfg = this.ecoCfg;
-    const distCenter = Math.hypot(
-      patch.centerX - this.worldX,
-      patch.centerY - this.worldY,
-    );
-    const hungry = this.hunger >= cfg.seekGrassAt;
-    const nestHere = this.grassNestScore(
-      this.worldX,
-      this.worldY,
-      patch.members,
-      patch.centerX,
-      patch.centerY,
-    );
-
-    const tryEat = (): boolean => {
-      if (!hungry) return false;
-      let best: CreatureEcologyContext['grasses'][number] | null = null;
-      let bestD = cfg.eatRange;
-      for (const g of patch.members) {
-        // 只啃自己牧场里的草，且只能吃成熟的大草 (large)
-        if (!g.grassId || !this.pastureIds.includes(g.grassId)) continue;
-        const live = eco.grasses.find((x) => x.grassId === g.grassId);
-        if (!live || live.size !== 'large') continue;
-        // GrassEntity 才有 isGrazable
-        const grazable =
-          'isGrazable' in live
-            ? (live as { isGrazable: boolean }).isGrazable
-            : true;
-        if (!grazable) continue;
-        const d = Math.hypot(
-          live.worldX - this.worldX,
-          live.worldY - this.worldY,
-        );
-        if (d <= bestD) {
-          bestD = d;
-          best = live;
-        }
-      }
-      if (!best) return false;
-      // 按啃前体型回饱；草只会变小
-      const sizeBefore = best.size;
-      const result = eco.consumeGrass(best);
-      if (!result) return false;
-      const feed =
-        cfg.grassFeed[result] ??
-        cfg.grassFeed[sizeBefore] ??
-        cfg.grassFeed.medium;
-      this.hunger = Math.max(0, this.hunger - feed);
-      return true;
-    };
-
-    if (tryEat()) {
-      return { moved: false, attackHit: null };
-    }
-
-    if (distCenter > GRASS_COMFORT.enterR) {
-      this.aiState = 'chase';
-      this.patrolPause = 0;
-      const moved = this.moveTowardAvoidingTrees(
-        patch.centerX,
-        patch.centerY,
-        hungry ? hs.approachSpeed : GRASS_COMFORT.strollSpeed * 1.15,
-        dt,
-        GRASS_COMFORT.coreR * 0.6,
-        26,
-      );
-      return { moved, attackHit: null };
-    }
-
-    this.aiState = 'patrol';
-
-    const targetOut =
-      Math.hypot(
-        this.patrolTargetX - patch.centerX,
-        this.patrolTargetY - patch.centerY,
-      ) >
-      GRASS_COMFORT.strollR * 1.35;
-    if (targetOut) {
-      this.pickGrassInteriorWaypoint(patch);
-      this.patrolPause = 0;
-    }
-
-    if (distCenter > GRASS_COMFORT.coreR * 0.85) {
-      const pull = GRASS_COMFORT.centerPull * (hungry ? 1.15 : 1) * dt;
-      const inv = 1 / distCenter;
-      this.worldX += (patch.centerX - this.worldX) * inv * pull;
-      this.worldY += (patch.centerY - this.worldY) * inv * pull;
-    }
-
-    const cozy = nestHere >= GRASS_COMFORT.densityScore * 1.2;
-    const pauseMin = cozy
-      ? GRASS_COMFORT.restPauseMin
-      : ANIMAL_ROAM.grazePauseMin * 0.7;
-    const pauseMax = cozy
-      ? GRASS_COMFORT.restPauseMax
-      : hungry
-        ? ANIMAL_ROAM.grazePauseMax * 0.45
-        : GRASS_COMFORT.restPauseMax * 0.75;
-
-    if (this.patrolPause > 0) {
-      this.patrolPause = Math.max(0, this.patrolPause - dt);
-      if (this.patrolPause <= 0) {
-        this.pickGrassInteriorWaypoint(patch);
-      }
-      tryEat();
-      return { moved: false, attackHit: null };
-    }
-
-    const dx = this.patrolTargetX - this.worldX;
-    const dy = this.patrolTargetY - this.worldY;
-    const dist = Math.hypot(dx, dy);
-    if (dist <= 12) {
-      this.patrolPause =
-        pauseMin + Math.random() * Math.max(0, pauseMax - pauseMin);
-      this.pickGrassInteriorWaypoint(patch);
-      tryEat();
-      return { moved: false, attackHit: null };
-    }
-
-    const speed = hungry
-      ? hs.approachSpeed * 0.7
-      : GRASS_COMFORT.strollSpeed;
-    const step = Math.min(speed * dt, dist);
-    const inv = 1 / dist;
-    this.worldX += dx * inv * step;
-    this.worldY += dy * inv * step;
-    this.faceToward(this.patrolTargetX, this.patrolTargetY);
-    tryEat();
-    return { moved: true, attackHit: null };
   }
 }
 

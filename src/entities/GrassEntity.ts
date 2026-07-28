@@ -7,7 +7,6 @@ import {
   GRASS_SPREAD_TIME_SEC,
   grassBodyShapeScale,
   nextGrassSize,
-  prevGrassSize,
 } from '../data/grassProfiles';
 import { drawGrassLocal } from '../world/GrassPatch';
 
@@ -159,22 +158,14 @@ export class GrassEntity extends Container {
   }
 
   /**
-   * 被啃食：体型大→中→小，小草只抖一下不消失。
+   * 被啃食：草直接枯萎离场消失，不留中草/小草。
    * @returns 啃之前的体型（用于回饱量）
    */
   graze(): GrassSize | null {
-    if (this.grazeLockT > 0) return null;
+    if (this.grazeLockT > 0 || this.isWithering) return null;
     const before = this.size;
-    const smaller = prevGrassSize(this.size);
-    if (smaller) {
-      this.applySize(smaller);
-    }
-    // 冷却 + 回弹动画；小草也会被「轻啃」后慢慢再长
-    this.grazeLockT = 5.5 + Math.random() * 1.5;
-    this.growthAnimT = 0.35;
-    this.resetGrowthTimer();
-    // 保留播种倒计时，不因被啃食而打断扩展进程
-    this.onGrown?.(this);
+    // 被吃后直接触发枯萎离场消失
+    this.wither();
     return before;
   }
 

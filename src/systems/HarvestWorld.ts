@@ -392,12 +392,9 @@ export class HarvestWorld {
 
     const mapDef = this.hooks.getMapDef();
     if (entity.grassId && mapDef.grasses) {
-      const found = mapDef.grasses.find(
-        (g) => grassIdOf(g) === entity.grassId,
+      mapDef.grasses = mapDef.grasses.filter(
+        (g) => grassIdOf(g) !== entity.grassId,
       );
-      if (found) {
-        found.size = entity.size;
-      }
     }
     this.hooks.afterWorldChange();
     this.hooks.persistMapDraft();
