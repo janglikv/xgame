@@ -427,6 +427,12 @@ export class LevelScene extends Container implements GameScene {
     return {
       pickups: this.harvest.pickups,
       grasses: this.harvest.grasses,
+      trees: this.harvest.trees.map((t) => ({
+        worldX: t.worldX,
+        worldY: t.worldY,
+        kind: t.treeKind,
+        isAlive: t.isAlive,
+      })),
       creatures: this.spiders,
       consumePickup: (p) => {
         const found = this.harvest.pickups.find((item) => item === p);

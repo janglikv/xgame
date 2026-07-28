@@ -10,6 +10,7 @@ import {
   nextTreeSize,
   treeBodyShapeScale,
   treeHurtR,
+  treeSolidR,
 } from '../data/treeProfiles';
 import { HealthBar } from '../ui/HealthBar';
 import { drawPineLocal } from '../world/PineTree';
@@ -174,6 +175,20 @@ export class HarvestableTree extends Container {
     }
   }
 
+  /**
+   * 苹果落地坐标：落在树干 solid 外一圈，避免猪/玩家顶着树干抽搐。
+   */
+  private rollAppleDropPos(): { x: number; y: number } {
+    const solid = treeSolidR(this.size);
+    // solid 外再留裕量，给猪身体半径
+    const dist = solid + 22 + Math.random() * 16;
+    const ang = Math.random() * Math.PI * 2;
+    return {
+      x: this.worldX + Math.cos(ang) * dist,
+      y: this.worldY + Math.sin(ang) * dist * 0.72 + 4,
+    };
+  }
+
   private resetGrowthTimer(customSec?: number): void {
     if (!this.enableGrowth) {
       this.growthTimer = null;
@@ -252,10 +267,9 @@ export class HarvestableTree extends Container {
           this.appleCount++;
           this.redrawTreeGfx();
         } else {
-          // 树上已满 3 个红苹果，多余的新苹果掉落到地面！
-          const dropX = this.worldX + (Math.random() - 0.5) * 24;
-          const dropY = this.worldY + 4 + Math.random() * 8;
-          this.onAppleDrop?.(dropX, dropY);
+          // 掉到树干 solid 外，避免猪/玩家贴树来回顶
+          const drop = this.rollAppleDropPos();
+          this.onAppleDrop?.(drop.x, drop.y);
         }
       }
     }
@@ -302,9 +316,8 @@ export class HarvestableTree extends Container {
     if (this.treeKind === 'apple' && this.appleCount > 0) {
       this.appleCount--;
       this.redrawTreeGfx();
-      const dropX = this.worldX + (Math.random() - 0.5) * 24;
-      const dropY = this.worldY + 4 + Math.random() * 10;
-      this.onAppleDrop?.(dropX, dropY);
+      const drop = this.rollAppleDropPos();
+      this.onAppleDrop?.(drop.x, drop.y);
     }
 
     if (this.hp <= 0) {

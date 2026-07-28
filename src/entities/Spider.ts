@@ -20,6 +20,7 @@ import {
   OUTLINE_PX_CHARACTER,
   paddedFootAnchorY,
 } from '../utils/outlineTexture';
+import { getRuntimeTreeObstacles } from '../data/maps';
 
 const SPIDER_URL = '/assets/spider/spider.png';
 
@@ -71,6 +72,15 @@ const AI = {
   /** 航点停留最短/最长（秒） */
   patrolPauseMin: 0.55,
   patrolPauseMax: 1.9,
+  /**
+   * 默认个人空间（世界像素）。
+   * 0 = 不启用软分散；农场动物等会调大。
+   */
+  personalSpace: 0,
+  /** 软分散最大移速 */
+  separationSpeed: 70,
+  /** 选巡视点时多采几次，倾向更空旷处 */
+  patrolWaypointSamples: 7,
 } as const;
 
 /** 走路晃动（局部） */
@@ -179,6 +189,19 @@ export type SpiderOptions = {
    * ≤0 表示永不脱战（蜘蛛默认）。
    */
   leashRange?: number;
+  /**
+   * 巡视领地半径（世界像素）。缺省 AI.territoryRadius。
+   */
+  territoryRadius?: number;
+  /**
+   * 个人空间半径（世界像素）。>0 时靠近同伴会软推开，避免挤成一团。
+   * 缺省 0（不启用）；农场动物应设为 ~70–100。
+   */
+  personalSpace?: number;
+  /**
+   * 软分散最大移速。缺省 AI.separationSpeed。
+   */
+  separationSpeed?: number;
 };
 
 /** 蜘蛛 AI 状态 */
@@ -209,6 +232,14 @@ export type EcologyGrass = {
   grassId: string;
 };
 
+/** 场上可识别的树（猪找苹果树睡觉等） */
+export type EcologyTree = {
+  worldX: number;
+  worldY: number;
+  kind: 'pine' | 'apple';
+  isAlive: boolean;
+};
+
 /**
  * 生物生态上下文（猪觅食、牛马吃草等）：由场景每帧注入。
  * 不强制所有单位使用。
@@ -223,6 +254,8 @@ export type CreatureEcologyContext = {
   }>;
   /** 场上草地（牛马觅食） */
   grasses: ReadonlyArray<EcologyGrass>;
+  /** 场上可砍树（猪认苹果树） */
+  trees: ReadonlyArray<EcologyTree>;
   /** 场上其它生物（含自己，调用方过滤） */
   creatures: ReadonlyArray<Spider>;
   /** 吃掉地上的苹果等 */
@@ -262,6 +295,12 @@ export class Spider extends Container implements WorldActor {
   readonly aggroOnDetect: boolean;
   /** 脱战距离；≤0 永不脱战 */
   readonly leashRange: number;
+  /** 巡视领地半径 */
+  protected readonly territoryRadius: number;
+  /** 个人空间；0 表示不做软分散 */
+  protected readonly personalSpace: number;
+  /** 软分散最大移速 */
+  protected readonly separationSpeed: number;
   /** 描边外扩后换算出的实际脚底锚点。 */
   private footAnchorY: number;
   /** 碰撞模板；子类外观决定 id */
@@ -343,6 +382,9 @@ export class Spider extends Container implements WorldActor {
     this.canAttack = options.canAttack ?? true;
     this.aggroOnDetect = options.aggroOnDetect ?? true;
     this.leashRange = options.leashRange ?? 0;
+    this.territoryRadius = options.territoryRadius ?? AI.territoryRadius;
+    this.personalSpace = options.personalSpace ?? AI.personalSpace;
+    this.separationSpeed = options.separationSpeed ?? AI.separationSpeed;
     this.worldX = worldX;
     this.worldY = worldY;
     this.homeX = worldX;
@@ -365,8 +407,8 @@ export class Spider extends Container implements WorldActor {
       0,
       -this.appearance.hpBarOffsetY * this.baseScale,
     );
-    // 木桩 / 无敌单位不显示血条
-    this.healthBar.visible = !this.invincible && !this.passive;
+    // 默认隐藏；受击后再显示（木桩 / 无敌永不显示）
+    this.healthBar.visible = false;
     this.addChild(this.healthBar);
 
     // 开局错开：先短停再走向随机航点，避免四角同步齐步
@@ -434,11 +476,18 @@ export class Spider extends Container implements WorldActor {
     this.zIndex = this.worldY;
   }
 
-  /** 面向某世界点（只翻转贴图，血条不镜像） */
+  /**
+   * 面向某世界点（只翻转贴图，血条不镜像）。
+   * 带水平死区：目标几乎在正上/正下或贴身时不翻转，
+   * 避免小动物被挤开 / 微抖时左右抽搐。
+   */
   faceToward(wx: number, _wy: number): void {
     const dx = wx - this.worldX;
-    if (dx === 0) return;
-    this.facing = dx < 0 ? -1 : 1;
+    // 约 10px 内保持原朝向，防止 dx 在 0 附近每帧变号
+    if (Math.abs(dx) < 10) return;
+    const next: 1 | -1 = dx < 0 ? -1 : 1;
+    if (next === this.facing) return;
+    this.facing = next;
     this.applyFacingToSprite();
   }
 
@@ -469,6 +518,7 @@ export class Spider extends Container implements WorldActor {
 
     if (!this.invincible) {
       this.healthBar.applyDelta(-Math.abs(hit.damage));
+      this.revealHealthBar();
     }
 
     // 木桩：完全无反馈（不抖、不转、不位移、不切 AI）
@@ -517,8 +567,15 @@ export class Spider extends Container implements WorldActor {
     if (!this.isAlive) return false;
     if (!this.invincible) {
       this.healthBar.applyDelta(-Math.abs(amount));
+      this.revealHealthBar();
     }
     return this.isAlive;
+  }
+
+  /** 受击后显示血条（木桩 / 无敌除外） */
+  private revealHealthBar(): void {
+    if (this.invincible || this.passive) return;
+    this.healthBar.visible = true;
   }
 
   /**
@@ -567,6 +624,8 @@ export class Spider extends Container implements WorldActor {
       this.blastKnock > 0.35 ||
       (this.spinTarget > 0 && this.spinT < 1);
 
+    // 仅 AI 主动位移才播走路晃动；纯分散挤开不算走路，否则会左右抖
+    let aiMoved = false;
     if (this.isAlive && !stunned) {
       const aiResult = this.updateAI(
         dt,
@@ -574,28 +633,130 @@ export class Spider extends Container implements WorldActor {
         playerWorldY,
         playerBodyProfileId,
       );
-      if (aiResult.moved) moved = true;
+      // 生态饿死 / 被移除会 destroy 自身，勿再碰 sprite
+      if (this.destroyed) {
+        return { moved: false, attackHit: null };
+      }
+      if (aiResult.moved) {
+        moved = true;
+        aiMoved = true;
+      }
       attackHit = aiResult.attackHit;
+      // 靠近同伴时软推开，避免挤成一坨（攻击前摇时减弱）
+      if (this.applyCrowdSeparation(dt)) moved = true;
     } else if (this.attackCd > 0) {
       this.attackCd = Math.max(0, this.attackCd - dt);
     }
 
+    if (this.destroyed) {
+      return { moved: false, attackHit: null };
+    }
+
     const walking =
       !stunned &&
-      moved &&
+      aiMoved &&
       (this.aiState === 'chase' || this.aiState === 'patrol');
     this.updatePose(dt, walking);
 
     return { moved, attackHit };
   }
 
-  /** 在领地圆盘内均匀随机一个航点 */
+  /**
+   * 软分散：与附近同伴保持个人空间，越近推得越狠。
+   * 完全重叠时随机给一个方向，避免卡死。
+   * 边缘有死区，避免在个人空间边界来回抖。
+   */
+  protected applyCrowdSeparation(dt: number): boolean {
+    if (this.personalSpace <= 0 || !this.ecology) return false;
+    // 扑咬中减弱，避免把近战位推散
+    const strength = this.aiState === 'attack' ? 0.25 : 1;
+
+    let pushX = 0;
+    let pushY = 0;
+    let near = 0;
+    const space = this.personalSpace;
+    // 只在明显侵入时推，边界附近不推 → 减少来回抽
+    const activeR = space * 0.88;
+
+    for (const other of this.ecology.creatures) {
+      if (other === this || !other.isAlive) continue;
+      const dx = this.worldX - other.worldX;
+      const dy = this.worldY - other.worldY;
+      const d = Math.hypot(dx, dy);
+      if (d >= activeR) continue;
+      near += 1;
+      if (d < 1e-3) {
+        // 完全重叠：稳定伪随机方向（用朝向，避免每帧变）
+        const ang = this.facing > 0 ? 0.3 : Math.PI + 0.3;
+        pushX += Math.cos(ang + near);
+        pushY += Math.sin(ang + near);
+        continue;
+      }
+      // 平方衰减：贴得越近推得越强
+      const t = 1 - d / activeR;
+      const w = t * t;
+      pushX += (dx / d) * w;
+      pushY += (dy / d) * w;
+    }
+
+    if (near === 0) return false;
+
+    const len = Math.hypot(pushX, pushY);
+    if (len < 1e-4) return false;
+    const inv = 1 / len;
+    // 单帧最多推开一点，避免过冲后弹回
+    const step = Math.min(this.separationSpeed * strength * dt, space * 0.12);
+    if (step < 0.02) return false;
+    this.worldX += pushX * inv * step;
+    this.worldY += pushY * inv * step;
+    return true;
+  }
+
+  /**
+   * 在领地圆盘内选巡视航点。
+   * 多采样 + 偏向离其它生物更远的点，形成自然分散。
+   */
   protected pickPatrolWaypoint(): void {
-    const angle = Math.random() * Math.PI * 2;
-    // sqrt 使面积均匀，略偏外圈更像绕领地巡视
-    const r = Math.sqrt(0.15 + 0.85 * Math.random()) * AI.territoryRadius;
-    this.patrolTargetX = this.homeX + Math.cos(angle) * r;
-    this.patrolTargetY = this.homeY + Math.sin(angle) * r;
+    const eco = this.ecology;
+    const samples =
+      eco && this.personalSpace > 0 ? AI.patrolWaypointSamples : 1;
+
+    let bestX = this.homeX;
+    let bestY = this.homeY;
+    let bestScore = -Infinity;
+
+    for (let i = 0; i < samples; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      // sqrt 使面积均匀，略偏外圈更像绕领地巡视
+      const r =
+        Math.sqrt(0.15 + 0.85 * Math.random()) * this.territoryRadius;
+      const x = this.homeX + Math.cos(angle) * r;
+      const y = this.homeY + Math.sin(angle) * r;
+
+      // 轻微随机，避免永远挑同一侧
+      let score = Math.random() * 24;
+      if (eco) {
+        let minD = Infinity;
+        for (const c of eco.creatures) {
+          if (c === this || !c.isAlive) continue;
+          const d = Math.hypot(c.worldX - x, c.worldY - y);
+          if (d < minD) minD = d;
+        }
+        // 越空旷分越高；上限避免无限拉远
+        if (Number.isFinite(minD)) {
+          score += Math.min(minD, this.territoryRadius * 1.4);
+        }
+      }
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestX = x;
+        bestY = y;
+      }
+    }
+
+    this.patrolTargetX = bestX;
+    this.patrolTargetY = bestY;
   }
 
   protected rollPatrolPause(): number {
@@ -638,6 +799,153 @@ export class Spider extends Container implements WorldActor {
     return true;
   }
 
+  /**
+   * 自由游荡：换点走动。
+   * - 不设 center：以当前位置为中心滚动探索（会逐渐走远）
+   * - 设 center：在锚点（食物区）周围转悠
+   */
+  protected updateSearchRoam(
+    dt: number,
+    options: {
+      radius: number;
+      speed: number;
+      /** 到点后最短/最长停顿（秒） */
+      pauseMin?: number;
+      pauseMax?: number;
+      /** 游荡锚点（食物坐标）；缺省用当前位置 */
+      centerX?: number;
+      centerY?: number;
+      /** 0~1，越大越倾向采远处点 */
+      preferFar?: number;
+      /** true 时用 patrol 姿态（踱步）；false 用 chase（找食感） */
+      leisurely?: boolean;
+    },
+  ): boolean {
+    const radius = Math.max(40, options.radius);
+    const speed = Math.max(20, options.speed);
+    const pauseMin = options.pauseMin ?? 0.04;
+    const pauseMax = options.pauseMax ?? 0.18;
+    const preferFar = options.preferFar ?? 0.55;
+    const leisurely = options.leisurely ?? false;
+
+    this.aiState = leisurely ? 'patrol' : 'chase';
+
+    const rollWaypoint = (): void => {
+      this.pickSearchWaypoint(radius, {
+        centerX: options.centerX,
+        centerY: options.centerY,
+        preferFar,
+      });
+    };
+
+    if (this.patrolPause > 0) {
+      this.patrolPause = Math.max(0, this.patrolPause - dt);
+      if (this.patrolPause <= 0) {
+        rollWaypoint();
+      }
+      return false;
+    }
+
+    const dx = this.patrolTargetX - this.worldX;
+    const dy = this.patrolTargetY - this.worldY;
+    const dist = Math.hypot(dx, dy);
+
+    if (dist <= AI.patrolArrive * 1.4) {
+      // 至少停一小会，避免到点立刻换点导致抖
+      const pause =
+        Math.max(0.12, pauseMin) +
+        Math.random() * Math.max(0, pauseMax - pauseMin);
+      this.patrolPause = pause;
+      rollWaypoint();
+      return false;
+    }
+
+    const step = Math.min(speed * dt, dist);
+    const inv = 1 / dist;
+    this.worldX += dx * inv * step;
+    this.worldY += dy * inv * step;
+    this.faceToward(this.patrolTargetX, this.patrolTargetY);
+    return true;
+  }
+
+  /**
+   * 采游荡航点。
+   * center 缺省 = 当前位置；preferFar 控制近/远环带。
+   */
+  protected pickSearchWaypoint(
+    radius: number,
+    opts?: {
+      centerX?: number;
+      centerY?: number;
+      preferFar?: number;
+    },
+  ): void {
+    const eco = this.ecology;
+    const samples = 8;
+    const cx = opts?.centerX ?? this.worldX;
+    const cy = opts?.centerY ?? this.worldY;
+    const preferFar = opts?.preferFar ?? 0.55;
+    // 无锚点时偏好沿朝向前进；围着食物转时更均匀
+    const anchored =
+      opts?.centerX !== undefined && opts?.centerY !== undefined;
+    const preferAngle = this.facingDir > 0 ? 0 : Math.PI;
+
+    let bestX = cx + radius * 0.4;
+    let bestY = cy;
+    let bestScore = -Infinity;
+
+    for (let i = 0; i < samples; i++) {
+      // preferFar 高 → 更多远点；低 → 更贴锚点（食物区踱步）
+      const near = Math.random() * (1 - preferFar);
+      const far = preferFar + (1 - preferFar) * Math.random();
+      const band = Math.random() < preferFar ? far : near;
+      const r = Math.sqrt(0.08 + 0.92 * band) * radius;
+      const angle = anchored
+        ? Math.random() * Math.PI * 2
+        : i === 0
+          ? preferAngle + (Math.random() - 0.5) * 0.9
+          : Math.random() * Math.PI * 2;
+
+      const x = cx + Math.cos(angle) * r;
+      const y = cy + Math.sin(angle) * r;
+
+      let score = Math.random() * 22;
+      if (!anchored) {
+        score += r * 0.3;
+        score += Math.cos(angle - preferAngle) * 16;
+      } else {
+        // 在环上更均匀，略避开圆心正上方叠人
+        score += Math.abs(r - radius * 0.55) * -0.08;
+      }
+
+      if (eco) {
+        let minD = Infinity;
+        for (const c of eco.creatures) {
+          if (c === this || !c.isAlive) continue;
+          const d = Math.hypot(c.worldX - x, c.worldY - y);
+          if (d < minD) minD = d;
+        }
+        if (Number.isFinite(minD)) {
+          score += Math.min(minD, 160) * 0.4;
+        }
+      }
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestX = x;
+        bestY = y;
+      }
+    }
+
+    this.patrolTargetX = bestX;
+    this.patrolTargetY = bestY;
+  }
+
+  /** 朝向：1 右 / -1 左（供搜食偏向用） */
+  protected get facingDir(): 1 | -1 {
+    return this.facing;
+  }
+
   /** 朝目标点移动一段，返回是否发生位移 */
   protected moveToward(
     tx: number,
@@ -656,6 +964,78 @@ export class Spider extends Container implements WorldActor {
     this.worldY += dy * inv * step;
     this.faceToward(tx, ty);
     return true;
+  }
+
+  /**
+   * 朝目标走，路上有树干 solid 则先绕到切点，避免直怼树来回顶。
+   * @param bodyR 自身碰撞近似半径
+   */
+  protected moveTowardAvoidingTrees(
+    tx: number,
+    ty: number,
+    speed: number,
+    dt: number,
+    stopDist = 4,
+    bodyR = 22,
+  ): boolean {
+    let aimX = tx;
+    let aimY = ty;
+
+    const trees = getRuntimeTreeObstacles();
+
+    let bestBlock: {
+      t: { x: number; y: number; r: number };
+      proj: number;
+    } | null = null;
+
+    const toTx = tx - this.worldX;
+    const toTy = ty - this.worldY;
+    const pathLen = Math.hypot(toTx, toTy);
+    if (pathLen > 1e-3) {
+      const invPath = 1 / pathLen;
+      for (const t of trees) {
+        const clearR = t.r + bodyR + 5;
+        const toCx = t.x - this.worldX;
+        const toCy = t.y - this.worldY;
+        const proj = toCx * toTx * invPath + toCy * toTy * invPath;
+        if (proj < 0 || proj > pathLen) continue;
+        const cx = this.worldX + toTx * invPath * proj;
+        const cy = this.worldY + toTy * invPath * proj;
+        const perp = Math.hypot(t.x - cx, t.y - cy);
+        if (perp >= clearR) continue;
+        if (!bestBlock || proj < bestBlock.proj) {
+          bestBlock = { t, proj };
+        }
+      }
+    }
+
+    if (bestBlock) {
+      const t = bestBlock.t;
+      const clearR = t.r + bodyR + 8;
+      // 绕行点：树心到目标方向的垂直侧，偏向目标一侧
+      let px = -(t.y - this.worldY);
+      let py = t.x - this.worldX;
+      let plen = Math.hypot(px, py);
+      if (plen < 1e-3) {
+        px = 1;
+        py = 0;
+        plen = 1;
+      } else {
+        px /= plen;
+        py /= plen;
+      }
+      // 选更靠近最终目标的切侧
+      const tdx = tx - t.x;
+      const tdy = ty - t.y;
+      if (px * tdx + py * tdy < 0) {
+        px = -px;
+        py = -py;
+      }
+      aimX = t.x + px * clearR;
+      aimY = t.y + py * clearR;
+    }
+
+    return this.moveToward(aimX, aimY, speed, dt, stopDist);
   }
 
   protected updateAI(
@@ -794,7 +1174,8 @@ export class Spider extends Container implements WorldActor {
 
   private updatePose(dt: number, walking: boolean): void {
     const sprite = this.sprite;
-    if (!sprite) return;
+    // destroy 后 sprite 可能仍引用，但 anchor 等已清空
+    if (!sprite || sprite.destroyed || !sprite.anchor) return;
 
     let ox = 0;
     let oy = 0;
