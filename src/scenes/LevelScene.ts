@@ -181,11 +181,21 @@ export class LevelScene extends Container implements GameScene {
         this.sortDepth();
       },
       onSpawnNaturalAnimal: (kind, x, y) => {
-        // 限制全场农场动物自然孕育上限为 20 只
-        const farmAnimals = this.spiders.filter((s) =>
-          ['Chicken', 'Pig', 'Cow', 'Horse'].includes(s.label ?? ''),
-        );
-        if (farmAnimals.length >= 20) return;
+        if (kind === 'wolf') {
+          const wolfCount = this.spiders.filter(
+            (s) => s.isAlive && !s.destroyed && s.label === 'Wolf',
+          ).length;
+          if (wolfCount >= 3) return;
+        } else {
+          // 限制全场农场食草动物自然孕育上限为 20 只
+          const farmAnimals = this.spiders.filter(
+            (s) =>
+              s.isAlive &&
+              !s.destroyed &&
+              ['Chicken', 'Pig', 'Cow', 'Horse'].includes(s.label ?? ''),
+          );
+          if (farmAnimals.length >= 20) return;
+        }
 
         const creature = createEnemyAt(kind, x, y);
         this.sortLayer.addChild(creature);
@@ -725,7 +735,7 @@ export class LevelScene extends Container implements GameScene {
       }
     }
 
-    this.harvest.tickTrees(deltaMS);
+    this.harvest.tickTrees(deltaMS, this.spiders);
     this.harvest.update(deltaMS, player.worldX, player.worldY);
     this.sortDepth();
   }

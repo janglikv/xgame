@@ -14,6 +14,7 @@ import {
   HarvestableTree,
 } from '../entities/HarvestableTree';
 import { GrassEntity } from '../entities/GrassEntity';
+import type { Spider } from '../entities/Spider';
 import {
   ItemPickup,
   PICKUP_RADIUS,
@@ -400,7 +401,7 @@ export class HarvestWorld {
     }
   }
 
-  tickTrees(deltaMS: number): void {
+  tickTrees(deltaMS: number, creatures?: ReadonlyArray<Spider>): void {
     for (const tree of this.trees) {
       tree.update(deltaMS);
     }
@@ -448,6 +449,7 @@ export class HarvestWorld {
     }
 
     this.tickNaturalAnimalSpawning(dt);
+    this.tickNaturalWolfSpawning(dt, creatures);
   }
 
   private naturalAnimalTimer = 20;
@@ -493,6 +495,49 @@ export class HarvestWorld {
       const chosenKind = kinds[Math.floor(Math.random() * kinds.length)]!;
 
       this.hooks.onSpawnNaturalAnimal(chosenKind, spawnX, spawnY);
+    }
+  }
+
+  private naturalWolfTimer = 35;
+
+  /**
+   * 当全岛食草动物积累较多（食草动物 >= 8 只）时，自然吸引/生成天敌狼 (Wolf)
+   */
+  private tickNaturalWolfSpawning(
+    dt: number,
+    creatures?: ReadonlyArray<Spider>,
+  ): void {
+    if (!this.hooks.onSpawnNaturalAnimal || !creatures) return;
+
+    // 统计场上存活的农场食草动物
+    const farmAnimals = creatures.filter(
+      (s) =>
+        s.isAlive &&
+        !s.destroyed &&
+        ['Chicken', 'Pig', 'Cow', 'Horse'].includes(s.label ?? ''),
+    );
+
+    // 食草动物不足 8 只时，不具备自然生成天敌狼的条件
+    if (farmAnimals.length < 8) {
+      this.naturalWolfTimer = 30;
+      return;
+    }
+
+    this.naturalWolfTimer -= dt;
+    if (this.naturalWolfTimer <= 0) {
+      this.naturalWolfTimer = 35 + Math.random() * 15;
+
+      // 从食草动物周边随机挑选生成锚点
+      const target = farmAnimals[Math.floor(Math.random() * farmAnimals.length)]!;
+      const angle = Math.random() * Math.PI * 2;
+      const dist = 110 + Math.random() * 60;
+      const spawnX = target.worldX + Math.cos(angle) * dist;
+      const spawnY = target.worldY + Math.sin(angle) * dist;
+
+      const mapDef = this.hooks.getMapDef();
+      if (!isOnGreenLand(spawnX, spawnY, mapDef, 255)) return;
+
+      this.hooks.onSpawnNaturalAnimal('wolf', spawnX, spawnY);
     }
   }
 }
