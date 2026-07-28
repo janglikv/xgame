@@ -6,7 +6,7 @@ export type WoodenDummyOptions = Pick<SpiderOptions, 'scale'>;
 
 /**
  * 训练木桩：无敌、出生点绝对固定，只挨打不反击。
- * 受击有抖动反馈，无血条、不被挤走、无 AI。
+ * 无血条、无受击反馈、不被挤走、无 AI。
  */
 export class WoodenDummy extends Spider {
   constructor(

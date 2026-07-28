@@ -3,7 +3,6 @@ import { drawPineLocal } from '../world/PineTree';
 
 export type GodBrush =
   | 'harvest'
-  | 'pine'
   | 'spider'
   | 'flame-flower'
   | 'wooden-dummy'
@@ -69,10 +68,7 @@ export class GodModeHud extends Container {
       version: 'v1.0',
       name: '基础植被',
       collapsed: false,
-      items: [
-        { brush: 'harvest', label: '可砍树' },
-        { brush: 'pine', label: '松树' },
-      ],
+      items: [{ brush: 'harvest', label: '可砍树' }],
     },
     {
       id: 'v1.1',
@@ -420,22 +416,19 @@ export class GodModeHud extends Container {
       .stroke({ width: 1, color: 0x483a63, alpha: 0.5 });
     iconContainer.addChild(iconBg);
 
-    if (brush === 'harvest' || brush === 'pine') {
+    if (brush === 'harvest') {
       const treeGfx = new Graphics();
       drawPineLocal(treeGfx, 0, 0, 0);
       treeGfx.position.set(16, 27);
       treeGfx.scale.set(0.32);
       iconContainer.addChild(treeGfx);
-
-      if (brush === 'harvest') {
-        // 可砍树标记：右下角斧头/资源图标印记
-        const badge = new Graphics();
-        badge
-          .circle(25, 25, 5.5)
-          .fill({ color: 0xd69a19 })
-          .stroke({ width: 1, color: 0xffffff });
-        iconContainer.addChild(badge);
-      }
+      // 可砍树标记：右下角资源印记
+      const badge = new Graphics();
+      badge
+        .circle(25, 25, 5.5)
+        .fill({ color: 0xd69a19 })
+        .stroke({ width: 1, color: 0xffffff });
+      iconContainer.addChild(badge);
     } else if (
       brush === 'spider' ||
       brush === 'flame-flower' ||

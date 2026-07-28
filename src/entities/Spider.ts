@@ -153,12 +153,10 @@ export type SpiderOptions = {
   appearance?: Partial<MonsterAppearance>;
   /**
    * 无敌：受击不扣血、永不死亡。
-   * 仍可播放受击姿态（与 passive 配合做木桩）。
    */
   invincible?: boolean;
   /**
-   * 木桩 / 被动：不巡视、不追击、不攻击，不受击退位移。
-   * 仅原地受击抖动。
+   * 木桩 / 被动：不巡视、不追击、不攻击，不受击退，无受击姿态。
    */
   passive?: boolean;
   /**
@@ -202,7 +200,7 @@ export class Spider extends Container implements WorldActor {
   private readonly appearance: MonsterAppearance;
   /** 无敌：受击不扣血 */
   readonly invincible: boolean;
-  /** 被动木桩：不 AI、不击飞位移 */
+  /** 被动木桩：不 AI、不击飞、无受击反馈 */
   readonly passive: boolean;
   /** 绝对固定：不被 solid 挤走，每帧钉回出生点 */
   readonly immovable: boolean;
@@ -428,16 +426,8 @@ export class Spider extends Container implements WorldActor {
       this.healthBar.applyDelta(-Math.abs(hit.damage));
     }
 
-    // 木桩：只抖一下，不位移、不空中转圈、不切 AI
+    // 木桩：完全无反馈（不抖、不转、不位移、不切 AI）
     if (this.passive) {
-      this.blastKnock = Math.max(
-        this.blastKnock,
-        Math.min(1.0, hit.poseStrength * 0.65),
-      );
-      if (hit.dirX !== 0) {
-        this.facing = hit.dirX < 0 ? -1 : 1;
-        this.applyFacingToSprite();
-      }
       return true;
     }
 
@@ -488,7 +478,7 @@ export class Spider extends Container implements WorldActor {
     const dt = deltaMS / 1000;
     this.healthBar.update(deltaMS);
 
-    // 木桩 / 固定体：钉死出生点，只做受击姿态
+    // 木桩 / 固定体：钉死出生点，无姿态反馈
     if (this.passive || this.immovable) {
       this.worldX = this.homeX;
       this.worldY = this.homeY;
@@ -496,7 +486,7 @@ export class Spider extends Container implements WorldActor {
       this.knock.velY = 0;
       this.knock.velZ = 0;
       this.knock.height = 0;
-      this.updatePose(dt, false);
+      this.blastKnock = 0;
       return { moved: false, attackHit: null };
     }
 

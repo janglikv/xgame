@@ -244,13 +244,10 @@ export class LevelScene extends Container implements GameScene {
       sortLayer: this.sortLayer,
       spiders: this.spiders,
       harvest: this.harvest,
-      worldMap: this.worldMap,
       camera: this.camera,
       hud: this.godHud,
-      nightTreeTint: NIGHT_TREE_TINT,
       syncWorldActors: () => this.syncWorldActors(),
       sortDepth: () => this.sortDepth(),
-      cullTrees: () => this.cullTrees(),
       persistMapDraft: () => this.persistMapDraft(),
     });
     this.godHud.setBrush(this.god.brush);

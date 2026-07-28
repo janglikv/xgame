@@ -40,8 +40,7 @@ export class HarvestWorld {
   constructor(private readonly hooks: HarvestWorldHooks) {}
 
   /**
-   * 从地图 def.trees 刷可砍树（kind=harvest 或默认）。
-   * pine 由 WorldMap 静态绘制。
+   * 从地图 def.trees 刷可砍树（normalize 后仅 harvest）。
    */
   spawnFromMap(mapDef: LevelMapDef): void {
     const trees = normalizeTrees(mapDef);

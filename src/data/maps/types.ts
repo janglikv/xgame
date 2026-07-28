@@ -10,10 +10,10 @@ export type EnemySpawn = {
 
 /**
  * 树上种类：
- * - pine：静态装饰 + solid（不可砍）
  * - harvest：可砍实体（运行时 HarvestableTree）
+ * - pine：已废弃（normalize 时丢弃；旧草稿兼容）
  */
-export type TreeKind = 'pine' | 'harvest';
+export type TreeKind = 'harvest' | 'pine';
 
 /**
  * 摆放的一棵树（世界坐标，脚底）。

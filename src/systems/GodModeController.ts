@@ -9,13 +9,11 @@ import {
   isOnLand,
   removeRuntimeTreeObstacleById,
   treeIdOf,
-  treeKindOf,
   type LevelMapDef,
   type MapTree,
 } from '../data/maps';
 import type { GodBrush, GodModeHud } from '../ui/GodModeHud';
 import type { LevelCamera } from '../scenes/LevelCamera';
-import type { WorldMap } from '../world/WorldMap';
 import { createEnemyAt, DEFAULT_SPIDER_SCALE } from './enemyFactory';
 import type { HarvestWorld } from './HarvestWorld';
 
@@ -27,14 +25,11 @@ export type GodModeDeps = {
   sortLayer: Container;
   spiders: Spider[];
   harvest: HarvestWorld;
-  worldMap: WorldMap;
   camera: LevelCamera;
   hud: GodModeHud;
-  nightTreeTint: number;
   spiderScale?: number;
   syncWorldActors: () => void;
   sortDepth: () => void;
-  cullTrees: () => void;
   persistMapDraft: () => void;
 };
 
@@ -89,17 +84,17 @@ export class GodModeController {
     const mapDef = this.deps.getMapDef();
     if (!isOnLand(w.x, w.y, mapDef, 0)) return;
 
-    if (this.brush === 'harvest' || this.brush === 'pine') {
-      this.placeTree(w.x, w.y, this.brush);
+    if (this.brush === 'harvest') {
+      this.placeHarvestTree(w.x, w.y);
       return;
     }
     this.placeEnemy(w.x, w.y, this.brush);
   }
 
-  placeTree(x: number, y: number, kind: 'harvest' | 'pine'): void {
+  placeHarvestTree(x: number, y: number): void {
     const mapDef = this.deps.getMapDef();
-    const id = allocTreeId(kind === 'pine' ? 'pine' : 'harv');
-    const t: MapTree = { x, y, kind, id };
+    const id = allocTreeId('harv');
+    const t: MapTree = { x, y, kind: 'harvest', id };
     mapDef.trees.push(t);
     addRuntimeTreeObstacle({
       x,
@@ -107,14 +102,9 @@ export class GodModeController {
       r: TREE_SOLID_R,
       id,
     });
-
-    if (kind === 'harvest') {
-      this.deps.harvest.mountTree(t);
-      this.deps.syncWorldActors();
-      this.deps.sortDepth();
-    } else {
-      this.remountPineChunks();
-    }
+    this.deps.harvest.mountTree(t);
+    this.deps.syncWorldActors();
+    this.deps.sortDepth();
     this.deps.persistMapDraft();
   }
 
@@ -184,22 +174,10 @@ export class GodModeController {
       }
     }
 
-    let bestPine: MapTree | null = null;
-    let bestPineD = PICK_R;
-    for (const t of mapDef.trees) {
-      if (treeKindOf(t) !== 'pine') continue;
-      const d = Math.hypot(t.x - x, t.y - y);
-      if (d < bestPineD) {
-        bestPineD = d;
-        bestPine = t;
-      }
-    }
-
-    type Pick = { kind: 'tree' | 'enemy' | 'pine'; d: number };
+    type Pick = { kind: 'tree' | 'enemy'; d: number };
     const candidates: Pick[] = [];
     if (bestTree) candidates.push({ kind: 'tree', d: bestTreeD });
     if (bestEnemy) candidates.push({ kind: 'enemy', d: bestEnemyD });
-    if (bestPine) candidates.push({ kind: 'pine', d: bestPineD });
     if (candidates.length === 0) return;
     candidates.sort((a, b) => a.d - b.d);
     const pick = candidates[0]!;
@@ -236,25 +214,6 @@ export class GodModeController {
       bestEnemy.destroy({ children: true });
       spiders.splice(bestEnemyI, 1);
       this.deps.persistMapDraft();
-      return;
     }
-
-    if (pick.kind === 'pine' && bestPine) {
-      const pid = treeIdOf(bestPine);
-      removeRuntimeTreeObstacleById(pid);
-      mapDef.trees = mapDef.trees.filter((t) => treeIdOf(t) !== pid);
-      this.remountPineChunks();
-      this.deps.persistMapDraft();
-    }
-  }
-
-  remountPineChunks(): void {
-    const chunks = this.deps.worldMap.rebuildPlacedTrees();
-    for (const chunk of chunks) {
-      chunk.tint = this.deps.nightTreeTint;
-      this.deps.sortLayer.addChild(chunk);
-    }
-    this.deps.cullTrees();
-    this.deps.sortDepth();
   }
 }

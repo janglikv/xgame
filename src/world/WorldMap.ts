@@ -6,18 +6,12 @@ import {
   hitsTreeObstacle,
   isOcean,
   landRectOf,
-  normalizeTrees,
   syncRuntimeTreesFromDef,
-  treeIdOf,
-  treeKindOf,
 } from '../data/maps/walkMask';
 import type { Vec2 } from '../utils/math';
 import { fbm2D, makeSeamlessNoiseTexture } from '../utils/noiseTexture';
 import { generateOrganicContour, OceanLayer } from './OceanLayer';
-import {
-  TreeRowChunk,
-  type TreePlant,
-} from './TreeRowChunk';
+import { TreeRowChunk } from './TreeRowChunk';
 
 // 布局常量 re-export，保持旧 import 路径可用
 export {
@@ -552,46 +546,11 @@ export class WorldMap extends Container {
   }
 
   /**
-   * 仅绘制 kind=pine 的静态树（harvest 由 HarvestableTree 实体画）。
-   * 按 worldY 量化分行 + 水平邻近合并 chunk。
+   * 静态松树 chunk 已废弃（pine 不再使用）。
+   * 可砍树由 HarvestableTree 实体绘制；保留空实现以兼容 rebuildPlacedTrees。
    */
   private spawnPlacedTreeChunks(): void {
-    const pines = normalizeTrees(this.def).filter(
-      (t) => treeKindOf(t) === 'pine',
-    );
-    if (pines.length === 0) return;
-
-    /** 同一「行」：worldY 量化到 4px，避免浮点拆碎 */
-    const ROW_Q = 4;
-    const byRow = new Map<number, typeof pines>();
-    for (const t of pines) {
-      const key = Math.round(t.y / ROW_Q) * ROW_Q;
-      const list = byRow.get(key) ?? [];
-      list.push(t);
-      byRow.set(key, list);
-    }
-
-    const CHUNK_W = 1152;
-    for (const [, list] of byRow) {
-      list.sort((a, b) => a.x - b.x);
-      const y =
-        list.reduce((s, t) => s + t.y, 0) / Math.max(1, list.length);
-      for (let i = 0; i < list.length; ) {
-        const chunk: TreePlant[] = [];
-        const x0 = list[i]!.x;
-        while (i < list.length && list[i]!.x < x0 + CHUNK_W) {
-          const t = list[i]!;
-          const shade =
-            Math.abs(Math.round(t.x) + Math.round(t.y) + treeIdOf(t).length) %
-            3;
-          chunk.push({ x: t.x, shade });
-          i++;
-        }
-        if (chunk.length > 0) {
-          this.treeChunks.push(new TreeRowChunk(y, chunk));
-        }
-      }
-    }
+    // no-op
   }
 }
 

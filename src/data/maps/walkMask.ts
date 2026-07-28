@@ -362,6 +362,7 @@ export function treeIdOf(t: MapTree): string {
 
 /**
  * 规范化树列表：世界坐标、陆地过滤、近距去重、补 id。
+ * 只保留可砍树（harvest）；松树 pine 已废弃，加载时丢弃。
  * 兼容旧草稿 `{ c, r }`（需 mapSize + cellSize）。
  */
 export function normalizeTrees(def: LevelMapDef): MapTree[] {
@@ -371,6 +372,8 @@ export function normalizeTrees(def: LevelMapDef): MapTree[] {
   for (const raw of def.trees) {
     const t = coerceTree(raw, def);
     if (!t) continue;
+    // 不再使用静态松树
+    if (treeKindOf(t) === 'pine') continue;
     if (!isOnLand(t.x, t.y, def, 0)) continue;
     const id = treeIdOf(t);
     if (seenIds.has(id)) continue;
@@ -391,7 +394,7 @@ export function normalizeTrees(def: LevelMapDef): MapTree[] {
     out.push({
       x: t.x,
       y: t.y,
-      kind: treeKindOf(t),
+      kind: 'harvest',
       id,
     });
   }
