@@ -31,16 +31,16 @@ export function grassBodyShapeScale(size: GrassSize): number {
 
 /** 各体型生长到下一阶段的时间（秒），null 表示已是最终期 */
 export const GRASS_GROWTH_TIME_SEC: Record<GrassSize, number | null> = {
-  small: 15,
-  medium: 25,
+  small: 8,
+  medium: 14,
   large: null,
 };
 
 /** 各体型向四周播种的间隔（秒），null 表示不扩散 */
 export const GRASS_SPREAD_TIME_SEC: Record<GrassSize, number | null> = {
-  small: 28,
-  medium: 20,
-  large: 12,
+  small: 14,
+  medium: 10,
+  large: 6,
 };
 
 /** 一次扩散尝试的新草数量（按体型） */
@@ -55,13 +55,13 @@ export const GRASS_SPREAD_RADIUS_MIN = 30;
 export const GRASS_SPREAD_RADIUS_MAX = 72;
 
 /** 草丛之间最小间距（世界像素），避免叠成一团 */
-export const GRASS_MIN_SPACING = 26;
+export const GRASS_MIN_SPACING = 24;
 
 /**
  * 判定「绿地」时相对海岸的内缩（世界像素）。
- * 金沙滩约在岸线内侧 ~96px，用此 margin 把新草限制在绿地上。
+ * 适度放宽绿地边界，让草能在广阔区域自然繁衍。
  */
-export const GRASS_GREEN_LAND_MARGIN = 100;
+export const GRASS_GREEN_LAND_MARGIN = 40;
 
 /** 场上草丛数量上限，防止无限膨胀拖垮性能 */
 export const GRASS_MAX_COUNT = 500;

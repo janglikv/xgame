@@ -165,7 +165,7 @@ export class GrassEntity extends Container {
     this.grazeLockT = 5.5 + Math.random() * 1.5;
     this.growthAnimT = 0.35;
     this.resetGrowthTimer();
-    this.resetSpreadTimer();
+    // 保留播种倒计时，不因被啃食而打断扩展进程
     this.onGrown?.(this);
     return before;
   }
