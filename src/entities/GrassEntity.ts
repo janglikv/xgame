@@ -42,7 +42,6 @@ export class GrassEntity extends Container {
   readonly grassId: string;
 
   private readonly gfx: Graphics;
-  private readonly sparkleGfx: Graphics;
   private swayT = Math.random() * Math.PI * 2;
 
   private enableGrowth: boolean;
@@ -97,11 +96,6 @@ export class GrassEntity extends Container {
     this.gfx.scale.set(profile.scale);
     this.gfx.tint = options.tint ?? profile.tint;
     this.addChild(this.gfx);
-
-    this.sparkleGfx = new Graphics();
-    this.sparkleGfx.label = 'GrassSparkle';
-    this.sparkleGfx.visible = false;
-    this.addChild(this.sparkleGfx);
 
     this.syncToWorld();
   }
@@ -253,7 +247,7 @@ export class GrassEntity extends Container {
       }
     }
 
-    // 生长过渡动画
+    // 生长过渡动画（自然缩放弹跳）
     const profile = GRASS_SIZE_PROFILE[this.size];
     if (this.growthAnimT > 0) {
       this.growthAnimT = Math.max(0, this.growthAnimT - dt);
@@ -261,17 +255,8 @@ export class GrassEntity extends Container {
       const bounce = Math.sin(progress * Math.PI) * 0.32;
       const currentScale = profile.scale * (1 + bounce);
       this.gfx.scale.set(currentScale);
-
-      this.sparkleGfx.visible = true;
-      this.sparkleGfx.clear();
-      const radius = (8 + progress * 16) * profile.scale;
-      const alpha = Math.sin((1 - progress) * Math.PI) * 0.8;
-      this.sparkleGfx
-        .circle(0, -6 * profile.scale, radius)
-        .stroke({ width: 2.5, color: 0x99ff66, alpha });
     } else {
       this.gfx.scale.set(profile.scale);
-      this.sparkleGfx.visible = false;
     }
   }
 }
