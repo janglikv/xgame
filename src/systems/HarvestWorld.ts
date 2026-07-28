@@ -493,9 +493,16 @@ export class HarvestWorld {
         }
       }
 
-      // 如果过度拥挤（邻居 > 5），加速其寿命流逝（3.5 倍加速衰亡）
-      if (neighbors > GRASS_OVERCROWD_MAX_NEIGHBORS) {
-        g.applyOvercrowded(3.5, dt);
+      // 粑粑肥力庇护判定
+      const fertileDung = this.findFertileDung(g.worldX, g.worldY);
+      if (fertileDung) {
+        // 处于肥力光环内的草受养分滋养，大幅延缓自然衰老（衰老速度仅 30%），且完全免疫过密惩罚
+        g.applyFertilizerLongevity(dt);
+      } else {
+        // 无肥力庇护且过度拥挤（邻居 > 5），加速其寿命流逝（3.5 倍加速衰亡）
+        if (neighbors > GRASS_OVERCROWD_MAX_NEIGHBORS) {
+          g.applyOvercrowded(3.5, dt);
+        }
       }
 
       g.update(deltaMS);
