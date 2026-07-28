@@ -31,16 +31,16 @@ export function grassBodyShapeScale(size: GrassSize): number {
 
 /** 各体型生长到下一阶段的时间（秒），null 表示已是最终期 */
 export const GRASS_GROWTH_TIME_SEC: Record<GrassSize, number | null> = {
-  small: 20,
-  medium: 35,
+  small: 45,
+  medium: 75,
   large: null,
 };
 
 /** 各体型向四周播种的间隔（秒），null 表示不扩散 */
 export const GRASS_SPREAD_TIME_SEC: Record<GrassSize, number | null> = {
-  small: 28,
-  medium: 20,
-  large: 12,
+  small: 60,
+  medium: 45,
+  large: 30,
 };
 
 /** 一次扩散尝试的新草数量（按体型） */
