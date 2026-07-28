@@ -370,25 +370,6 @@ export class Spider extends Container implements WorldActor {
     this.zIndex = this.worldY;
   }
 
-  /**
-   * 按摄像机把世界坐标写到屏幕位置（旧 API，屏幕空间场景用）。
-   * @param zoom 镜头缩放（与地图一致）
-   */
-  syncToScreen(
-    cameraWorldX: number,
-    cameraWorldY: number,
-    screenCenterX: number,
-    screenCenterY: number,
-    zoom = 1,
-  ): void {
-    this.position.set(
-      screenCenterX + (this.worldX - cameraWorldX) * zoom,
-      screenCenterY +
-        (this.worldY - cameraWorldY) * zoom -
-        this.knock.height * zoom,
-    );
-  }
-
   /** 面向某世界点（只翻转贴图，血条不镜像） */
   faceToward(wx: number, _wy: number): void {
     const dx = wx - this.worldX;

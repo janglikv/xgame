@@ -3,8 +3,6 @@ import { createDefaultSave } from './defaults';
 import type { SaveData, SavedScene } from './types';
 
 const STORAGE_KEY = 'lu-o-lu:save:v1';
-/** 旧版散落 key，读档时迁移一次后删除 */
-const LEGACY_CHARACTER_KEY = 'lu_o_lu_last_character';
 
 function isCharacterId(value: unknown): value is CharacterId {
   return value === 'bomb-girl' || value === 'ice-ranger';
@@ -12,10 +10,9 @@ function isCharacterId(value: unknown): value is CharacterId {
 
 function parseSavedScene(raw: unknown): SavedScene | null {
   if (!raw || typeof raw !== 'object') return null;
-  const scene = raw as { kind?: unknown; levelId?: unknown; theme?: unknown };
+  const scene = raw as { kind?: unknown; levelId?: unknown };
   if (scene.kind === 'main') return { kind: 'main' };
   if (scene.kind === 'level') {
-    // 新档带 levelId；旧档（theme 或无 id）默认 level-1
     const levelId =
       typeof scene.levelId === 'string' && scene.levelId.length > 0
         ? scene.levelId
@@ -26,15 +23,7 @@ function parseSavedScene(raw: unknown): SavedScene | null {
 }
 
 function parseLastCharacter(raw: unknown): CharacterId {
-  if (isCharacterId(raw)) return raw;
-  // 兼容旧版独立 localStorage
-  try {
-    const legacy = localStorage.getItem(LEGACY_CHARACTER_KEY);
-    if (isCharacterId(legacy)) return legacy;
-  } catch {
-    /* ignore */
-  }
-  return 'bomb-girl';
+  return isCharacterId(raw) ? raw : 'bomb-girl';
 }
 
 /** 校验并归一化原始 JSON；无法识别则返回 null */
@@ -64,12 +53,7 @@ export class LocalSaveStore {
   load(): SaveData {
     try {
       const text = localStorage.getItem(STORAGE_KEY);
-      if (!text) {
-        // 无正式档时仍尝试迁移旧角色 key
-        const data = createDefaultSave();
-        data.progress.lastCharacter = parseLastCharacter(undefined);
-        return data;
-      }
+      if (!text) return createDefaultSave();
       const parsed: unknown = JSON.parse(text);
       return parseSaveData(parsed) ?? createDefaultSave();
     } catch {
@@ -80,12 +64,6 @@ export class LocalSaveStore {
   save(data: SaveData): void {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-      // 正式档写入后清掉旧 key，避免双源
-      try {
-        localStorage.removeItem(LEGACY_CHARACTER_KEY);
-      } catch {
-        /* ignore */
-      }
     } catch (err) {
       console.warn('[SaveStore] save failed:', err);
     }
@@ -112,7 +90,6 @@ export class LocalSaveStore {
   clear(): void {
     try {
       localStorage.removeItem(STORAGE_KEY);
-      localStorage.removeItem(LEGACY_CHARACTER_KEY);
     } catch {
       /* ignore */
     }

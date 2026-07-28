@@ -1,13 +1,10 @@
-import { getActiveMapDef, setActiveMapDef } from './activeMap';
+import { setActiveMapDef } from './activeMap';
 import { LEVEL_CATALOG, getLevelById as getCatalogLevelById } from './catalog';
-import { LEVEL_1 } from './level-1';
-import type { LevelMapDef, MapTree } from './types';
-import { cloneLevelDef, emptyIslandDef, normalizeTrees, seaMarginPx } from './walkMask';
+import type { EnemySpawn, LevelMapDef, MapTree } from './types';
+import { cloneLevelDef, normalizeTrees, seaMarginPx } from './walkMask';
 
-/** v3：世界坐标树，无网格 */
+/** 世界坐标树草稿 */
 const STORAGE_KEY = 'lu-o-lu:map-drafts:v3';
-/** 尝试迁移旧 v2 草稿 */
-const STORAGE_KEY_V2 = 'lu-o-lu:map-drafts:v2';
 
 const drafts = new Map<string, LevelMapDef>();
 
@@ -26,34 +23,40 @@ function isLooseLevelDef(raw: unknown): raw is Record<string, unknown> {
   );
 }
 
-/** 把任意草稿/目录数据收成当前 LevelMapDef */
+function parseEnemies(raw: unknown): EnemySpawn[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(
+    (e): e is EnemySpawn =>
+      !!e &&
+      typeof e === 'object' &&
+      typeof (e as EnemySpawn).x === 'number' &&
+      typeof (e as EnemySpawn).y === 'number' &&
+      ((e as EnemySpawn).kind === 'spider' ||
+        (e as EnemySpawn).kind === 'flame-flower' ||
+        (e as EnemySpawn).kind === 'wooden-dummy'),
+  );
+}
+
+/** 把草稿/目录 JSON 收成当前 LevelMapDef */
 export function coerceLevelDef(raw: unknown): LevelMapDef | null {
   if (!isLooseLevelDef(raw)) return null;
   const d = raw as Record<string, unknown>;
   const id = d.id as string;
   const mapSize = d.mapSize as number;
   const spawn = d.spawn as { x: number; y: number };
+  const seaMargin =
+    typeof d.seaMargin === 'number' && Number.isFinite(d.seaMargin)
+      ? Math.max(0, d.seaMargin)
+      : 0;
 
   const stub: LevelMapDef = {
     id,
     mapSize,
-    seaMargin: 0,
+    seaMargin,
     spawn: { x: spawn.x, y: spawn.y },
     trees: d.trees as MapTree[],
-    enemies: Array.isArray(d.enemies)
-      ? (d.enemies as LevelMapDef['enemies'])
-      : [],
+    enemies: parseEnemies(d.enemies),
   };
-
-  // 带上旧字段供 seaMarginPx / coerceTree 读取
-  if (typeof d.seaMargin === 'number') stub.seaMargin = d.seaMargin;
-  if (typeof d.seaMarginCells === 'number') {
-    (stub as LevelMapDef & { seaMarginCells?: number }).seaMarginCells =
-      d.seaMarginCells as number;
-  }
-  if (typeof d.cellSize === 'number') {
-    (stub as LevelMapDef & { cellSize?: number }).cellSize = d.cellSize as number;
-  }
 
   return {
     id,
@@ -61,17 +64,7 @@ export function coerceLevelDef(raw: unknown): LevelMapDef | null {
     seaMargin: seaMarginPx(stub),
     spawn: { x: spawn.x, y: spawn.y },
     trees: normalizeTrees(stub),
-    enemies: Array.isArray(d.enemies)
-      ? (d.enemies as NonNullable<LevelMapDef['enemies']>).filter(
-          (e) =>
-            e &&
-            typeof e.x === 'number' &&
-            typeof e.y === 'number' &&
-            (e.kind === 'spider' ||
-              e.kind === 'flame-flower' ||
-              e.kind === 'wooden-dummy'),
-        )
-      : [],
+    enemies: parseEnemies(d.enemies),
   };
 }
 
@@ -97,9 +90,6 @@ export function loadMapDraftsFromStorage(): void {
   if (storageLoaded) return;
   storageLoaded = true;
   loadKey(STORAGE_KEY);
-  loadKey(STORAGE_KEY_V2);
-  // 若从 v2 迁入，立刻写成 v3
-  if (drafts.size > 0) persistDrafts();
 }
 
 function persistDrafts(): void {
@@ -158,6 +148,8 @@ export function getPlayableCatalog(): LevelMapDef[] {
   return LEVEL_CATALOG.map((m) => getPlayableLevelById(m.id) ?? cloneLevelDef(m));
 }
 
-void emptyIslandDef;
-void LEVEL_1;
-void getActiveMapDef;
+export function resetMapDraftsInMemory(): void {
+  drafts.clear();
+  storageLoaded = false;
+}
+

@@ -1,18 +1,8 @@
-import { Container, Graphics } from 'pixi.js';
+import { Graphics } from 'pixi.js';
 
-/** 与 WorldMap 松树视觉一致的尺寸（避免循环依赖，本地常量） */
+/** 程序化松树视觉尺寸（与可砍树 / 编辑器共用） */
 const PINE_SCALE = 2.7;
 const PINE_TRUNK_H = 3.2;
-
-/**
- * 单棵松树本地包围（脚底 = 0,0），含描边与阴影余量。
- * 用于行 chunk 裁剪 pad / AABB。
- */
-export const PINE_LOCAL_HALF_W = 15 * PINE_SCALE + 6;
-/** 树冠顶点在脚底上方的大致高度 */
-export const PINE_LOCAL_TOP = PINE_TRUNK_H * PINE_SCALE * 0.35 + 28 * PINE_SCALE + 4 * PINE_SCALE + 6;
-/** 阴影落到脚底下方 */
-export const PINE_LOCAL_SHADOW = 2 + 3.6 * PINE_SCALE + 4;
 
 const COLORS = {
   canopyDeep: 0x1f5a1a,
@@ -25,33 +15,9 @@ const COLORS = {
 } as const;
 
 /**
- * 单棵松树显示对象（调试 / 兼容；运行时森林走 TreeRowChunk）。
- * 原点 = 脚底（世界坐标）；zIndex = worldY 参与纵深排序。
- */
-export class PineTree extends Container {
-  readonly worldX: number;
-  readonly worldY: number;
-
-  constructor(worldX: number, worldY: number, shade: number) {
-    super();
-    this.label = 'PineTree';
-    this.eventMode = 'none';
-    this.worldX = worldX;
-    this.worldY = worldY;
-    this.position.set(worldX, worldY);
-    this.zIndex = worldY;
-
-    const g = new Graphics();
-    g.label = 'PineGfx';
-    drawPineLocal(g, shade);
-    this.addChild(g);
-  }
-}
-
-/**
  * 在 Graphics 上画一棵松树。
  * @param ox 脚底本地 X（默认 0）
- * @param oy 脚底本地 Y（默认 0；行 chunk 内通常为 0）
+ * @param oy 脚底本地 Y（默认 0）
  */
 export function drawPineLocal(
   g: Graphics,

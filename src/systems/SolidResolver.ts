@@ -5,18 +5,11 @@ import {
 } from '../data/bodyProfiles';
 import { getRuntimeTreeObstacles } from '../data/maps/walkMask';
 import {
-  PLAYER_BODY_R,
-  SPIDER_BODY_R,
-} from '../entities/WorldActor';
-import {
   pushCircleOutMany,
   slideCircle,
   type CircleObstacle,
 } from '../world/circleBody';
 import { WorldMap } from '../world/WorldMap';
-
-/** 再导出，方便场景 / 旧引用 */
-export { PLAYER_BODY_R, SPIDER_BODY_R };
 
 /** 树 + 实体耦合时的收尾迭代 */
 const SOLID_CLEANUP_ITERS = 2;
@@ -93,7 +86,7 @@ export class SolidResolver {
 
     const hard = this.collectHardBodyObstacles(ctx, options);
     const trees = getRuntimeTreeObstacles();
-    // TreeObstacle 结构兼容 {x,y,r}；合并为只读障碍列表
+    // 树 solid + 实体 solid 一并滑动
     const all: ReadonlyArray<CircleObstacle> =
       hard.length === 0
         ? trees

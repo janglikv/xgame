@@ -107,7 +107,7 @@ export class GodModeController {
     const id = allocTreeId(
       size === 'sapling' ? 'sap' : size === 'large' ? 'big' : 'harv',
     );
-    const t: MapTree = { x, y, kind: 'harvest', size, id };
+    const t: MapTree = { x, y, size, id };
     mapDef.trees.push(t);
     addRuntimeTreeObstacle({
       x,

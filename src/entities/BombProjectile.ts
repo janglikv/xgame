@@ -334,21 +334,6 @@ export class BombProjectile extends Container {
     this.zIndex = this.groundY + this.arcHeight * 0.01;
   }
 
-  syncToScreen(
-    cameraWorldX: number,
-    cameraWorldY: number,
-    screenCenterX: number,
-    screenCenterY: number,
-    zoom = 1,
-  ): void {
-    this.position.set(
-      screenCenterX + (this.groundX - cameraWorldX) * zoom,
-      screenCenterY +
-        (this.groundY - cameraWorldY) * zoom -
-        this.arcHeight * zoom,
-    );
-  }
-
   private sampleFlight(u: number): void {
     this.groundX = this.startX + (this.endX - this.startX) * u;
     this.groundY = this.startY + (this.endY - this.startY) * u;

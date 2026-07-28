@@ -1,14 +1,6 @@
 import type { KnockArcState } from './knockArc';
 import type { BodyProfileId } from '../data/bodyProfiles';
 
-/** 兼容旧引用：数值来自 bodyProfiles 默认表 */
-export {
-  PLAYER_BODY_R,
-  PLAYER_HURT_R,
-  SPIDER_BODY_R,
-  SPIDER_HURT_R,
-} from '../data/bodyProfiles';
-
 /**
  * 关卡内可站立单位：自己持有脚底坐标与击飞抛物线。
  * 玩家 / 蜘蛛统一此契约，场景与 solid / combat 只读写接口字段。

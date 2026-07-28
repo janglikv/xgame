@@ -53,7 +53,7 @@ export class ColliderEditController {
     return this.drag !== null;
   }
 
-  /** 兼容绘制：当前选中形状 */
+  /** 当前选中形状（层 + 下标） */
   get selectedShape(): { part: ColliderEditPart; index: number } | null {
     if (this.selectedIndex === null) return null;
     return { part: this.editPart, index: this.selectedIndex };

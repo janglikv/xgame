@@ -2,10 +2,12 @@ import { Container, Graphics, Text } from 'pixi.js';
 
 import { DebugConfig } from '../utils/DebugConfig';
 import { NightConfig } from '../utils/NightConfig';
+import { confirmAndResetGameData } from '../utils/resetGameData';
 
 export type PauseMenuOptions = {
   onResume: () => void;
   onBack: () => void;
+  onResetData?: () => void;
   /** 自定义「返回」文案 */
   backLabel?: string;
 };
@@ -38,6 +40,7 @@ export class PauseMenu extends Container {
   private readonly nightBtn: PauseButton;
   private readonly debugBtn: PauseButton;
   private readonly backBtn: PauseButton;
+  private readonly resetBtn: PauseButton;
 
   constructor(options: PauseMenuOptions) {
     super();
@@ -100,10 +103,26 @@ export class PauseMenu extends Container {
     this.backBtn = this.createButton(
       options.backLabel ?? '返回主场景',
       240,
-      46,
+      44,
       0x5a6a8a,
       0x7a8ab0,
       options.onBack,
+    );
+
+    // 4. 重置数据
+    this.resetBtn = this.createButton(
+      '重置数据',
+      240,
+      44,
+      0x8a3a3a,
+      0xaa5a5a,
+      () => {
+        if (options.onResetData) {
+          options.onResetData();
+        } else {
+          confirmAndResetGameData();
+        }
+      },
     );
 
     DebugConfig.onChange(() => {
@@ -151,9 +170,9 @@ export class PauseMenu extends Container {
       .fill({ color: 0x000000, alpha: 0.55 });
 
     const panelW = 340;
-    // 动态自适应面板高度：包含标题 + 顶栏 + 按钮组
-    const numRows = 3;
-    const panelH = Math.max(300, 110 + numRows * 54);
+    // 动态自适应面板高度：包含标题 + 顶栏 + 4 行按钮组
+    const numRows = 4;
+    const panelH = Math.max(340, 110 + numRows * 52);
 
     const px = (width - panelW) / 2;
     const py = (height - panelH) / 2;
@@ -177,12 +196,12 @@ export class PauseMenu extends Container {
       .rect(px + 30, py + 62, panelW - 60, 1)
       .fill({ color: 0xffffff, alpha: 0.12 });
 
-    let currentY = py + 86;
+    let currentY = py + 82;
 
     // 行 1：继续游戏主按钮
     this.resumeBtn.root.pivot.set(this.resumeBtn.width / 2, this.resumeBtn.height / 2);
     this.resumeBtn.root.position.set(width / 2, currentY + this.resumeBtn.height / 2);
-    currentY += this.resumeBtn.height + 12;
+    currentY += this.resumeBtn.height + 10;
 
     // 行 2：设置开关并排行 (夜晚 | Debug)
     const row2Y = currentY + this.nightBtn.height / 2;
@@ -191,11 +210,16 @@ export class PauseMenu extends Container {
 
     this.debugBtn.root.pivot.set(this.debugBtn.width / 2, this.debugBtn.height / 2);
     this.debugBtn.root.position.set(width / 2 + 65, row2Y);
-    currentY += this.nightBtn.height + 12;
+    currentY += this.nightBtn.height + 10;
 
     // 行 3：返回主场景
     this.backBtn.root.pivot.set(this.backBtn.width / 2, this.backBtn.height / 2);
     this.backBtn.root.position.set(width / 2, currentY + this.backBtn.height / 2);
+    currentY += this.backBtn.height + 10;
+
+    // 行 4：重置数据
+    this.resetBtn.root.pivot.set(this.resetBtn.width / 2, this.resetBtn.height / 2);
+    this.resetBtn.root.position.set(width / 2, currentY + this.resetBtn.height / 2);
   }
 
   private createButton(

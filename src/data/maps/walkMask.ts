@@ -1,8 +1,5 @@
 import { treeSolidR as solidRFromProfile } from '../treeProfiles';
-import type { LevelMapDef, MapTree, TreeKind, TreeSize } from './types';
-
-/** 中树默认 solid 半径（世界像素，相对脚底） */
-export const TREE_SOLID_R = 14;
+import type { LevelMapDef, MapTree, TreeSize } from './types';
 
 /** 各体型 solid 半径（与视觉 scale 同源，见 treeProfiles） */
 export function treeSolidR(size: TreeSize): number {
@@ -18,41 +15,16 @@ export function treeSizeOf(t: MapTree): TreeSize {
 /** 两棵树过近时 normalize 去重的距离² */
 const TREE_DEDUP_DIST2 = 8 * 8;
 
-export type MapGrid = {
-  mapSize: number;
-  seaMargin: number;
-};
-
 export function mapHalf(def: LevelMapDef): number {
   return def.mapSize / 2;
 }
 
-/** 海缘像素（兼容旧草稿 seaMarginCells * cellSize） */
+/** 海缘像素（缺省 0） */
 export function seaMarginPx(def: LevelMapDef): number {
   if (typeof def.seaMargin === 'number' && Number.isFinite(def.seaMargin)) {
     return Math.max(0, def.seaMargin);
   }
-  const legacy = def as LevelMapDef & {
-    seaMarginCells?: number;
-    cellSize?: number;
-  };
-  if (
-    typeof legacy.seaMarginCells === 'number' &&
-    typeof legacy.cellSize === 'number'
-  ) {
-    return (
-      Math.max(0, Math.floor(legacy.seaMarginCells)) *
-      Math.max(1, legacy.cellSize)
-    );
-  }
   return 0;
-}
-
-export function getMapGrid(def: LevelMapDef): MapGrid {
-  return {
-    mapSize: def.mapSize,
-    seaMargin: seaMarginPx(def),
-  };
 }
 
 /**
@@ -343,22 +315,6 @@ export function isOnLand(
   return !isOcean(x, y, def, bodyR);
 }
 
-/**
- * 兼容旧名：可站立点 = 陆地（树 solid 另算）。
- */
-export function isWalkable(
-  x: number,
-  y: number,
-  def: LevelMapDef,
-  margin = 0,
-): boolean {
-  return isOnLand(x, y, def, Math.abs(margin));
-}
-
-export function treeKindOf(t: MapTree): TreeKind {
-  return t.kind ?? 'harvest';
-}
-
 let treeIdSeq = 0;
 
 /** 生成稳定树 id */
@@ -369,23 +325,26 @@ export function allocTreeId(prefix = 't'): string {
 
 export function treeIdOf(t: MapTree): string {
   if (t.id && t.id.length > 0) return t.id;
-  return `tree_${Math.round(t.x)}_${Math.round(t.y)}_${treeKindOf(t)}`;
+  return `tree_${Math.round(t.x)}_${Math.round(t.y)}_${treeSizeOf(t)}`;
 }
 
 /**
  * 规范化树列表：世界坐标、陆地过滤、近距去重、补 id。
- * 只保留可砍树（harvest）；松树 pine 已废弃，加载时丢弃。
- * 兼容旧草稿 `{ c, r }`（需 mapSize + cellSize）。
  */
 export function normalizeTrees(def: LevelMapDef): MapTree[] {
   const out: MapTree[] = [];
   const seenIds = new Set<string>();
 
   for (const raw of def.trees) {
-    const t = coerceTree(raw, def);
-    if (!t) continue;
-    // 不再使用静态松树
-    if (treeKindOf(t) === 'pine') continue;
+    if (!raw || typeof raw !== 'object') continue;
+    if (typeof raw.x !== 'number' || typeof raw.y !== 'number') continue;
+    const size = treeSizeOf(raw);
+    const t: MapTree = {
+      x: raw.x,
+      y: raw.y,
+      size,
+      id: typeof raw.id === 'string' ? raw.id : undefined,
+    };
     if (!isOnLand(t.x, t.y, def, 0)) continue;
     const id = treeIdOf(t);
     if (seenIds.has(id)) continue;
@@ -403,54 +362,9 @@ export function normalizeTrees(def: LevelMapDef): MapTree[] {
     if (tooClose) continue;
 
     seenIds.add(id);
-    out.push({
-      x: t.x,
-      y: t.y,
-      kind: 'harvest',
-      size: treeSizeOf(t),
-      id,
-    });
+    out.push({ x: t.x, y: t.y, size, id });
   }
   return out;
-}
-
-/** 兼容旧格子树 / 新世界坐标树 */
-function coerceTree(raw: MapTree | Record<string, unknown>, def: LevelMapDef): MapTree | null {
-  if (!raw || typeof raw !== 'object') return null;
-  const o = raw as Record<string, unknown>;
-
-  if (typeof o.x === 'number' && typeof o.y === 'number') {
-    return {
-      x: o.x,
-      y: o.y,
-      kind: o.kind === 'pine' || o.kind === 'harvest' ? o.kind : undefined,
-      size: coerceTreeSize(o.size),
-      id: typeof o.id === 'string' ? o.id : undefined,
-    };
-  }
-
-  // 旧格式 { c, r }
-  if (typeof o.c === 'number' && typeof o.r === 'number') {
-    const legacy = def as LevelMapDef & { cellSize?: number };
-    const cell = Math.max(1, legacy.cellSize ?? 36);
-    const half = def.mapSize / 2;
-    const x = -half + Math.floor(o.c) * cell + cell / 2;
-    const y = -half + Math.floor(o.r) * cell + cell / 2;
-    return {
-      x,
-      y,
-      kind: o.kind === 'pine' || o.kind === 'harvest' ? o.kind : undefined,
-      size: coerceTreeSize(o.size),
-      id: typeof o.id === 'string' ? o.id : undefined,
-    };
-  }
-
-  return null;
-}
-
-function coerceTreeSize(raw: unknown): TreeSize | undefined {
-  if (raw === 'sapling' || raw === 'medium' || raw === 'large') return raw;
-  return undefined;
 }
 
 export type TreeObstacle = {
@@ -478,13 +392,11 @@ export function buildTreeObstacles(def: LevelMapDef): TreeObstacle[] {
 // —— 运行时树 solid（砍伐后可动态移除）——
 
 let runtimeTreeObstacles: TreeObstacle[] = [];
-let runtimeDefId: string | null = null;
 
 export function setRuntimeTreeObstacles(
-  def: LevelMapDef,
+  _def: LevelMapDef,
   obstacles: TreeObstacle[],
 ): void {
-  runtimeDefId = def.id;
   runtimeTreeObstacles = obstacles.slice();
 }
 
@@ -496,18 +408,8 @@ export function removeRuntimeTreeObstacleById(id: string): void {
   runtimeTreeObstacles = runtimeTreeObstacles.filter((o) => o.id !== id);
 }
 
-/** @deprecated 使用 removeRuntimeTreeObstacleById */
-export function removeRuntimeTreeObstacleAtCell(
-  _def: LevelMapDef,
-  _c: number,
-  _r: number,
-): void {
-  /* no-op：格子模型已移除 */
-}
-
 export function clearRuntimeTreeObstacles(): void {
   runtimeTreeObstacles = [];
-  runtimeDefId = null;
 }
 
 export function syncRuntimeTreesFromDef(def: LevelMapDef): void {
@@ -549,14 +451,10 @@ export function cloneLevelDef(def: LevelMapDef): LevelMapDef {
     trees: normalizeTrees(def).map((t) => ({
       x: t.x,
       y: t.y,
-      kind: t.kind,
       size: t.size,
       id: t.id,
     })),
-    enemies:
-      def.enemies === undefined
-        ? undefined
-        : def.enemies.map((e) => ({ ...e })),
+    enemies: (def.enemies ?? []).map((e) => ({ ...e })),
   };
 }
 
@@ -579,10 +477,3 @@ export function emptyIslandDef(
     enemies: [],
   };
 }
-
-/** @deprecated 兼容旧 import 名 */
-export function invalidateWalkCache(): void {
-  /* no-op：海岛模型不再缓存 walk 掩码 */
-}
-
-void runtimeDefId;

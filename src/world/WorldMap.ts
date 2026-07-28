@@ -13,20 +13,6 @@ import type { Vec2 } from '../utils/math';
 import { fbm2D, makeSeamlessNoiseTexture } from '../utils/noiseTexture';
 import { pushCircleOutMany, slideCircle } from './circleBody';
 import { generateOrganicContour, OceanLayer } from './OceanLayer';
-import { TreeRowChunk } from './TreeRowChunk';
-
-// 布局常量 re-export，保持旧 import 路径可用
-export {
-  CELL_PITCH,
-  FOREST_WIDTH,
-  GRID,
-  ISLAND_SIZE,
-  MAP_SIZE,
-  MAP_WORLD_HALF,
-  OUTER_FOREST_WIDTH,
-  islandCenter,
-  isRemovedIsland,
-} from './mapLayout';
 
 /** 角色/实体默认碰撞半径（世界像素） */
 export const DEFAULT_BODY_RADIUS = 16;
@@ -54,16 +40,6 @@ function createRng(seed: number): () => number {
     r ^= r + Math.imul(r ^ (r >>> 7), 61 | r);
     return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
   };
-}
-
-/**
- * 点是否不可走：海，或树干 solid。
- * 保留函数名 bodyHitsTrees 以兼容旧调用。
- */
-export function isTreeBlocked(x: number, y: number): boolean {
-  const def = getActiveMapDef();
-  if (isOcean(x, y, def, 0)) return true;
-  return hitsTreeObstacle(x, y, 0);
 }
 
 /** 实体圆是否碰到海 / 树干（闪现射线等需要「硬阻挡」的场合） */
@@ -210,8 +186,6 @@ function tryEscapeTrees(
  */
 export class WorldMap extends Container {
   private readonly root: Container;
-  /** 静态松树行 chunk（仅 pine；harvest 由实体绘制） */
-  private readonly treeChunks: TreeRowChunk[] = [];
   private readonly def: LevelMapDef;
   private built = false;
   private ocean: OceanLayer | null = null;
@@ -233,11 +207,6 @@ export class WorldMap extends Container {
     return this.def;
   }
 
-  /** 松树行 chunk（脚底 worldY = zIndex，参与 Y-sort） */
-  getTreeChunks(): readonly TreeRowChunk[] {
-    return this.treeChunks;
-  }
-
   async load(): Promise<void> {
     if (this.built) return;
     setActiveMapDef(this.def);
@@ -249,20 +218,6 @@ export class WorldMap extends Container {
   /** 海面动画（波纹滚动 / 泡沫呼吸） */
   update(deltaMS: number): void {
     this.ocean?.update(deltaMS);
-  }
-
-  /**
-   * 旧 API 保留空实现：镜头已由 LevelScene.worldRoot 统一变换。
-   */
-  sync(
-    _width: number,
-    _height: number,
-    _cameraX = 0,
-    _cameraY = 0,
-    _force = false,
-    _zoom = 1,
-  ): void {
-    // no-op
   }
 
   /** 钳制玩家至自然可走区域（草地+金沙滩，贴有机海岸线，禁止入海） */
@@ -310,7 +265,6 @@ export class WorldMap extends Container {
 
   private build(): void {
     this.root.removeChildren();
-    this.treeChunks.length = 0;
     this.ocean = null;
 
     const landRect = this.landRect();
@@ -356,7 +310,6 @@ export class WorldMap extends Container {
 
     this.drawLand(land);
     this.drawLandDecor(decor);
-    this.spawnPlacedTreeChunks();
 
     this.root.addChild(ocean, landContainer, landMask, decor);
   }
@@ -380,19 +333,9 @@ export class WorldMap extends Container {
     return landRectOf(this.def);
   }
 
-  /**
-   * 上帝模式改树后：重建静态松树 chunk，并同步 solid 表。
-   * 返回新 chunk，由 LevelScene 挂到 sortLayer（Y-sort）。
-   */
-  rebuildPlacedTrees(): readonly TreeRowChunk[] {
-    for (const chunk of this.treeChunks) {
-      chunk.parent?.removeChild(chunk);
-      chunk.destroy({ children: true });
-    }
-    this.treeChunks.length = 0;
+  /** 同步运行时树 solid（砍伐 / 上帝模式改树后） */
+  syncTreeSolids(): void {
     syncRuntimeTreesFromDef(this.def);
-    this.spawnPlacedTreeChunks();
-    return this.treeChunks;
   }
 
   private drawLand(g: Graphics): void {
@@ -545,14 +488,6 @@ export class WorldMap extends Container {
       }
       g.circle(x, y, s * 0.5).fill({ color: COLORS.flowerCenter });
     }
-  }
-
-  /**
-   * 静态松树 chunk 已废弃（pine 不再使用）。
-   * 可砍树由 HarvestableTree 实体绘制；保留空实现以兼容 rebuildPlacedTrees。
-   */
-  private spawnPlacedTreeChunks(): void {
-    // no-op
   }
 }
 

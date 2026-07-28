@@ -6,6 +6,7 @@ import {
   getLevelIndex,
   type LevelMapDef,
 } from '../data/maps';
+import { confirmAndResetGameData } from '../utils/resetGameData';
 import type { GameScene } from './types';
 
 /** 主场景纯色背景（偏夜） */
@@ -15,6 +16,7 @@ export type MainSceneOptions = {
   onSelectLevel: (mapDef: LevelMapDef) => void;
   /** 碰撞 / 受击体模板编辑 */
   onBodyEdit?: () => void;
+  onResetData?: () => void;
   onBackground?: (color: number) => void;
 };
 
@@ -39,6 +41,7 @@ export class MainScene extends Container implements GameScene {
   private readonly buttons: MenuButton[] = [];
   private readonly onSelectLevel: (mapDef: LevelMapDef) => void;
   private readonly onBodyEdit?: () => void;
+  private readonly onResetData?: () => void;
   private readonly onBackground?: (color: number) => void;
   private viewWidth: number;
   private viewHeight: number;
@@ -50,6 +53,7 @@ export class MainScene extends Container implements GameScene {
     this.viewHeight = height;
     this.onSelectLevel = options.onSelectLevel;
     this.onBodyEdit = options.onBodyEdit;
+    this.onResetData = options.onResetData;
     this.onBackground = options.onBackground;
 
     this.bg = new Graphics();
@@ -110,6 +114,16 @@ export class MainScene extends Container implements GameScene {
         ),
       );
     }
+
+    this.buttons.push(
+      this.createButton('重置数据', 0x8a3a3a, 0xaa5a5a, () => {
+        if (this.onResetData) {
+          this.onResetData();
+        } else {
+          confirmAndResetGameData();
+        }
+      }),
+    );
 
     this.layout();
   }

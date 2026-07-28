@@ -29,18 +29,16 @@ export function formatLevelDefTs(
   );
   lines.push(`  trees: [`);
   for (const t of trees) {
-    const kind =
-      t.kind && t.kind !== 'harvest' ? `, kind: ${JSON.stringify(t.kind)}` : '';
     const size =
       t.size && t.size !== 'medium' ? `, size: ${JSON.stringify(t.size)}` : '';
     const id = t.id ? `, id: ${JSON.stringify(t.id)}` : '';
     lines.push(
-      `    { x: ${roundN(t.x)}, y: ${roundN(t.y)}${kind}${size}${id} },`,
+      `    { x: ${roundN(t.x)}, y: ${roundN(t.y)}${size}${id} },`,
     );
   }
   lines.push(`  ],`);
   lines.push(`  enemies: [`);
-  for (const e of def.enemies ?? []) {
+  for (const e of def.enemies) {
     lines.push(
       `    { kind: ${JSON.stringify(e.kind)}, x: ${roundN(e.x)}, y: ${roundN(e.y)} },`,
     );

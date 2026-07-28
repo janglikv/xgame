@@ -12,7 +12,6 @@ import {
   normalizeTrees,
   removeRuntimeTreeObstacleById,
   treeIdOf,
-  treeKindOf,
   treeSizeOf,
   type LevelMapDef,
   type MapTree,
@@ -39,13 +38,9 @@ export class HarvestWorld {
 
   constructor(private readonly hooks: HarvestWorldHooks) {}
 
-  /**
-   * 从地图 def.trees 刷可砍树（normalize 后仅 harvest）。
-   */
+  /** 从地图 def.trees 刷可砍树 */
   spawnFromMap(mapDef: LevelMapDef): void {
-    const trees = normalizeTrees(mapDef);
-    for (const t of trees) {
-      if (treeKindOf(t) !== 'harvest') continue;
+    for (const t of normalizeTrees(mapDef)) {
       this.mountTree(t);
     }
   }

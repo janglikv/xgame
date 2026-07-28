@@ -18,8 +18,6 @@ export const HARVEST_MELEE_DAMAGE = 12;
 export const HARVEST_SPEAR_DAMAGE = 10;
 /** 炸弹命中基础伤害 */
 export const HARVEST_BOMB_DAMAGE = 18;
-/** 兼容旧代码：中树默认交互距离 */
-export const HARVEST_RANGE = 56;
 
 export { TREE_SIZE_PROFILE };
 

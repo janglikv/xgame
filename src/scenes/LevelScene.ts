@@ -47,9 +47,6 @@ import { WorldMap } from '../world/WorldMap';
 import { LevelCamera } from './LevelCamera';
 import type { GameScene } from './types';
 
-/** 黑夜松树冷色 tint（环境变暗，不盖角色） */
-const NIGHT_TREE_TINT = 0x40516b;
-
 const MOVE_SPEED = 220;
 /** 玩家 HUD 血条尺寸 / 底边边距（屏幕像素） */
 const HUD_HP_WIDTH = 240;
@@ -120,7 +117,6 @@ export class LevelScene extends Container implements GameScene {
   private readonly setLastCharacter?: (id: CharacterId) => void;
 
   private paused = false;
-  private treesMounted = false;
   private pointerScreenX = 0;
   private pointerScreenY = 0;
   private pointerSeen = false;
@@ -128,7 +124,6 @@ export class LevelScene extends Container implements GameScene {
   constructor(width: number, height: number, options: LevelSceneOptions) {
     super();
     this.mapDef = cloneLevelDef(options.mapDef ?? LEVEL_1);
-    if (this.mapDef.enemies === undefined) this.mapDef.enemies = [];
     this.spawn = { ...this.mapDef.spawn };
     this.label = `LevelScene:${this.mapDef.id}`;
     this.onBack = options.onBack;
@@ -367,23 +362,12 @@ export class LevelScene extends Container implements GameScene {
       this.characterHud.load(),
     ]);
 
-    this.mountTrees();
     this.stepCamera(0, true);
     await Promise.all(this.spiders.map((s) => s.load()));
     this.player?.startEntrance(this.entranceContext());
     if (this.player) this.syncAmmoHud(this.player);
     this.syncWorldActors();
-    this.cullTrees();
     this.sortDepth();
-  }
-
-  private mountTrees(): void {
-    if (this.treesMounted) return;
-    this.treesMounted = true;
-    for (const chunk of this.worldMap.getTreeChunks()) {
-      chunk.tint = NIGHT_TREE_TINT;
-      this.sortLayer.addChild(chunk);
-    }
   }
 
   private getCameraFocus(): { x: number; y: number } {
@@ -434,24 +418,6 @@ export class LevelScene extends Container implements GameScene {
       spiders: this.spiders,
       harvestTrees: this.harvest.trees,
     };
-  }
-
-  private cullTrees(): void {
-    const z = Math.max(this.camera.currentZoom, 1e-4);
-    const pad = 140;
-    const hw = this.camera.width / (2 * z) + pad;
-    const hh = this.camera.height / (2 * z) + pad;
-    const left = this.camera.x - hw;
-    const right = this.camera.x + hw;
-    const top = this.camera.y - hh;
-    const bottom = this.camera.y + hh;
-    for (const chunk of this.worldMap.getTreeChunks()) {
-      chunk.renderable =
-        chunk.maxX >= left &&
-        chunk.minX <= right &&
-        chunk.maxY >= top &&
-        chunk.minY <= bottom;
-    }
   }
 
   private sortDepth(): void {
@@ -519,9 +485,7 @@ export class LevelScene extends Container implements GameScene {
 
     if (this.paused) {
       player.update(deltaMS, false);
-      if (this.stepCamera(dt)) {
-        this.cullTrees();
-      }
+      this.stepCamera(dt);
       return;
     }
 
@@ -619,7 +583,6 @@ export class LevelScene extends Container implements GameScene {
     player: PlayerCharacterBase,
   ): void {
     const { x, y } = this.keyboard.getMoveAxis();
-    let moved = false;
     const fromX = player.worldX;
     const fromY = player.worldY;
     const god = this.god.enabled;
@@ -630,7 +593,6 @@ export class LevelScene extends Container implements GameScene {
     if (knockStep.moved) {
       player.worldX += knockStep.dx;
       player.worldY += knockStep.dy;
-      moved = true;
     }
     const knockSpeed = god
       ? 0
@@ -650,7 +612,6 @@ export class LevelScene extends Container implements GameScene {
       }
       player.worldX += x * MOVE_SPEED * control * dt;
       player.worldY += y * MOVE_SPEED * control * dt;
-      moved = true;
     }
 
     if (!god) {
@@ -670,10 +631,7 @@ export class LevelScene extends Container implements GameScene {
       knockStep.justLanded,
     );
 
-    const camMoved = this.stepCamera(dt);
-    if (moved || camMoved) {
-      this.cullTrees();
-    }
+    this.stepCamera(dt);
 
     this.syncWorldActors();
     player.update(
@@ -742,7 +700,6 @@ export class LevelScene extends Container implements GameScene {
     this.camera.resize(width, height);
     this.stepCamera(0, true);
     this.syncWorldActors();
-    this.cullTrees();
     this.sortDepth();
     this.layoutHealthHud();
     this.nightOverlay.layout(width, height);

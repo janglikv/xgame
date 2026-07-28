@@ -246,7 +246,7 @@ export function solidCirclesAtFeet(
 }
 
 /**
- * 受击近似半径（兼容旧 API / 扑咬粗判）：取所有 hurt 外接半径最大值。
+ * 受击近似半径（扑咬粗判等）：取所有 hurt 外接半径最大值。
  */
 export function profileHurtR(id: BodyProfileId): number {
   const hurts = getBodyProfile(id).hurt;
@@ -259,7 +259,7 @@ export function profileHurtR(id: BodyProfileId): number {
   return max;
 }
 
-/** 第一 hurt 中心偏移（兼容旧中心 API） */
+/** 第一 hurt 中心偏移 */
 export function profileHurtOffset(id: BodyProfileId): {
   ox: number;
   oy: number;
@@ -377,9 +377,3 @@ export function distancePastHurt(
   }
   return best;
 }
-
-/** 兼容旧常量名 */
-export const PLAYER_BODY_R = primarySolidCircle('bomb-girl').r;
-export const PLAYER_HURT_R = profileHurtR('bomb-girl');
-export const SPIDER_BODY_R = primarySolidCircle('spider').r;
-export const SPIDER_HURT_R = profileHurtR('spider');

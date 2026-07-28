@@ -8,28 +8,16 @@ export type EnemySpawn = {
   y: number;
 };
 
-/**
- * 树上种类：
- * - harvest：可砍实体（运行时 HarvestableTree）
- * - pine：已废弃（normalize 时丢弃；旧草稿兼容）
- */
-export type TreeKind = 'harvest' | 'pine';
-
-/**
- * 可砍树体型：小树苗 / 中树 / 大树。
- * 缺省 medium（兼容旧草稿）。
- */
+/** 可砍树体型：小树苗 / 中树 / 大树 */
 export type TreeSize = 'sapling' | 'medium' | 'large';
 
 /**
- * 摆放的一棵树（世界坐标，脚底）。
- * 不再绑定网格；id 用于砍伐 / 上帝模式删除 solid。
+ * 摆放的一棵可砍树（世界坐标，脚底）。
+ * id 用于砍伐 / 上帝模式删除 solid。
  */
 export type MapTree = {
   x: number;
   y: number;
-  /** 缺省 harvest */
-  kind?: TreeKind;
   /** 体型；缺省 medium */
   size?: TreeSize;
   /** 稳定 id；缺省由 normalize 生成 */
@@ -54,13 +42,8 @@ export type LevelMapDef = {
   seaMargin?: number;
   /** 玩家出生点（世界坐标，须在陆地上） */
   spawn: { x: number; y: number };
-  /** 摆放的树 */
+  /** 摆放的可砍树 */
   trees: MapTree[];
-  /**
-   * 敌人出生列表。
-   * - 省略：兼容旧逻辑时用默认；新关卡写 `[]`
-   * - `[]`：明确无敌人
-   * - 有项：按列表刷怪
-   */
-  enemies?: EnemySpawn[];
+  /** 敌人出生列表（可为空数组） */
+  enemies: EnemySpawn[];
 };

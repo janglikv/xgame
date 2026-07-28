@@ -3,23 +3,18 @@ export type {
   EnemyKind,
   EnemySpawn,
   MapTree,
-  TreeKind,
   TreeSize,
 } from './types';
 export {
-  TREE_SOLID_R,
   treeSolidR,
   treeSizeOf,
   mapHalf,
   seaMarginPx,
-  getMapGrid,
   landBounds,
   landRectOf,
   isOcean,
   clampToWalkableWorld,
   isOnLand,
-  isWalkable,
-  treeKindOf,
   allocTreeId,
   treeIdOf,
   normalizeTrees,
@@ -27,7 +22,6 @@ export {
   setRuntimeTreeObstacles,
   getRuntimeTreeObstacles,
   removeRuntimeTreeObstacleById,
-  removeRuntimeTreeObstacleAtCell,
   clearRuntimeTreeObstacles,
   syncRuntimeTreesFromDef,
   addRuntimeTreeObstacle,
@@ -35,11 +29,8 @@ export {
   isSpawnValid,
   cloneLevelDef,
   emptyIslandDef,
-  invalidateWalkCache,
-  type MapGrid,
   type TreeObstacle,
 } from './walkMask';
-export { buildGridLevelDef, GRID_LAYOUT_META } from './gridTemplate';
 export { formatLevelDefTs, copyLevelDefTs } from './exportLevel';
 export { LEVEL_1 } from './level-1';
 export { LEVEL_2 } from './level-2';
@@ -60,4 +51,5 @@ export {
   getPlayableLevelById,
   getPlayableCatalog,
   coerceLevelDef,
+  resetMapDraftsInMemory,
 } from './mapDrafts';
