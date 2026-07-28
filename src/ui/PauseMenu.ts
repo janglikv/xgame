@@ -2,6 +2,7 @@ import { Container, Graphics, Text } from 'pixi.js';
 
 import { DebugConfig } from '../utils/DebugConfig';
 import { NightConfig } from '../utils/NightConfig';
+import { TimeScaleConfig } from '../utils/TimeScaleConfig';
 import { confirmAndResetGameData } from '../utils/resetGameData';
 
 export type PauseMenuOptions = {
@@ -35,10 +36,14 @@ export class PauseMenu extends Container {
   private readonly title: Text;
   private readonly debugBtnLabel: Text;
   private readonly nightBtnLabel: Text;
+  private readonly speedBtnLabel: Text;
 
   private readonly resumeBtn: PauseButton;
   private readonly nightBtn: PauseButton;
   private readonly debugBtn: PauseButton;
+  private readonly speedDecBtn: PauseButton;
+  private readonly speedMainBtn: PauseButton;
+  private readonly speedIncBtn: PauseButton;
   private readonly backBtn: PauseButton;
   private readonly resetBtn: PauseButton;
 
@@ -99,7 +104,31 @@ export class PauseMenu extends Container {
     );
     this.debugBtnLabel = this.debugBtn.label;
 
-    // 3. 返回主场景
+    // 3. 时间倍率调节组 (- | 速度: 1.0x | +)
+    this.speedDecBtn = this.createButton('-', 42, 42, 0x4a3a6e, 0x665294, () => {
+      TimeScaleConfig.decrease(0.5);
+      this.updateSpeedBtnText();
+    });
+
+    this.speedMainBtn = this.createButton(
+      this.getSpeedBtnText(),
+      144,
+      42,
+      0x6e4a2c,
+      0x94653e,
+      () => {
+        TimeScaleConfig.toggleNextPreset();
+        this.updateSpeedBtnText();
+      },
+    );
+    this.speedBtnLabel = this.speedMainBtn.label;
+
+    this.speedIncBtn = this.createButton('+', 42, 42, 0x4a3a6e, 0x665294, () => {
+      TimeScaleConfig.increase(0.5);
+      this.updateSpeedBtnText();
+    });
+
+    // 4. 返回主场景
     this.backBtn = this.createButton(
       options.backLabel ?? '返回主场景',
       240,
@@ -109,7 +138,7 @@ export class PauseMenu extends Container {
       options.onBack,
     );
 
-    // 4. 重置数据
+    // 5. 重置数据
     this.resetBtn = this.createButton(
       '重置数据',
       240,
@@ -132,6 +161,21 @@ export class PauseMenu extends Container {
     NightConfig.onChange(() => {
       this.updateNightBtnText();
     });
+
+    TimeScaleConfig.onChange(() => {
+      this.updateSpeedBtnText();
+    });
+  }
+
+  private getSpeedBtnText(): string {
+    const s = TimeScaleConfig.getScale();
+    return `速度: ${s % 1 === 0 ? s.toFixed(0) : s.toFixed(1)}x`;
+  }
+
+  private updateSpeedBtnText(): void {
+    if (this.speedBtnLabel) {
+      this.speedBtnLabel.text = this.getSpeedBtnText();
+    }
   }
 
   private getDebugBtnText(): string {
@@ -159,6 +203,7 @@ export class PauseMenu extends Container {
     if (open) {
       this.updateDebugBtnText();
       this.updateNightBtnText();
+      this.updateSpeedBtnText();
     }
   }
 
@@ -170,9 +215,9 @@ export class PauseMenu extends Container {
       .fill({ color: 0x000000, alpha: 0.55 });
 
     const panelW = 340;
-    // 动态自适应面板高度：包含标题 + 顶栏 + 4 行按钮组
-    const numRows = 4;
-    const panelH = Math.max(340, 110 + numRows * 52);
+    // 动态自适应面板高度：包含标题 + 顶栏 + 5 行按钮组
+    const numRows = 5;
+    const panelH = Math.max(390, 110 + numRows * 52);
 
     const px = (width - panelW) / 2;
     const py = (height - panelH) / 2;
@@ -212,12 +257,24 @@ export class PauseMenu extends Container {
     this.debugBtn.root.position.set(width / 2 + 65, row2Y);
     currentY += this.nightBtn.height + 10;
 
-    // 行 3：返回主场景
+    // 行 3：时间倍率调节 (- | 速度: 1.0x | +)
+    const row3Y = currentY + this.speedMainBtn.height / 2;
+    this.speedDecBtn.root.pivot.set(this.speedDecBtn.width / 2, this.speedDecBtn.height / 2);
+    this.speedDecBtn.root.position.set(width / 2 - 99, row3Y);
+
+    this.speedMainBtn.root.pivot.set(this.speedMainBtn.width / 2, this.speedMainBtn.height / 2);
+    this.speedMainBtn.root.position.set(width / 2, row3Y);
+
+    this.speedIncBtn.root.pivot.set(this.speedIncBtn.width / 2, this.speedIncBtn.height / 2);
+    this.speedIncBtn.root.position.set(width / 2 + 99, row3Y);
+    currentY += this.speedMainBtn.height + 10;
+
+    // 行 4：返回主场景
     this.backBtn.root.pivot.set(this.backBtn.width / 2, this.backBtn.height / 2);
     this.backBtn.root.position.set(width / 2, currentY + this.backBtn.height / 2);
     currentY += this.backBtn.height + 10;
 
-    // 行 4：重置数据
+    // 行 5：重置数据
     this.resetBtn.root.pivot.set(this.resetBtn.width / 2, this.resetBtn.height / 2);
     this.resetBtn.root.position.set(width / 2, currentY + this.resetBtn.height / 2);
   }

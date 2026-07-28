@@ -13,6 +13,7 @@ import { BodyEditScene } from './scenes/BodyEditScene';
 import { LevelScene } from './scenes/LevelScene';
 import { MainScene } from './scenes/MainScene';
 import { SceneManager } from './scenes/SceneManager';
+import { TimeScaleConfig } from './utils/TimeScaleConfig';
 
 async function bootstrap(): Promise<void> {
   const host = document.getElementById('app');
@@ -121,7 +122,8 @@ async function bootstrap(): Promise<void> {
   }
 
   app.ticker.add((ticker) => {
-    scenes.update(ticker.deltaMS);
+    const scale = TimeScaleConfig.getScale();
+    scenes.update(ticker.deltaMS * scale);
   });
 
   app.renderer.on('resize', () => {
