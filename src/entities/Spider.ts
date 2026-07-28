@@ -20,7 +20,7 @@ import {
   OUTLINE_PX_CHARACTER,
   paddedFootAnchorY,
 } from '../utils/outlineTexture';
-import { getRuntimeTreeObstacles } from '../data/maps';
+import { getRuntimeTreeObstacles, isOnLand, landRectOf } from '../data/maps';
 
 const SPIDER_URL = '/assets/spider/spider.png';
 
@@ -258,6 +258,8 @@ export type CreatureEcologyContext = {
   trees: ReadonlyArray<EcologyTree>;
   /** 场上其它生物（含自己，调用方过滤） */
   creatures: ReadonlyArray<Spider>;
+  /** 地图定义（用于动物避开海岸与海面） */
+  mapDef?: import('../data/maps').LevelMapDef;
   /** 吃掉地上的苹果等 */
   consumePickup: (pickup: {
     itemId: string;
@@ -914,6 +916,11 @@ export class Spider extends Container implements WorldActor {
       const x = cx + Math.cos(angle) * r;
       const y = cy + Math.sin(angle) * r;
 
+      // 严格检查：如果采样航点落入海中或沙滩边缘，直接丢弃该点
+      if (eco?.mapDef && !isOnLand(x, y, eco.mapDef, 48)) {
+        continue;
+      }
+
       let score = Math.random() * 22;
       if (!anchored) {
         score += r * 0.3;
@@ -921,6 +928,17 @@ export class Spider extends Container implements WorldActor {
       } else {
         // 在环上更均匀，略避开圆心正上方叠人
         score += Math.abs(r - radius * 0.55) * -0.08;
+      }
+
+      // 海岸避让偏好：如果动物本身靠近海岸，大幅给指向岛中心的方向加分，引导自动掉头回内陆
+      if (eco?.mapDef) {
+        const land = landRectOf(eco.mapDef);
+        const islandCx = land.x + land.w * 0.5;
+        const islandCy = land.y + land.h * 0.5;
+        if (!isOnLand(this.worldX, this.worldY, eco.mapDef, 180)) {
+          const toCenterAngle = Math.atan2(islandCy - this.worldY, islandCx - this.worldX);
+          score += Math.cos(angle - toCenterAngle) * 50;
+        }
       }
 
       if (eco) {
