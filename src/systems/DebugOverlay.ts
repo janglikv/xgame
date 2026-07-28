@@ -70,22 +70,18 @@ export class DebugOverlay extends Container {
         solidColor: 0x00e5ff,
         hurtColor: 0xff9100,
       });
-      const name =
-        spider.label === 'WoodenDummy'
-          ? '木桩'
-          : spider.label === 'FlameFlower'
-            ? '火焰花'
-            : spider.label === 'Chicken'
-              ? '鸡'
-              : spider.label === 'Pig'
-                ? '猪'
-                : spider.label === 'Cow'
-                  ? '牛'
-                  : spider.label === 'Horse'
-                    ? '马'
-                    : spider.label === 'Bear'
-                      ? '熊'
-                      : '蜘蛛';
+      const nameByLabel: Record<string, string> = {
+        WoodenDummy: '木桩',
+        FlameFlower: '火焰花',
+        Chicken: '鸡',
+        Pig: '猪',
+        Cow: '牛',
+        Horse: '马',
+        Wolf: '狼',
+        Bear: '熊',
+        Spider: '蜘蛛',
+      };
+      const name = nameByLabel[spider.label] ?? spider.label;
       const hpStr = spider.invincible
         ? '无敌'
         : `HP:${Math.ceil(spider.currentHp)}`;

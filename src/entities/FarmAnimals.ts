@@ -4,10 +4,11 @@ export type FarmAnimalOptions = Pick<SpiderOptions, 'scale' | 'maxHp'>;
 
 /** 相对贴图默认缩放：鸡小、猪/牛中、马/熊大 */
 export const ANIMAL_SCALE = {
-  chicken: 0.055,
+  chicken: 0.042,
   pig: 0.115,
   cow: 0.125,
   horse: 0.155,
+  wolf: 0.06,
   bear: 0.175,
 } as const;
 
@@ -97,6 +98,20 @@ export class Horse extends Spider {
         textureUrl: '/assets/horse/horse.png',
         label: 'Horse',
         spriteLabel: 'HorseSprite',
+      }),
+    );
+  }
+}
+
+export class Wolf extends Spider {
+  constructor(worldX: number, worldY: number, options: FarmAnimalOptions = {}) {
+    super(
+      worldX,
+      worldY,
+      animalOptions(options, ANIMAL_SCALE.wolf, {
+        textureUrl: '/assets/wolf/wolf.png',
+        label: 'Wolf',
+        spriteLabel: 'WolfSprite',
       }),
     );
   }

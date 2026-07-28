@@ -7,6 +7,7 @@ export type EnemyKind =
   | 'pig'
   | 'cow'
   | 'horse'
+  | 'wolf'
   | 'bear';
 
 /** 敌人出生点（世界坐标，须在陆地上） */

@@ -31,6 +31,7 @@ const ENEMY_KINDS = new Set<EnemySpawn['kind']>([
   'pig',
   'cow',
   'horse',
+  'wolf',
   'bear',
 ]);
 

@@ -20,6 +20,7 @@ export type GodBrush =
   | 'pig'
   | 'cow'
   | 'horse'
+  | 'wolf'
   | 'bear'
   | 'spawn'
   | 'erase';
@@ -59,8 +60,19 @@ type CategoryWidget = {
   groupId: string;
 };
 
+/** 面板宽度（屏幕像素） */
+const PANEL_W = 340;
+/** 网格列数 */
+const GRID_COLS = 4;
+/** 格子间距 */
+const CELL_GAP = 6;
+/** 格子高度（宽由列数均分） */
+const CELL_H = 72;
+/** 格子内图标尺寸 */
+const ICON_SIZE = 40;
+
 /**
- * 右侧悬浮可交互上帝模式面板（支持按版本折叠与游戏原生素材渲染）
+ * 右侧悬浮上帝模式面板：分类折叠 + 方块网格刷子。
  */
 export class GodModeHud extends Container {
   private readonly bg: Graphics;
@@ -87,7 +99,7 @@ export class GodModeHud extends Container {
         { brush: 'tree-sapling', label: '小树苗' },
         { brush: 'tree-medium', label: '中树' },
         { brush: 'tree-large', label: '大树' },
-        { brush: 'apple-sapling', label: '小苹果树苗' },
+        { brush: 'apple-sapling', label: '小苹果苗' },
         { brush: 'apple-medium', label: '中苹果树' },
         { brush: 'apple-large', label: '大苹果树' },
         { brush: 'grass-small', label: '小草' },
@@ -103,11 +115,12 @@ export class GodModeHud extends Container {
       items: [
         { brush: 'spider', label: '蜘蛛' },
         { brush: 'flame-flower', label: '火焰花' },
-        { brush: 'wooden-dummy', label: '训练木桩' },
+        { brush: 'wooden-dummy', label: '木桩' },
         { brush: 'chicken', label: '鸡' },
         { brush: 'pig', label: '猪' },
         { brush: 'cow', label: '牛' },
         { brush: 'horse', label: '马' },
+        { brush: 'wolf', label: '狼' },
         { brush: 'bear', label: '熊' },
       ],
     },
@@ -117,8 +130,8 @@ export class GodModeHud extends Container {
       name: '调试工具',
       collapsed: false,
       items: [
-        { brush: 'spawn', label: '出生点标记' },
-        { brush: 'erase', label: '删除物体' },
+        { brush: 'spawn', label: '出生点' },
+        { brush: 'erase', label: '删除' },
       ],
     },
   ];
@@ -136,13 +149,11 @@ export class GodModeHud extends Container {
     this.eventMode = 'static';
     this.onSelectBrush = options?.onSelectBrush;
 
-    // 面板背景（底色）
     this.bg = new Graphics();
     this.bg.eventMode = 'static';
     this.bg.on('pointertap', (e) => e.stopPropagation());
     this.addChild(this.bg);
 
-    // 头部区域
     this.headerContainer = new Container();
     this.headerContainer.eventMode = 'static';
     this.headerBg = new Graphics();
@@ -188,7 +199,6 @@ export class GodModeHud extends Container {
 
     this.addChild(this.headerContainer);
 
-    // 底部提示
     this.tipText = new Text({
       text: '点击地图放置 · G 键退出',
       style: {
@@ -199,11 +209,9 @@ export class GodModeHud extends Container {
     });
     this.addChild(this.tipText);
 
-    // 分类与按钮容器
     this.groupsContainer = new Container();
     this.addChild(this.groupsContainer);
 
-    // 面板置顶金色边框（防止被内部子图形/背景遮挡）
     this.borderOverlay = new Graphics();
     this.borderOverlay.eventMode = 'none';
     this.addChild(this.borderOverlay);
@@ -216,9 +224,6 @@ export class GodModeHud extends Container {
     this.updateButtonStyles();
   }
 
-  /**
-   * 判断屏幕坐标点 (x, y) 是否落在右侧面板边界内
-   */
   containsScreenPoint(x: number, y: number): boolean {
     if (!this.visible) return false;
     const b = this.currentBounds;
@@ -237,31 +242,31 @@ export class GodModeHud extends Container {
 
   private rebuildUI(): void {
     const screenW = this.lastScreenWidth;
-    const panelW = 230; // 靠右面板固定宽度
-    const padding = 8;
+    const panelW = PANEL_W;
+    const padding = 10;
     const innerW = panelW - padding * 2;
+    const cellW =
+      (innerW - CELL_GAP * (GRID_COLS - 1)) / GRID_COLS;
 
     this.buttonWidgets = [];
     this.categoryWidgets = [];
     this.groupsContainer.removeChildren();
 
-    const startX = screenW - panelW - 20;
-    const startY = 20;
+    const startX = screenW - panelW - 16;
+    const startY = 16;
 
-    // 头部布局（在内衬区域中）
     this.headerBg
       .clear()
       .roundRect(0, 0, innerW, 34, 6)
       .fill({ color: 0x251e33, alpha: 0.95 });
 
     this.titleText.position.set(10, 8);
-    this.foldMainBtnText.position.set(innerW - 66, 9);
+    this.foldMainBtnText.position.set(innerW - 70, 9);
     this.headerContainer.position.set(startX + padding, startY + padding);
 
     let currentY = startY + padding + 38;
 
     if (!this.isMainCollapsed) {
-      // 渲染各个版本分类组
       for (const group of this.groups) {
         const catContainer = new Container();
         catContainer.eventMode = 'static';
@@ -336,38 +341,42 @@ export class GodModeHud extends Container {
 
         currentY += 30;
 
-        // 如果未折叠，渲染该组下的物品选项
         if (!group.collapsed) {
-          const btnW = innerW;
-          const btnH = 40;
-          const gapY = 5;
-
+          let col = 0;
           for (const item of group.items) {
+            const colIndex = col % GRID_COLS;
+            const rowIndex = Math.floor(col / GRID_COLS);
+            const cellX =
+              startX + padding + colIndex * (cellW + CELL_GAP);
+            const cellY = currentY + rowIndex * (CELL_H + CELL_GAP);
+
             const btnContainer = new Container();
             btnContainer.eventMode = 'static';
             btnContainer.cursor = 'pointer';
-            btnContainer.position.set(startX + padding, currentY);
+            btnContainer.position.set(cellX, cellY);
 
             const btnBg = new Graphics();
             btnBg.eventMode = 'static';
             btnContainer.addChild(btnBg);
 
-            // 渲染游戏真实素材/图标 preview
             const previewIcon = this.createPreviewIcon(item.brush);
-            previewIcon.position.set(5, 4);
+            previewIcon.position.set((cellW - ICON_SIZE) / 2, 6);
             btnContainer.addChild(previewIcon);
 
-            // 名称文本
             const btnTextNode = new Text({
               text: item.label,
               style: {
                 fontFamily: 'system-ui, sans-serif',
-                fontSize: 13,
+                fontSize: 11,
                 fontWeight: '600',
                 fill: 0xcccccc,
+                align: 'center',
+                wordWrap: true,
+                wordWrapWidth: cellW - 6,
               },
             });
-            btnTextNode.position.set(44, 11);
+            btnTextNode.anchor.set(0.5, 0);
+            btnTextNode.position.set(cellW / 2, ICON_SIZE + 10);
             btnContainer.addChild(btnTextNode);
 
             const widget: ButtonWidget = {
@@ -375,8 +384,8 @@ export class GodModeHud extends Container {
               bg: btnBg,
               textNode: btnTextNode,
               brush: item.brush,
-              w: btnW,
-              h: btnH,
+              w: cellW,
+              h: CELL_H,
               isHovered: false,
             };
 
@@ -397,25 +406,23 @@ export class GodModeHud extends Container {
 
             this.buttonWidgets.push(widget);
             this.groupsContainer.addChild(btnContainer);
-
-            currentY += btnH + gapY;
+            col += 1;
           }
-          currentY += 2;
+
+          const rows = Math.ceil(group.items.length / GRID_COLS);
+          currentY += rows * (CELL_H + CELL_GAP) + 4;
         }
       }
     }
 
-    // 绘制底部提示文字
-    this.tipText.position.set(startX + padding + 6, currentY + 4);
-    const totalH = currentY + 24 - startY;
+    this.tipText.position.set(startX + padding + 4, currentY + 2);
+    const totalH = currentY + 22 - startY;
 
-    // 1. 绘制面板底层底色
     this.bg
       .clear()
       .roundRect(startX, startY, panelW, totalH, 12)
       .fill({ color: 0x120d1a, alpha: 0.93 });
 
-    // 2. 绘制最上层置顶的立体金框（包含发光/描边，避免任何子组件遮盖）
     this.borderOverlay
       .clear()
       .roundRect(startX, startY, panelW, totalH, 12)
@@ -431,20 +438,21 @@ export class GodModeHud extends Container {
     this.updateButtonStyles();
   }
 
-  /**
-   * 使用游戏中的原始素材/绘图逻辑渲染目标 Icon 预览
-   */
+  /** 格子内 40×40 图标预览 */
   private createPreviewIcon(brush: GodBrush): Container {
     const iconContainer = new Container();
+    const s = ICON_SIZE;
 
-    // Icon 背景框
     const iconBg = new Graphics();
     iconBg
-      .roundRect(0, 0, 32, 32, 6)
+      .roundRect(0, 0, s, s, 8)
       .fill({ color: 0x181224, alpha: 0.9 })
-      .roundRect(0, 0, 32, 32, 6)
+      .roundRect(0, 0, s, s, 8)
       .stroke({ width: 1, color: 0x483a63, alpha: 0.5 });
     iconContainer.addChild(iconBg);
+
+    const cx = s / 2;
+    const cy = s / 2;
 
     if (
       brush === 'tree-sapling' ||
@@ -453,10 +461,9 @@ export class GodModeHud extends Container {
     ) {
       const treeGfx = new Graphics();
       drawPineLocal(treeGfx, 0, 0, 0);
-      treeGfx.position.set(16, 27);
-      // 图标内用不同缩放区分体型
+      treeGfx.position.set(cx, s - 6);
       const iconScale =
-        brush === 'tree-sapling' ? 0.2 : brush === 'tree-large' ? 0.48 : 0.3;
+        brush === 'tree-sapling' ? 0.24 : brush === 'tree-large' ? 0.55 : 0.36;
       treeGfx.scale.set(iconScale);
       iconContainer.addChild(treeGfx);
       const badgeColor =
@@ -467,7 +474,7 @@ export class GodModeHud extends Container {
             : 0xd69a19;
       const badge = new Graphics();
       badge
-        .circle(25, 25, 5.5)
+        .circle(s - 7, s - 7, 5.5)
         .fill({ color: badgeColor })
         .stroke({ width: 1, color: 0xffffff });
       iconContainer.addChild(badge);
@@ -479,9 +486,9 @@ export class GodModeHud extends Container {
       const treeGfx = new Graphics();
       const count = brush === 'apple-large' ? 2 : 0;
       drawAppleTreeLocal(treeGfx, 0, count, 0, 0);
-      treeGfx.position.set(16, 27);
+      treeGfx.position.set(cx, s - 6);
       const iconScale =
-        brush === 'apple-sapling' ? 0.2 : brush === 'apple-large' ? 0.48 : 0.3;
+        brush === 'apple-sapling' ? 0.24 : brush === 'apple-large' ? 0.55 : 0.36;
       treeGfx.scale.set(iconScale);
       iconContainer.addChild(treeGfx);
       const badgeColor =
@@ -492,7 +499,7 @@ export class GodModeHud extends Container {
             : 0xd69a19;
       const badge = new Graphics();
       badge
-        .circle(25, 25, 5.5)
+        .circle(s - 7, s - 7, 5.5)
         .fill({ color: badgeColor })
         .stroke({ width: 1, color: 0xffffff });
       iconContainer.addChild(badge);
@@ -503,9 +510,9 @@ export class GodModeHud extends Container {
     ) {
       const grassGfx = new Graphics();
       drawGrassLocal(grassGfx, 0, 0, 0);
-      grassGfx.position.set(16, 26);
+      grassGfx.position.set(cx, s - 8);
       const iconScale =
-        brush === 'grass-small' ? 0.25 : brush === 'grass-large' ? 0.55 : 0.38;
+        brush === 'grass-small' ? 0.28 : brush === 'grass-large' ? 0.62 : 0.42;
       grassGfx.scale.set(iconScale);
       iconContainer.addChild(grassGfx);
       const badgeColor =
@@ -516,7 +523,7 @@ export class GodModeHud extends Container {
             : 0x66bb48;
       const badge = new Graphics();
       badge
-        .circle(25, 25, 5.5)
+        .circle(s - 7, s - 7, 5.5)
         .fill({ color: badgeColor })
         .stroke({ width: 1, color: 0xffffff });
       iconContainer.addChild(badge);
@@ -528,6 +535,7 @@ export class GodModeHud extends Container {
       brush === 'pig' ||
       brush === 'cow' ||
       brush === 'horse' ||
+      brush === 'wolf' ||
       brush === 'bear'
     ) {
       const urlMap: Record<string, string> = {
@@ -538,34 +546,42 @@ export class GodModeHud extends Container {
         pig: '/assets/pig/pig.png',
         cow: '/assets/cow/cow.png',
         horse: '/assets/horse/horse.png',
+        wolf: '/assets/wolf/wolf.png',
         bear: '/assets/bear/bear.png',
       };
       const url = urlMap[brush];
       if (url) {
         const sprite = new Sprite();
         sprite.anchor.set(0.5);
-        sprite.position.set(16, 16);
+        sprite.position.set(cx, cy);
         iconContainer.addChild(sprite);
 
         void Assets.load<Texture>(url).then((tex) => {
           if (tex) {
             sprite.texture = tex;
             const maxDim = Math.max(tex.width, tex.height);
-            const s = maxDim > 0 ? 25 / maxDim : 1;
-            sprite.scale.set(s);
+            const sc = maxDim > 0 ? (s - 8) / maxDim : 1;
+            sprite.scale.set(sc);
           }
         });
       }
     } else if (brush === 'spawn') {
       const g = new Graphics();
-      g.circle(16, 16, 10).stroke({ width: 1.5, color: 0x4caf50 });
-      g.circle(16, 16, 4).fill({ color: 0x81c784 });
-      g.poly([16, 6, 22, 16, 10, 16]).fill({ color: 0xffeb3b });
+      g.circle(cx, cy, 12).stroke({ width: 1.5, color: 0x4caf50 });
+      g.circle(cx, cy, 5).fill({ color: 0x81c784 });
+      g.poly([cx, cy - 10, cx + 7, cy + 2, cx - 7, cy + 2]).fill({
+        color: 0xffeb3b,
+      });
       iconContainer.addChild(g);
     } else if (brush === 'erase') {
       const g = new Graphics();
-      g.circle(16, 16, 10).stroke({ width: 2, color: 0xef5350 });
-      g.moveTo(9, 9).lineTo(23, 23).stroke({ width: 2, color: 0xef5350 });
+      g.circle(cx, cy, 12).stroke({ width: 2, color: 0xef5350 });
+      g.moveTo(cx - 7, cy - 7)
+        .lineTo(cx + 7, cy + 7)
+        .stroke({ width: 2, color: 0xef5350 });
+      g.moveTo(cx + 7, cy - 7)
+        .lineTo(cx - 7, cy + 7)
+        .stroke({ width: 2, color: 0xef5350 });
       iconContainer.addChild(g);
     }
 
@@ -585,25 +601,25 @@ export class GodModeHud extends Container {
     bg.clear();
 
     if (isSelected) {
-      bg.roundRect(0, 0, w, h, 6)
+      bg.roundRect(0, 0, w, h, 8)
         .fill({ color: 0x5e4400, alpha: 0.95 })
-        .roundRect(0, 0, w, h, 6)
+        .roundRect(0, 0, w, h, 8)
         .stroke({ width: 2, color: 0xffd700, alpha: 0.9 });
 
       textNode.style.fill = 0xfffae6;
       textNode.style.fontWeight = '700';
     } else if (isHovered) {
-      bg.roundRect(0, 0, w, h, 6)
+      bg.roundRect(0, 0, w, h, 8)
         .fill({ color: 0x3d3254, alpha: 0.9 })
-        .roundRect(0, 0, w, h, 6)
+        .roundRect(0, 0, w, h, 8)
         .stroke({ width: 1, color: 0x9b84c7, alpha: 0.7 });
 
       textNode.style.fill = 0xffffff;
       textNode.style.fontWeight = '600';
     } else {
-      bg.roundRect(0, 0, w, h, 6)
+      bg.roundRect(0, 0, w, h, 8)
         .fill({ color: 0x221a2e, alpha: 0.75 })
-        .roundRect(0, 0, w, h, 6)
+        .roundRect(0, 0, w, h, 8)
         .stroke({ width: 1, color: 0x4a3d61, alpha: 0.4 });
 
       textNode.style.fill = 0xb8b0c8;

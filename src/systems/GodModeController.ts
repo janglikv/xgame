@@ -33,6 +33,7 @@ const ENEMY_BRUSHES = new Set<GodBrush>([
   'pig',
   'cow',
   'horse',
+  'wolf',
   'bear',
 ]);
 

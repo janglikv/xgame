@@ -1,4 +1,4 @@
-import { Bear, Chicken, Cow, Horse, Pig } from '../entities/FarmAnimals';
+import { Bear, Chicken, Cow, Horse, Pig, Wolf } from '../entities/FarmAnimals';
 import { FlameFlower } from '../entities/FlameFlower';
 import { Spider } from '../entities/Spider';
 import { WoodenDummy } from '../entities/WoodenDummy';
@@ -33,6 +33,9 @@ export function createEnemyAt(
   }
   if (kind === 'horse') {
     return new Horse(solid.x, solid.y);
+  }
+  if (kind === 'wolf') {
+    return new Wolf(solid.x, solid.y);
   }
   if (kind === 'bear') {
     return new Bear(solid.x, solid.y);
