@@ -64,7 +64,7 @@ export const GRASS_MIN_SPACING = 24;
 export const GRASS_GREEN_LAND_MARGIN = 40;
 
 /** 场上草丛数量上限，防止无限膨胀拖垮性能 */
-export const GRASS_MAX_COUNT = 500;
+export const GRASS_MAX_COUNT = 1200;
 
 /** 获取草的下一阶段体型 */
 export function nextGrassSize(size: GrassSize): GrassSize | null {
