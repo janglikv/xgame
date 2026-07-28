@@ -872,8 +872,8 @@ abstract class GrassEater extends Spider {
   private readonly ecoCfg: HerbivoreEco;
   /** 认领的草 id（最多 4） */
   private pastureIds: string[] = [];
-  /** 排泄粑粑倒计时（30s ~ 50s） */
-  private poopTimer = 20 + Math.random() * 25;
+  /** 排泄粑粑倒计时（15s ~ 30s，频率翻倍） */
+  private poopTimer = 10 + Math.random() * 12.5;
 
   protected constructor(
     worldX: number,
@@ -920,7 +920,7 @@ abstract class GrassEater extends Spider {
     if (!this.isAlive || this.destroyed || !this.ecology?.spawnDung) return;
     this.poopTimer -= dt;
     if (this.poopTimer <= 0) {
-      this.poopTimer = 35 + Math.random() * 25;
+      this.poopTimer = 17.5 + Math.random() * 12.5;
       const backAngle = (this.facingDir > 0 ? Math.PI : 0) + (Math.random() - 0.5) * 0.5;
       const dungX = this.worldX + Math.cos(backAngle) * 12;
       const dungY = this.worldY + Math.sin(backAngle) * 12;
