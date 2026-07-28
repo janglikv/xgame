@@ -26,6 +26,7 @@ import {
   grassIdOf,
   grassSizeOf,
   isOnGreenLand,
+  landRectOf,
   normalizeGrasses,
   normalizeTrees,
   removeRuntimeTreeObstacleById,
@@ -406,6 +407,12 @@ export class HarvestWorld {
       tree.update(deltaMS);
     }
     const dt = deltaMS / 1000;
+    // 场景为空白（全岛无草）时，在绿色陆地上随机孵化 1 棵生命火种小草
+    if (this.grasses.length === 0) {
+      this.spawnInitialSeedGrass();
+      return;
+    }
+
     // 固定本帧数量，避免扩散或老死导致数组变动影响迭代
     const grassCount = this.grasses.length;
     const overcrowdDistSq =
@@ -538,6 +545,31 @@ export class HarvestWorld {
       if (!isOnGreenLand(spawnX, spawnY, mapDef, 255)) return;
 
       this.hooks.onSpawnNaturalAnimal('wolf', spawnX, spawnY);
+    }
+  }
+
+  /** 当场景中完全无草时，随机挑选一处绿地生成 1 棵初始种子草（生命火种） */
+  private spawnInitialSeedGrass(): void {
+    const mapDef = this.hooks.getMapDef();
+    const land = landRectOf(mapDef);
+    if (land.w <= 0 || land.h <= 0) return;
+
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const x = land.x + Math.random() * land.w;
+      const y = land.y + Math.random() * land.h;
+
+      // 必须在绿地上且远离树木
+      if (!isOnGreenLand(x, y, mapDef, 255)) continue;
+      if (this.isGrassTooCloseToTrees(x, y)) continue;
+
+      if (!mapDef.grasses) mapDef.grasses = [];
+      const id = allocGrassId('gs');
+      const g: MapGrass = { x, y, size: 'small', id };
+      mapDef.grasses.push(g);
+      this.mountGrass(g);
+      this.hooks.persistMapDraft();
+      this.hooks.afterWorldChange();
+      break;
     }
   }
 }
