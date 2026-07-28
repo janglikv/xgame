@@ -497,8 +497,8 @@ export class HarvestWorld {
       if (!isOnGreenLand(spawnX, spawnY, mapDef, 255)) return;
       if (this.isGrassTooCloseToTrees(spawnX, spawnY)) return;
 
-      // 诞生动物类型偏向：牛 (cow)、马 (horse)、鸡 (chicken)、猪 (pig)
-      const kinds: EnemyKind[] = ['cow', 'horse', 'chicken', 'pig', 'chicken'];
+      // 诞生动物类型限定：仅随机诞生牛 (cow) 和马 (horse)，不诞生猪和鸡
+      const kinds: EnemyKind[] = ['cow', 'horse'];
       const chosenKind = kinds[Math.floor(Math.random() * kinds.length)]!;
 
       this.hooks.onSpawnNaturalAnimal(chosenKind, spawnX, spawnY);
