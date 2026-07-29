@@ -5,7 +5,12 @@ import type { CombatSystem } from '../../systems/CombatSystem';
 import type { GodModeController } from '../../systems/GodModeController';
 import type { HarvestWorld } from '../../systems/HarvestWorld';
 import type { LevelCamera } from '../LevelCamera';
-import type { LevelPointerState } from './LevelSimulation';
+
+export type LevelPointerState = {
+  screenX: number;
+  screenY: number;
+  seen: boolean;
+};
 
 export type LevelInputRouterDeps = {
   input: InputManager;

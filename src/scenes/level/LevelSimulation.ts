@@ -1,4 +1,3 @@
-import type { Container } from 'pixi.js';
 import type { EntranceContext } from '../../entities/CharacterEntrance';
 import {
   applyKnockImpulse,
@@ -26,16 +25,13 @@ import {
 import type { HealthBar } from '../../ui/HealthBar';
 import type { WorldMap } from '../../world/WorldMap';
 import type { LevelCamera } from '../LevelCamera';
+import type { LevelPointerState } from './LevelInputRouter';
+import type { LevelLandRedraw } from './LevelLandRedraw';
+import type { LevelWorldLayers } from './LevelWorldLayers';
 
 const MOVE_SPEED = 220;
 /** 击退很强时削弱 WASD 控制（水平速度） */
 const KNOCK_CONTROL_SOFTEN = 220;
-
-export type LevelPointerState = {
-  screenX: number;
-  screenY: number;
-  seen: boolean;
-};
 
 export type LevelSimulationDeps = {
   input: InputManager;
@@ -49,15 +45,13 @@ export type LevelSimulationDeps = {
   camera: LevelCamera;
   healthBar: HealthBar;
   worldMap: WorldMap;
-  treeBackLayer: Container;
-  treeFrontLayer: Container;
+  layers: LevelWorldLayers;
+  landRedraw: LevelLandRedraw;
   getPointer: () => LevelPointerState;
   entranceContext: () => EntranceContext;
   syncWorldActors: () => void;
-  sortDepth: () => void;
   stepCamera: (dt: number, snap?: boolean) => boolean;
   syncAmmoHud: (player: PlayerCharacterBase) => void;
-  flushLandRedraw: (dt: number) => void;
 };
 
 /**
@@ -109,8 +103,8 @@ export class LevelSimulation {
       combat,
       harvest,
       creatures,
-      treeBackLayer,
-      treeFrontLayer,
+      layers,
+      landRedraw,
     } = this.deps;
     const pointer = this.deps.getPointer();
 
@@ -210,11 +204,9 @@ export class LevelSimulation {
     this.updateGrassLod();
     harvest.tickTrees(deltaMS, creatures, this.grassViewBounds());
     harvest.update(deltaMS, player.worldX, player.worldY);
-    this.deps.sortDepth();
-    // 前后树带节点少，每帧 sort 成本低，保证树与树之间遮挡正确
-    treeBackLayer.sortChildren();
-    treeFrontLayer.sortChildren();
-    this.deps.flushLandRedraw(dt);
+    layers.sortDepth();
+    layers.sortTreeBands();
+    landRedraw.flush(dt);
   }
 
   private solidContext(): SolidContext {
@@ -353,6 +345,6 @@ export class LevelSimulation {
     player.playBlastKnock(0.45, hit.dirX, 0);
     this.deps.stepCamera(0, false);
     this.deps.syncWorldActors();
-    this.deps.sortDepth();
+    this.deps.layers.sortDepth();
   }
 }

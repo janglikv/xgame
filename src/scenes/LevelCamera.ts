@@ -2,6 +2,11 @@ import type { Container } from 'pixi.js';
 import { getActiveMapDef } from '../data/maps';
 import { WorldMap } from '../world/WorldMap';
 
+/** 镜头朝指针方向偏移的比例 */
+const CAMERA_POINTER_LEAD = 0.5;
+/** 镜头指针偏移上限（世界像素） */
+const CAMERA_POINTER_LEAD_MAX = 320;
+
 export type LevelCameraOptions = {
   worldRoot: Container;
   /** 初始焦点（出生点） */
@@ -24,9 +29,16 @@ export type LevelCameraOptions = {
   switchBoostTime?: number;
 };
 
+/** 指针 lead 输入（屏幕坐标） */
+export type CameraPointerLead = {
+  screenX: number;
+  screenY: number;
+  seen: boolean;
+};
+
 /**
  * 关卡镜头：worldRoot 缩放 + 平移，使 cam 落在屏幕中心。
- * 焦点由外部每帧提供（玩家脚底）。
+ * 焦点由外部每帧提供（玩家脚底 + 可选指针 lead）。
  */
 export class LevelCamera {
   private readonly worldRoot: Container;
@@ -153,6 +165,34 @@ export class LevelCamera {
     if (zoomIn === zoomOut) return;
     const factor = Math.pow(this.zoomKeyRate, dt);
     this.setZoom(this.zoomTarget * (zoomIn ? factor : 1 / factor));
+  }
+
+  /**
+   * 以锚点（通常是玩家脚底）计算焦点；指针可见时向光标方向 lead。
+   */
+  computeFocus(
+    anchorX: number,
+    anchorY: number,
+    pointer?: CameraPointerLead | null,
+  ): { x: number; y: number } {
+    if (!pointer?.seen) {
+      return { x: anchorX, y: anchorY };
+    }
+    const zoom = Math.max(this.zoom, 1e-4);
+    let offsetX =
+      ((pointer.screenX - this.viewWidth / 2) / zoom) * CAMERA_POINTER_LEAD;
+    let offsetY =
+      ((pointer.screenY - this.viewHeight / 2) / zoom) * CAMERA_POINTER_LEAD;
+    const offsetLength = Math.hypot(offsetX, offsetY);
+    if (offsetLength > CAMERA_POINTER_LEAD_MAX) {
+      const scale = CAMERA_POINTER_LEAD_MAX / offsetLength;
+      offsetX *= scale;
+      offsetY *= scale;
+    }
+    return {
+      x: anchorX + offsetX,
+      y: anchorY + offsetY,
+    };
   }
 
   /**
