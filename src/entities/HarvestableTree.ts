@@ -1,10 +1,11 @@
-import { Container, Graphics } from 'pixi.js';
+import { Container, Sprite } from 'pixi.js';
 import {
   TREE_BODY_PROFILE_ID,
   type BodyProfileId,
 } from '../data/bodyProfiles';
 import type { TreeKind, TreeSize } from '../data/maps/types';
 import {
+  TREE_CANOPY_CULL_PAD,
   TREE_GROWTH_TIME_SEC,
   TREE_SIZE_PROFILE,
   TREE_SPREAD_TIME_SEC,
@@ -14,8 +15,10 @@ import {
   treeSolidR,
 } from '../data/treeProfiles';
 import { HealthBar } from '../ui/HealthBar';
-import { drawPineLocal } from '../world/PineTree';
-import { drawAppleTreeLocal } from '../world/AppleTree';
+import {
+  getTreeTexture,
+  TREE_SPRITE_ANCHOR,
+} from '../world/treeTextures';
 
 /** 树苗淡入时长（秒） */
 const TREE_EMERGE_SEC = 1.4;
@@ -72,9 +75,27 @@ export type HarvestableTreeOptions = {
   onAppleDrop?: (worldX: number, worldY: number) => void;
 };
 
+/** 镜头可视区（世界坐标） */
+export type TreeViewBounds = {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+};
+
+export type TreeUpdateOptions = {
+  view?: TreeViewBounds | null;
+  /** 森林抱团生长加速 */
+  speedup?: number;
+  /** 本帧是否推进扩散 / 结苹果逻辑 */
+  runLogic?: boolean;
+  /** 逻辑 dt 倍率（= 分片数） */
+  logicScale?: number;
+};
+
 /**
  * 关卡内可交互树：小树苗 / 中树 / 大树（松树或苹果树）。
- * 特点：与草类似，支持平滑生长与播种扩散逻辑；大苹果树会结果，熟透后苹果掉落地面成为拾取物。
+ * 共享烘焙 Sprite；屏外跳过视觉；生长/扩散逻辑可分片。
  */
 export class HarvestableTree extends Container {
   worldX: number;
@@ -93,10 +114,16 @@ export class HarvestableTree extends Container {
   /** 树 id；空串表示无 solid 绑定 */
   readonly treeId: string;
 
+  /** 当前是否挂在「参与角色深度排序」的层 */
+  sortedForDepth = false;
+  /** 抱团加速缓存（由 HarvestWorld 分片刷新） */
+  clusterSpeedup = 1;
+
   private maxHp: number;
   private hp: number;
-  private readonly healthBar: HealthBar;
-  private readonly gfx: Graphics;
+  /** 懒创建：未受伤不挂血条节点 */
+  private healthBar: HealthBar | null = null;
+  private readonly sprite: Sprite;
   private shakeT = 0;
   private felled = false;
   private baseTint: number;
@@ -110,6 +137,11 @@ export class HarvestableTree extends Container {
   private onGrown?: (tree: HarvestableTree) => void;
   private onSpread?: (tree: HarvestableTree) => void;
   private onAppleDrop?: (worldX: number, worldY: number) => void;
+
+  private appleCount = 0;
+  private appleFruitTimer = 0;
+  /** 视觉脏：生长/淡入结束后可跳过每帧 scale/tint 写入 */
+  private visualDirty = true;
 
   constructor(
     worldX: number,
@@ -156,26 +188,35 @@ export class HarvestableTree extends Container {
     }
 
     this.baseTint = options.tint ?? profile.tint;
-    this.gfx = new Graphics();
-    this.gfx.label = 'HarvestTreeGfx';
-    this.gfx.scale.set(profile.scale);
-    this.gfx.tint = this.baseTint;
-    this.addChild(this.gfx);
+    this.initAppleState();
 
-    this.healthBar = new HealthBar({
+    this.sprite = new Sprite(getTreeTexture(this.treeKind, this.appleCount));
+    this.sprite.label = 'HarvestTreeSprite';
+    this.sprite.anchor.set(TREE_SPRITE_ANCHOR.x, TREE_SPRITE_ANCHOR.y);
+    this.sprite.scale.set(profile.scale);
+    this.sprite.tint = this.baseTint;
+    this.sprite.eventMode = 'none';
+    this.sprite.cullable = true;
+    this.addChild(this.sprite);
+
+    this.syncToWorld();
+    this.applyGrowthVisual();
+  }
+
+  private ensureHealthBar(): HealthBar {
+    if (this.healthBar) return this.healthBar;
+    const profile = TREE_SIZE_PROFILE[this.size];
+    const bar = new HealthBar({
       maxHp: this.maxHp,
       width: profile.hpBarW,
       height: 5,
     });
-    this.healthBar.setHealth(this.maxHp);
-    this.healthBar.position.set(0, profile.hpBarY);
-    this.healthBar.visible = false;
-    this.addChild(this.healthBar);
-
-    this.initAppleState();
-    this.redrawTreeGfx();
-    this.syncToWorld();
-    this.applyGrowthVisual();
+    bar.setHealth(this.hp);
+    bar.position.set(0, profile.hpBarY);
+    bar.visible = false;
+    this.addChild(bar);
+    this.healthBar = bar;
+    return bar;
   }
 
   get isAlive(): boolean {
@@ -186,13 +227,9 @@ export class HarvestableTree extends Container {
     return this.hp;
   }
 
-  private appleCount = 0;
-  private appleFruitTimer = 0;
-
   private initAppleState(): void {
     if (this.treeKind !== 'apple') return;
     if (this.size === 'large') {
-      // 大树初始悬挂 2~3 个鲜红大苹果
       this.appleCount = 2 + Math.floor(Math.random() * 2);
       this.appleFruitTimer = 6 + Math.random() * 6;
     } else {
@@ -201,13 +238,8 @@ export class HarvestableTree extends Container {
     }
   }
 
-  private redrawTreeGfx(): void {
-    this.gfx.clear();
-    if (this.treeKind === 'apple') {
-      drawAppleTreeLocal(this.gfx, 1, this.appleCount);
-    } else {
-      drawPineLocal(this.gfx, 1);
-    }
+  private refreshSpriteTexture(): void {
+    this.sprite.texture = getTreeTexture(this.treeKind, this.appleCount);
   }
 
   /**
@@ -255,14 +287,12 @@ export class HarvestableTree extends Container {
     }
   }
 
-  /** 生长进度 0→1 */
   private growthProgress01(): number {
     if (this.growthTimer === null || this.growthDuration <= 0) return 1;
     const done = 1 - this.growthTimer / this.growthDuration;
     return Math.min(1, Math.max(0, done));
   }
 
-  /** 淡入进度 0→1 */
   private emergeProgress01(): number {
     if (this.emergeTimer === null || this.emergeDuration <= 0) return 1;
     return Math.min(
@@ -271,9 +301,6 @@ export class HarvestableTree extends Container {
     );
   }
 
-  /**
-   * 平滑插值生长尺寸与色彩 (Lerp Growth Visual)
-   */
   private applyGrowthVisual(): void {
     if (this.destroyed || !this.isAlive) return;
     const next = nextTreeSize(this.size);
@@ -289,9 +316,10 @@ export class HarvestableTree extends Container {
     }
 
     const e = this.emergeProgress01();
-    this.gfx.scale.set(baseScale);
-    this.gfx.tint = tint;
-    this.gfx.alpha = e;
+    this.sprite.scale.set(baseScale);
+    this.sprite.tint = tint;
+    this.sprite.alpha = e;
+    this.visualDirty = false;
   }
 
   /** 手动或倒计时触发生长 */
@@ -308,17 +336,19 @@ export class HarvestableTree extends Container {
     this.woodDrop = profile.woodDrop;
     this.baseTint = profile.tint;
 
-    // 按比例提升 HP
     const oldMax = this.maxHp;
     this.maxHp = profile.maxHp;
     this.hp = Math.min(this.maxHp, Math.round((this.hp / oldMax) * this.maxHp));
-    this.healthBar.setHealth(this.hp);
-    this.healthBar.position.set(0, profile.hpBarY);
+    if (this.healthBar) {
+      this.healthBar.setHealth(this.hp, this.maxHp);
+      this.healthBar.position.set(0, profile.hpBarY);
+    }
 
     this.resetGrowthTimer();
     this.resetSpreadTimer();
     this.initAppleState();
-    this.redrawTreeGfx();
+    this.refreshSpriteTexture();
+    this.visualDirty = true;
     this.applyGrowthVisual();
 
     this.onGrown?.(this);
@@ -333,49 +363,72 @@ export class HarvestableTree extends Container {
     this.zIndex = this.worldY;
   }
 
-  update(deltaMS: number, speedup = 1.0): void {
+  /**
+   * 屏外判定：脚底在镜头内，或冠层可能伸入镜头（脚底略在下方）。
+   */
+  inView(view: TreeViewBounds | null | undefined): boolean {
+    if (!view) return true;
+    return (
+      this.worldX >= view.minX &&
+      this.worldX <= view.maxX &&
+      this.worldY >= view.minY &&
+      this.worldY <= view.maxY + TREE_CANOPY_CULL_PAD
+    );
+  }
+
+  update(deltaMS: number, opts: TreeUpdateOptions = {}): void {
     if (this.destroyed) return;
     const realDt = deltaMS / 1000;
-    const dt = realDt * Math.max(0.1, speedup);
+    const speedup = Math.max(0.1, opts.speedup ?? this.clusterSpeedup);
+    const dt = realDt * speedup;
+    const runLogic = opts.runLogic ?? true;
+    const logicScale = opts.logicScale ?? 1;
+    const view = opts.view;
 
     if (this.shakeT > 0) {
       this.shakeT = Math.max(0, this.shakeT - realDt);
-      this.syncToWorld();
     }
 
-    // 树苗淡入
+    // 淡入：每帧推进（保证平滑）
     if (this.emergeTimer !== null) {
       this.emergeTimer -= realDt;
       if (this.emergeTimer <= 0) {
         this.emergeTimer = null;
       }
+      this.visualDirty = true;
     }
 
-    // 自动平滑生长计时（受到森林抱团 speedup 庇护加速）
+    // 生长计时每帧推进（慢速；平滑放大不依赖分片）
     if (this.isAlive && this.growthTimer !== null) {
       this.growthTimer -= dt;
+      this.visualDirty = true;
       if (this.growthTimer <= 0) {
         this.grow();
       }
     }
 
-    // 自动播种扩散计时（受到森林抱团 speedup 庇护加速）
-    if (this.isAlive && this.spreadTimer !== null) {
-      this.spreadTimer -= dt;
+    // 扩散 / 结苹果：可分片
+    if (runLogic && this.isAlive && this.spreadTimer !== null) {
+      this.spreadTimer -= dt * logicScale;
       if (this.spreadTimer <= 0) {
         this.onSpread?.(this);
         this.resetSpreadTimer();
       }
     }
 
-    // 大苹果树生长结红苹果逻辑
-    if (this.isAlive && this.treeKind === 'apple' && this.size === 'large') {
-      this.appleFruitTimer -= dt;
+    if (
+      runLogic &&
+      this.isAlive &&
+      this.treeKind === 'apple' &&
+      this.size === 'large'
+    ) {
+      this.appleFruitTimer -= dt * logicScale;
       if (this.appleFruitTimer <= 0) {
         this.appleFruitTimer = 7 + Math.random() * 5;
         if (this.appleCount < 3) {
           this.appleCount++;
-          this.redrawTreeGfx();
+          this.refreshSpriteTexture();
+          this.visualDirty = true;
         } else {
           const drop = this.rollAppleDropPos();
           this.onAppleDrop?.(drop.x, drop.y);
@@ -383,9 +436,22 @@ export class HarvestableTree extends Container {
       }
     }
 
-    // 平滑线性放大与色彩渲染更新（与草一致，无强加特效）
-    this.applyGrowthVisual();
-    this.healthBar.update(deltaMS);
+    const visible = this.inView(view);
+    // 受击抖动短暂强制显示；血条常亮不阻止屏外剔除
+    this.visible = visible || this.shakeT > 0;
+
+    if (!visible && this.shakeT <= 0) {
+      // 屏外：计时器已推进，跳过 transform / 视觉 / 血条
+      return;
+    }
+
+    this.syncToWorld();
+    if (this.visualDirty || this.growthTimer !== null || this.emergeTimer !== null) {
+      this.applyGrowthVisual();
+    }
+    if (this.healthBar?.visible) {
+      this.healthBar.update(deltaMS);
+    }
   }
 
   /**
@@ -398,14 +464,16 @@ export class HarvestableTree extends Container {
     if (dmg <= 0) return true;
 
     this.hp = Math.max(0, this.hp - dmg);
-    this.healthBar.setHealth(this.hp);
-    this.healthBar.visible = true;
+    const bar = this.ensureHealthBar();
+    bar.setHealth(this.hp);
+    bar.visible = true;
     this.shakeT = 0.18;
+    this.visible = true;
 
-    // 受击摇晃：震落 1 个红苹果
     if (this.treeKind === 'apple' && this.appleCount > 0) {
       this.appleCount--;
-      this.redrawTreeGfx();
+      this.refreshSpriteTexture();
+      this.visualDirty = true;
       const drop = this.rollAppleDropPos();
       this.onAppleDrop?.(drop.x, drop.y);
     }
@@ -417,4 +485,3 @@ export class HarvestableTree extends Container {
     return true;
   }
 }
-

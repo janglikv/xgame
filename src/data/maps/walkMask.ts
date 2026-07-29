@@ -421,45 +421,123 @@ export function buildTreeObstacles(def: LevelMapDef): TreeObstacle[] {
   return out;
 }
 
-// —— 运行时树 solid（砍伐后可动态移除）——
+// —— 运行时树 solid（砍伐后可动态移除）+ 空间网格 ——
+
+const TREE_OBS_CELL = 64;
+const TREE_OBS_INV = 1 / TREE_OBS_CELL;
 
 let runtimeTreeObstacles: TreeObstacle[] = [];
+/** cellKey → 障碍列表 */
+const treeObsCells = new Map<string, TreeObstacle[]>();
+/** 当前场上最大树干半径（查询邻域用） */
+let treeObsMaxR = 0;
+
+function treeObsCellKey(cx: number, cy: number): string {
+  return `${cx},${cy}`;
+}
+
+function treeObsCellOf(x: number, y: number): { cx: number; cy: number } {
+  return {
+    cx: Math.floor(x * TREE_OBS_INV),
+    cy: Math.floor(y * TREE_OBS_INV),
+  };
+}
+
+function rebuildTreeObsIndex(): void {
+  treeObsCells.clear();
+  treeObsMaxR = 0;
+  for (const o of runtimeTreeObstacles) {
+    treeObsMaxR = Math.max(treeObsMaxR, o.r);
+    const { cx, cy } = treeObsCellOf(o.x, o.y);
+    const k = treeObsCellKey(cx, cy);
+    let bucket = treeObsCells.get(k);
+    if (!bucket) {
+      bucket = [];
+      treeObsCells.set(k, bucket);
+    }
+    bucket.push(o);
+  }
+}
 
 export function setRuntimeTreeObstacles(
   _def: LevelMapDef,
   obstacles: TreeObstacle[],
 ): void {
   runtimeTreeObstacles = obstacles.slice();
+  rebuildTreeObsIndex();
 }
 
 export function getRuntimeTreeObstacles(): readonly TreeObstacle[] {
   return runtimeTreeObstacles;
 }
 
+/**
+ * 查询 (x,y) 附近可能碰到的树干（半径 = queryR + maxTreeR）。
+ * 碰撞滑动用邻域列表，避免每帧扫全图。
+ */
+export function getTreeObstaclesNear(
+  x: number,
+  y: number,
+  queryR: number,
+): TreeObstacle[] {
+  const reachR = Math.max(0, queryR) + treeObsMaxR;
+  if (reachR <= 0 || runtimeTreeObstacles.length === 0) return [];
+  const { cx, cy } = treeObsCellOf(x, y);
+  const reach = Math.ceil(reachR * TREE_OBS_INV);
+  const out: TreeObstacle[] = [];
+  const r2 = reachR * reachR;
+  for (let iy = cy - reach; iy <= cy + reach; iy++) {
+    for (let ix = cx - reach; ix <= cx + reach; ix++) {
+      const bucket = treeObsCells.get(treeObsCellKey(ix, iy));
+      if (!bucket) continue;
+      for (const o of bucket) {
+        const dx = o.x - x;
+        const dy = o.y - y;
+        // 粗滤：圆心进邻域球
+        if (dx * dx + dy * dy <= r2) out.push(o);
+      }
+    }
+  }
+  return out;
+}
+
 export function removeRuntimeTreeObstacleById(id: string): void {
   runtimeTreeObstacles = runtimeTreeObstacles.filter((o) => o.id !== id);
+  rebuildTreeObsIndex();
 }
 
 export function clearRuntimeTreeObstacles(): void {
   runtimeTreeObstacles = [];
+  treeObsCells.clear();
+  treeObsMaxR = 0;
 }
 
 export function syncRuntimeTreesFromDef(def: LevelMapDef): void {
   setRuntimeTreeObstacles(def, buildTreeObstacles(def));
 }
 
-/** 圆心是否碰到运行时树干 */
+/** 圆心是否碰到运行时树干（空间网格） */
 export function hitsTreeObstacle(
   x: number,
   y: number,
   radius: number,
 ): boolean {
   const r = Math.max(0, radius);
-  for (const o of runtimeTreeObstacles) {
-    const dx = x - o.x;
-    const dy = y - o.y;
-    const lim = r + o.r;
-    if (dx * dx + dy * dy < lim * lim) return true;
+  if (runtimeTreeObstacles.length === 0) return false;
+  const { cx, cy } = treeObsCellOf(x, y);
+  const reachR = r + treeObsMaxR;
+  const reach = Math.ceil(reachR * TREE_OBS_INV);
+  for (let iy = cy - reach; iy <= cy + reach; iy++) {
+    for (let ix = cx - reach; ix <= cx + reach; ix++) {
+      const bucket = treeObsCells.get(treeObsCellKey(ix, iy));
+      if (!bucket) continue;
+      for (const o of bucket) {
+        const dx = x - o.x;
+        const dy = y - o.y;
+        const lim = r + o.r;
+        if (dx * dx + dy * dy < lim * lim) return true;
+      }
+    }
   }
   return false;
 }
@@ -468,6 +546,7 @@ export function hitsTreeObstacle(
 export function addRuntimeTreeObstacle(obs: TreeObstacle): void {
   runtimeTreeObstacles = runtimeTreeObstacles.filter((o) => o.id !== obs.id);
   runtimeTreeObstacles.push({ ...obs });
+  rebuildTreeObsIndex();
 }
 
 let grassIdSeq = 0;

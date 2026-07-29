@@ -3,7 +3,7 @@ import { getActiveMapDef, setActiveMapDef } from '../data/maps/activeMap';
 import type { LevelMapDef } from '../data/maps/types';
 import {
   clampToWalkableWorld,
-  getRuntimeTreeObstacles,
+  getTreeObstaclesNear,
   hitsTreeObstacle,
   isOcean,
   landRectOf,
@@ -67,7 +67,12 @@ export function resolveTreeCollision(
   radius = DEFAULT_BODY_RADIUS,
 ): Vec2 {
   const r = Math.max(0, radius);
-  const trees = getRuntimeTreeObstacles();
+  // 只取路径中点邻域树干，避免每帧扫全图
+  const midX = (fromX + toX) * 0.5;
+  const midY = (fromY + toY) * 0.5;
+  const pathHalf =
+    Math.hypot(toX - fromX, toY - fromY) * 0.5 + r + 8;
+  const trees = getTreeObstaclesNear(midX, midY, pathHalf);
   if (trees.length === 0) {
     return { x: toX, y: toY };
   }
@@ -152,7 +157,7 @@ function tryEscapeTrees(
   radius: number,
 ): Vec2 | null {
   const r = Math.max(0, radius);
-  const trees = getRuntimeTreeObstacles();
+  const trees = getTreeObstaclesNear(x, y, r + 48);
   if (trees.length > 0) {
     const pushed = pushCircleOutMany(x, y, r, trees, 6);
     if (!hitsTreeObstacle(pushed.x, pushed.y, r)) {
@@ -190,7 +195,8 @@ export class WorldMap extends Container {
   private readonly def: LevelMapDef;
   private built = false;
   private ocean: OceanLayer | null = null;
-  private landGfx: Graphics | null = null;
+  /** 树林黄泥土覆盖层：仅树布局变化时重绘（绿地底只在 build 画一次） */
+  private forestSoilGfx: Graphics | null = null;
 
   constructor(
     def?: LevelMapDef,
@@ -217,11 +223,19 @@ export class WorldMap extends Container {
     this.built = true;
   }
 
-  /** 重绘陆地（树林生长 / 砍伐 / 生态变迁时改变黄泥土地貌） */
+  /**
+   * 重绘树林黄泥土地貌（树增删/长大时）。
+   * 不再重绘整块陆地底色——那是卡顿主因之一。
+   */
   redrawLand(): void {
-    if (!this.landGfx || this.landGfx.destroyed) return;
-    this.landGfx.clear();
-    this.drawLand(this.landGfx);
+    this.redrawForestSoil();
+  }
+
+  /** 仅重绘森林泥土覆盖层 */
+  redrawForestSoil(): void {
+    if (!this.forestSoilGfx || this.forestSoilGfx.destroyed) return;
+    this.forestSoilGfx.clear();
+    this.drawForestSoilTerrain(this.forestSoilGfx);
   }
 
   /** 海面动画（波纹滚动 / 泡沫呼吸） */
@@ -287,9 +301,12 @@ export class WorldMap extends Container {
     const landContainer = new Container();
     landContainer.label = 'LandContainer';
 
-    const land = new Graphics();
-    land.label = 'Land';
-    this.landGfx = land;
+    const landBase = new Graphics();
+    landBase.label = 'LandBase';
+
+    const forestSoil = new Graphics();
+    forestSoil.label = 'ForestSoil';
+    this.forestSoilGfx = forestSoil;
 
     // 建立无缝程序化噪点图层 Overlay
     const noiseTex = makeSeamlessNoiseTexture({
@@ -307,7 +324,7 @@ export class WorldMap extends Container {
     noiseOverlay.alpha = 0.15;
     noiseOverlay.tint = 0x448833;
 
-    landContainer.addChild(land, noiseOverlay);
+    landContainer.addChild(landBase, forestSoil, noiseOverlay);
 
     // 建立草地精准有机轮廓 Mask，绝对防止草地噪点渗出至沙滩和海洋
     const landMask = new Graphics();
@@ -318,7 +335,9 @@ export class WorldMap extends Container {
     const decor = new Graphics();
     decor.label = 'Decor';
 
-    this.drawLand(land);
+    // 底色只画一次；泥土随树布局更新
+    this.drawLandBase(landBase);
+    this.drawForestSoilTerrain(forestSoil);
     this.drawLandDecor(decor);
 
     this.root.addChild(ocean, landContainer, landMask, decor);
@@ -348,7 +367,8 @@ export class WorldMap extends Container {
     syncRuntimeTreesFromDef(this.def);
   }
 
-  private drawLand(g: Graphics): void {
+  /** 静态陆地底色 + 噪声斑块（建图一次，不随树更新） */
+  private drawLandBase(g: Graphics): void {
     const r = this.landRect();
     if (r.w <= 0 || r.h <= 0) return;
 
@@ -432,9 +452,6 @@ export class WorldMap extends Container {
         g.circle(gx, gy, size).fill({ color: gColor, alpha: gAlpha });
       }
     }
-
-    // 6) 树林集群专属硬泥土地貌 Overlay（覆盖在所有草地色块之上，3棵及以上抱团才触发）
-    this.drawForestSoilTerrain(g);
   }
 
   /**
@@ -447,27 +464,50 @@ export class WorldMap extends Container {
     const rawTrees = (this.def.trees ?? []).filter((t) => t);
     if (rawTrees.length === 0) return;
 
-    const CLUSTER_SEARCH_R2 = 145 * 145; // 搜索半径 145px
-    const HARD_SOIL_THRESHOLD = 3; // 至少 3 棵树聚丛形成硬泥土
+    const CLUSTER_R = 145;
+    const CLUSTER_SEARCH_R2 = CLUSTER_R * CLUSTER_R;
+    const HARD_SOIL_THRESHOLD = 3;
 
-    // 筛选出属于森林集群节点（周边 145px 内同伴树木 >= 3 棵）的树木
+    // 网格邻域计同伴，避免 O(T²)
+    const cell = 64;
+    const inv = 1 / cell;
+    const buckets = new Map<string, typeof rawTrees>();
+    const keyOf = (x: number, y: number) =>
+      `${Math.floor(x * inv)},${Math.floor(y * inv)}`;
+    for (const t of rawTrees) {
+      const k = keyOf(t.x, t.y);
+      let b = buckets.get(k);
+      if (!b) {
+        b = [];
+        buckets.set(k, b);
+      }
+      b.push(t);
+    }
+    const reach = Math.ceil(CLUSTER_R * inv);
+
     const clusterTrees = rawTrees.filter((t1) => {
       let count = 0;
-      for (const t2 of rawTrees) {
-        const dx = t2.x - t1.x;
-        const dy = t2.y - t1.y;
-        if (dx * dx + dy * dy <= CLUSTER_SEARCH_R2) {
-          count += 1;
-          if (count >= HARD_SOIL_THRESHOLD) return true;
+      const cx = Math.floor(t1.x * inv);
+      const cy = Math.floor(t1.y * inv);
+      for (let iy = cy - reach; iy <= cy + reach; iy++) {
+        for (let ix = cx - reach; ix <= cx + reach; ix++) {
+          const bucket = buckets.get(`${ix},${iy}`);
+          if (!bucket) continue;
+          for (const t2 of bucket) {
+            const dx = t2.x - t1.x;
+            const dy = t2.y - t1.y;
+            if (dx * dx + dy * dy <= CLUSTER_SEARCH_R2) {
+              count += 1;
+              if (count >= HARD_SOIL_THRESHOLD) return true;
+            }
+          }
         }
       }
       return false;
     });
 
-    // 数量稀疏（仅 1~2 棵树），不足以形成树林硬泥土，保持纯绿草地
     if (clusterTrees.length === 0) return;
 
-    // 唯一单层平滑浅暖黄泥土地面 (Single Flat Organic Soil Layer)
     for (let idx = 0; idx < clusterTrees.length; idx++) {
       const t = clusterTrees[idx]!;
       const size = treeSizeOf(t);

@@ -119,6 +119,27 @@ export const TREE_CLUSTER_RADIUS = 120;
 /** 森林抱团加速倍率（周围有 2 棵以上同伴时加速 35%） */
 export const TREE_CLUSTER_SPEEDUP = 1.35;
 
+/** 空间网格边长（世界像素）；与最小间距同量级 */
+export const TREE_GRID_CELL = 64;
+
+/**
+ * 生长/扩散/抱团逻辑分几片轮转（视觉仍可每帧）。
+ * 树比草少，4 片足够摊平 O(邻居) 与 timer。
+ */
+export const TREE_LOGIC_SLICES = 4;
+
+/** 屏外树不更新摇摆/插值的边距（世界像素） */
+export const TREE_VIEW_CULL_MARGIN = 160;
+
+/**
+ * 树冠向上延伸的剔除垫量（世界像素）：脚底在镜头下方时冠层仍可能可见。
+ * large * bake 约 150px 量级，略放宽。
+ */
+export const TREE_CANOPY_CULL_PAD = 180;
+
+/** 树地图草稿合并写入间隔（秒） */
+export const TREE_PERSIST_DEBOUNCE_SEC = 0.75;
+
 /** 获取树的下一阶段体型 */
 export function nextTreeSize(size: TreeSize): TreeSize | null {
   if (size === 'sapling') return 'medium';

@@ -81,6 +81,58 @@ export class GrassSpatialIndex<T extends { worldX: number; worldY: number }> {
   }
 
   /**
+   * 遍历半径内对象；visitor 返回 true 时提前结束。
+   * 用于变半径判定（如树对草的遮荫死区按体型不同）。
+   */
+  forEachWithin(
+    x: number,
+    y: number,
+    radius: number,
+    visitor: (item: T, dist2: number) => boolean | void,
+    ignore?: T | null,
+  ): void {
+    const r2 = radius * radius;
+    const { cx, cy } = this.cellOf(x, y);
+    const reach = Math.ceil(radius * this.invCell);
+    for (let iy = cy - reach; iy <= cy + reach; iy++) {
+      for (let ix = cx - reach; ix <= cx + reach; ix++) {
+        const bucket = this.cells.get(this.key(ix, iy));
+        if (!bucket) continue;
+        for (const g of bucket) {
+          if (ignore && g === ignore) continue;
+          const dx = g.worldX - x;
+          const dy = g.worldY - y;
+          const d2 = dx * dx + dy * dy;
+          if (d2 > r2) continue;
+          if (visitor(g, d2) === true) return;
+        }
+      }
+    }
+  }
+
+  /** 半径内满足条件的数量（不含 ignore） */
+  countWithin(
+    x: number,
+    y: number,
+    radius: number,
+    predicate?: (item: T) => boolean,
+    ignore?: T | null,
+  ): number {
+    let n = 0;
+    this.forEachWithin(
+      x,
+      y,
+      radius,
+      (item) => {
+        if (predicate && !predicate(item)) return;
+        n += 1;
+      },
+      ignore,
+    );
+    return n;
+  }
+
+  /**
    * 找最近满足 predicate 的对象；由近到远扩环，避免全图扫。
    * @param maxRadius 最大搜索半径；Infinity 表示不限
    */

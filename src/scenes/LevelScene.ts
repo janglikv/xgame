@@ -30,6 +30,7 @@ import {
   GRASS_FAR_LOD_ZOOM_MUL,
   GRASS_VIEW_CULL_MARGIN,
 } from '../data/grassProfiles';
+import { TREE_VIEW_CULL_MARGIN } from '../data/treeProfiles';
 import {
   SolidResolver,
   type SolidContext,
@@ -95,10 +96,17 @@ export type LevelSceneOptions = {
 export class LevelScene extends Container implements GameScene {
   private readonly worldRoot: Container;
   private readonly worldMap: WorldMap;
-  /** 全景/屏外草：不参与角色每帧 z 排序 */
+  /** 全景/屏外草 + 屏外树：不参与角色每帧 z 排序 */
   private readonly grassFarLayer: Container;
+  /** 树在角色身后（worldY 偏小） */
+  private readonly treeBackLayer: Container;
   private readonly sortLayer: Container;
+  /** 树在角色身前（worldY 偏大） */
+  private readonly treeFrontLayer: Container;
   private readonly nightOverlay: NightOverlay;
+  /** 树林黄泥土重绘防抖 */
+  private landRedrawCooldown = 0;
+  private landRedrawPending = false;
 
   private readonly roster = new CharacterRoster();
   private readonly healthBar: HealthBar;
@@ -164,18 +172,30 @@ export class LevelScene extends Container implements GameScene {
     this.worldMap = new WorldMap(this.mapDef);
     this.worldRoot.addChild(this.worldMap);
 
-    // 草 far 层在角色层之下；全景时全部草挂这里
+    // 层序：草/屏外树 → 身后树 → 角色与近 Y 树 → 身前树
     this.grassFarLayer = new Container();
     this.grassFarLayer.label = 'GrassFarLayer';
     this.grassFarLayer.sortableChildren = true;
     this.grassFarLayer.eventMode = 'none';
     this.worldRoot.addChild(this.grassFarLayer);
 
+    this.treeBackLayer = new Container();
+    this.treeBackLayer.label = 'TreeBackLayer';
+    this.treeBackLayer.sortableChildren = true;
+    this.treeBackLayer.eventMode = 'none';
+    this.worldRoot.addChild(this.treeBackLayer);
+
     this.sortLayer = new Container();
     this.sortLayer.label = 'SortLayer';
     this.sortLayer.sortableChildren = true;
     this.sortLayer.eventMode = 'none';
     this.worldRoot.addChild(this.sortLayer);
+
+    this.treeFrontLayer = new Container();
+    this.treeFrontLayer.label = 'TreeFrontLayer';
+    this.treeFrontLayer.sortableChildren = true;
+    this.treeFrontLayer.eventMode = 'none';
+    this.worldRoot.addChild(this.treeFrontLayer);
 
     this.inventoryHud = new InventoryHud();
     this.inventory = new Inventory({
@@ -187,13 +207,18 @@ export class LevelScene extends Container implements GameScene {
     this.harvest = new HarvestWorld({
       sortLayer: this.sortLayer,
       grassFarLayer: this.grassFarLayer,
+      treeBackLayer: this.treeBackLayer,
+      treeFrontLayer: this.treeFrontLayer,
+      getDepthRefY: () => this.player?.worldY ?? this.spawn.y,
       inventory: this.inventory,
       getMapDef: () => this.mapDef,
       persistMapDraft: () => this.persistMapDraft(),
-      afterWorldChange: () => {
+      afterWorldChange: (opts) => {
         this.syncWorldActors();
         this.sortDepth();
-        this.worldMap.redrawLand();
+        if (opts?.redrawLand) {
+          this.scheduleLandRedraw();
+        }
       },
       onSpawnNaturalAnimal: (kind, x, y) => {
         if (kind === 'wolf') {
@@ -287,6 +312,7 @@ export class LevelScene extends Container implements GameScene {
       syncWorldActors: () => this.syncWorldActors(),
       sortDepth: () => this.sortDepth(),
       persistMapDraft: () => this.persistMapDraft(),
+      afterWorldChange: () => this.scheduleLandRedraw(),
     });
     this.godHud.setBrush(this.god.brush);
 
@@ -462,17 +488,47 @@ export class LevelScene extends Container implements GameScene {
     };
   }
 
-  /** 猪 / 牛 / 马等生物的觅食上下文（每帧重建） */
+  /** 生态树列表缓存：避免每帧 map 分配 */
+  private ecoTreesCache: Array<{
+    worldX: number;
+    worldY: number;
+    kind: 'pine' | 'apple';
+    isAlive: boolean;
+  }> = [];
+  private ecoTreesCacheLen = -1;
+
+  private refreshEcoTreesCache(): void {
+    const trees = this.harvest.trees;
+    if (this.ecoTreesCacheLen !== trees.length) {
+      this.ecoTreesCache = new Array(trees.length);
+      this.ecoTreesCacheLen = trees.length;
+    }
+    for (let i = 0; i < trees.length; i++) {
+      const t = trees[i]!;
+      const slot = this.ecoTreesCache[i];
+      if (slot) {
+        slot.worldX = t.worldX;
+        slot.worldY = t.worldY;
+        slot.kind = t.treeKind;
+        slot.isAlive = t.isAlive;
+      } else {
+        this.ecoTreesCache[i] = {
+          worldX: t.worldX,
+          worldY: t.worldY,
+          kind: t.treeKind,
+          isAlive: t.isAlive,
+        };
+      }
+    }
+  }
+
+  /** 猪 / 牛 / 马等生物的觅食上下文（每帧重建轻量引用） */
   private buildEcologyContext(): CreatureEcologyContext {
+    this.refreshEcoTreesCache();
     return {
       pickups: this.harvest.pickups,
       grasses: this.harvest.grasses,
-      trees: this.harvest.trees.map((t) => ({
-        worldX: t.worldX,
-        worldY: t.worldY,
-        kind: t.treeKind,
-        isAlive: t.isAlive,
-      })),
+      trees: this.ecoTreesCache,
       creatures: this.spiders,
       mapDef: this.mapDef,
       consumePickup: (p) => {
@@ -501,7 +557,23 @@ export class LevelScene extends Container implements GameScene {
   }
 
   private sortDepth(): void {
+    // 只排角色层：草已不在此层，树大部分在前后静态带
     this.sortLayer.sortChildren();
+  }
+
+  /** 树林泥土重绘防抖（避免树生长时每帧重绘整层） */
+  private scheduleLandRedraw(): void {
+    this.landRedrawPending = true;
+  }
+
+  private flushLandRedraw(dt: number): void {
+    if (this.landRedrawCooldown > 0) {
+      this.landRedrawCooldown = Math.max(0, this.landRedrawCooldown - dt);
+    }
+    if (!this.landRedrawPending || this.landRedrawCooldown > 0) return;
+    this.landRedrawPending = false;
+    this.landRedrawCooldown = 1.2;
+    this.worldMap.redrawForestSoil();
   }
 
   private solidContext(): SolidContext {
@@ -759,6 +831,10 @@ export class LevelScene extends Container implements GameScene {
     this.harvest.tickTrees(deltaMS, this.spiders, this.grassViewBounds());
     this.harvest.update(deltaMS, player.worldX, player.worldY);
     this.sortDepth();
+    // 前后树带节点少，每帧 sort 成本低，保证树与树之间遮挡正确
+    this.treeBackLayer.sortChildren();
+    this.treeFrontLayer.sortChildren();
+    this.flushLandRedraw(dt);
   }
 
   /** 全景 zoom → 草退出角色深度排序 */
@@ -769,7 +845,7 @@ export class LevelScene extends Container implements GameScene {
     this.harvest.setGrassLodFar(far);
   }
 
-  /** 镜头世界可视区（含边距），供草屏外剔除 */
+  /** 镜头世界可视区（含边距），供草/树屏外剔除 */
   private grassViewBounds(): {
     minX: number;
     maxX: number;
@@ -777,8 +853,9 @@ export class LevelScene extends Container implements GameScene {
     maxY: number;
   } {
     const z = Math.max(0.05, this.camera.currentZoom);
-    const halfW = this.camera.width / (2 * z) + GRASS_VIEW_CULL_MARGIN;
-    const halfH = this.camera.height / (2 * z) + GRASS_VIEW_CULL_MARGIN;
+    const margin = Math.max(GRASS_VIEW_CULL_MARGIN, TREE_VIEW_CULL_MARGIN);
+    const halfW = this.camera.width / (2 * z) + margin;
+    const halfH = this.camera.height / (2 * z) + margin;
     return {
       minX: this.camera.x - halfW,
       maxX: this.camera.x + halfW,

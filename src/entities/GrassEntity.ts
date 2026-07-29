@@ -151,6 +151,7 @@ export class GrassEntity extends Container {
     this.sprite.scale.set(profile.scale);
     this.sprite.tint = this.baseTint;
     this.sprite.eventMode = 'none';
+    this.sprite.cullable = true;
     this.addChild(this.sprite);
 
     this.syncToWorld(false);

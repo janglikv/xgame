@@ -30,6 +30,7 @@ export {
   buildTreeObstacles,
   setRuntimeTreeObstacles,
   getRuntimeTreeObstacles,
+  getTreeObstaclesNear,
   removeRuntimeTreeObstacleById,
   clearRuntimeTreeObstacles,
   syncRuntimeTreesFromDef,

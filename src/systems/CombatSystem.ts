@@ -586,7 +586,8 @@ export class CombatSystem {
     const tree = world.harvestTrees[index];
     if (!tree) return;
     this.hooks.onHarvestTreeDestroyed?.(tree);
-    this.sortLayer.removeChild(tree);
+    // 树可能在 far 层，不假定 parent 是 sortLayer
+    tree.parent?.removeChild(tree);
     tree.destroy({ children: true });
     world.harvestTrees.splice(index, 1);
   }

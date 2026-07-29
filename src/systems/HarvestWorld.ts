@@ -18,10 +18,14 @@ import {
   TREE_SPREAD_RADIUS_MIN,
   TREE_CLUSTER_RADIUS,
   TREE_CLUSTER_SPEEDUP,
+  TREE_GRID_CELL,
+  TREE_LOGIC_SLICES,
+  TREE_PERSIST_DEBOUNCE_SEC,
 } from '../data/treeProfiles';
 import {
   HARVEST_MELEE_DAMAGE,
   HarvestableTree,
+  type TreeViewBounds,
 } from '../entities/HarvestableTree';
 import {
   GrassEntity,
@@ -56,26 +60,49 @@ import {
 import type { Inventory } from './Inventory';
 import { GrassSpatialIndex } from './GrassSpatialIndex';
 
+/** 世界变更标志：控制昂贵的陆地泥土重绘 */
+export type HarvestWorldChangeOpts = {
+  /**
+   * 是否需要重绘树林黄泥土（仅树布局/体型变时）。
+   * 草的生长/枯萎不需要，默认 false。
+   */
+  redrawLand?: boolean;
+};
+
 export type HarvestWorldHooks = {
   sortLayer: Container;
   /**
-   * 全景 / 屏外草层：不参与角色每帧深度排序。
-   * 缺省时草始终在 sortLayer。
+   * 植被底层：全部草 + 屏外树。不参与角色每帧深度排序。
    */
   grassFarLayer?: Container;
+  /**
+   * 树在角色「身后」的层（worldY 明显小于参考点）。
+   * 缺省时回退 grassFarLayer。
+   */
+  treeBackLayer?: Container;
+  /**
+   * 树在角色「身前」的层（worldY 明显大于参考点）。
+   * 缺省时回退 sortLayer 上方由场景保证顺序。
+   */
+  treeFrontLayer?: Container;
+  /** 深度分带参考 Y（通常是玩家脚底）；缺省不做前后带 */
+  getDepthRefY?: () => number;
   inventory: Inventory;
   getMapDef: () => LevelMapDef;
   /** 树从 def 移除 solid 后持久化草稿 */
   persistMapDraft: () => void;
   /** 世界坐标 / 深度刷新 */
-  afterWorldChange: () => void;
+  afterWorldChange: (opts?: HarvestWorldChangeOpts) => void;
   /** 草丰水茂时自然孕育诞生的农场动物回调 */
   onSpawnNaturalAnimal?: (kind: EnemyKind, x: number, y: number) => void;
 };
 
+/** 与角色精细 Y 排序的半宽（世界像素）；带外进前后静态层 */
+const TREE_DEPTH_BAND = 36;
+
 /**
  * 可砍树 + 装饰草地 + 掉落拾取：生成、近战、自动生长、四面八方扩散、摧毁掉落、进包。
- * 草：空间网格 + 全景 LOD 合批层 + 逻辑分片；投射物摧毁走 onTreeDestroyed。
+ * 草/树：空间网格 + 屏外分层 + 逻辑分片；投射物摧毁走 onTreeDestroyed。
  */
 export class HarvestWorld {
   readonly trees: HarvestableTree[] = [];
@@ -83,10 +110,14 @@ export class HarvestWorld {
   readonly pickups: ItemPickup[] = [];
 
   private readonly grassIndex = new GrassSpatialIndex<GrassEntity>(GRASS_GRID_CELL);
+  private readonly treeIndex = new GrassSpatialIndex<HarvestableTree>(TREE_GRID_CELL);
   private grassLogicSlice = 0;
+  private treeLogicSlice = 0;
   private lodFar = false;
   private persistDirty = false;
   private persistCooldown = 0;
+  private treePersistDirty = false;
+  private treePersistCooldown = 0;
 
   constructor(private readonly hooks: HarvestWorldHooks) {}
 
@@ -123,8 +154,8 @@ export class HarvestWorld {
           r: treeSolidR(grownTree.size),
           id: grownTree.treeId,
         });
-        this.hooks.afterWorldChange();
-        this.hooks.persistMapDraft();
+        this.hooks.afterWorldChange({ redrawLand: true });
+        this.markTreePersistDirty();
       },
       onSpread: (source) => {
         this.trySpreadTreeFrom(source);
@@ -133,9 +164,86 @@ export class HarvestWorld {
         this.spawnPickup(worldX, worldY, 'apple', 1);
       },
     });
-    this.hooks.sortLayer.addChild(tree);
     this.trees.push(tree);
+    this.treeIndex.insert(tree);
+    // 默认按深度分带；本帧 tick 再按可视区校正
+    this.placeTreeDisplay(tree, true);
     return tree;
+  }
+
+  private get treeBack(): Container {
+    return this.hooks.treeBackLayer ?? this.farLayer;
+  }
+
+  private get treeFront(): Container {
+    return this.hooks.treeFrontLayer ?? this.hooks.sortLayer;
+  }
+
+  /**
+   * 树分层：
+   * - 屏外 → far
+   * - 相对玩家 Y 偏北 → back（整层在角色下）
+   * - 相对玩家 Y 偏南 → front（整层在角色上）
+   * - 接近玩家 Y → sortLayer 精细 zIndex
+   * 大幅减少每帧 sortChildren 的节点数（玩法逻辑不变）。
+   */
+  private placeTreeDisplay(tree: HarvestableTree, inView: boolean): void {
+    if (!tree || tree.destroyed) return;
+
+    let target: Container;
+    let inDepthSort = false;
+
+    if (!inView) {
+      target = this.farLayer;
+    } else {
+      const refY = this.hooks.getDepthRefY?.();
+      if (refY === undefined) {
+        target = this.hooks.sortLayer;
+        inDepthSort = true;
+      } else if (tree.worldY < refY - TREE_DEPTH_BAND) {
+        target = this.treeBack;
+      } else if (tree.worldY > refY + TREE_DEPTH_BAND) {
+        target = this.treeFront;
+      } else {
+        target = this.hooks.sortLayer;
+        inDepthSort = true;
+      }
+    }
+
+    if (tree.parent !== target) {
+      target.addChild(tree);
+    }
+    if (tree.destroyed) return;
+    tree.sortedForDepth = inDepthSort;
+    tree.zIndex = tree.worldY;
+  }
+
+  private markTreePersistDirty(): void {
+    this.treePersistDirty = true;
+  }
+
+  private flushTreePersist(force = false): void {
+    if (!this.treePersistDirty) return;
+    if (!force && this.treePersistCooldown > 0) return;
+    this.treePersistDirty = false;
+    this.treePersistCooldown = TREE_PERSIST_DEBOUNCE_SEC;
+    this.hooks.persistMapDraft();
+  }
+
+  /** 刷新抱团加速（空间网格邻域，避免 O(T²)） */
+  private refreshTreeClusterSpeedup(tree: HarvestableTree): void {
+    if (!tree.isAlive) {
+      tree.clusterSpeedup = 1;
+      return;
+    }
+    const neighbors = this.treeIndex.countWithin(
+      tree.worldX,
+      tree.worldY,
+      TREE_CLUSTER_RADIUS,
+      (t) => t.isAlive,
+      tree,
+    );
+    tree.clusterSpeedup = neighbors >= 2 ? TREE_CLUSTER_SPEEDUP : 1;
   }
 
   mountGrass(g: MapGrass): GrassEntity {
@@ -172,7 +280,9 @@ export class HarvestWorld {
     });
     this.grasses.push(grass);
     this.grassIndex.insert(grass);
-    this.placeGrassDisplay(grass, /* forceInView */ this.lodFar);
+    // 草永远在 far 层：矮草无需与角色 Y 交错，避免塞进每帧 sort
+    this.placeGrassDisplay(grass);
+    this.markGrassFarSortDirty();
     return grass;
   }
 
@@ -180,41 +290,31 @@ export class HarvestWorld {
     return this.hooks.grassFarLayer ?? this.hooks.sortLayer;
   }
 
-  /** 近景：屏内进 sortLayer；全景 / 屏外进 far 层 */
-  private placeGrassDisplay(grass: GrassEntity, inDepthSort: boolean): void {
+  /** 草固定挂 far 层（角色始终画在草上） */
+  private placeGrassDisplay(grass: GrassEntity): void {
     if (!grass || grass.destroyed) return;
-    const target =
-      inDepthSort && !this.lodFar
-        ? this.hooks.sortLayer
-        : this.farLayer;
+    const target = this.farLayer;
     if (grass.parent !== target) {
-      // addChild 会自动从旧 parent 卸下；避免对已销毁节点操作
       target.addChild(grass);
     }
     if (grass.destroyed) return;
-    grass.sortedForDepth = inDepthSort && !this.lodFar;
+    grass.sortedForDepth = false;
     grass.zIndex = grass.worldY;
   }
 
-  /** 由场景根据 zoom 设置全景 LOD */
+  private grassFarSortDirty = false;
+
+  /** 由场景根据 zoom 设置全景 LOD（草已不进 sortLayer，仅保留接口） */
   setGrassLodFar(far: boolean): void {
     if (this.lodFar === far) return;
     this.lodFar = far;
-    for (const g of this.grasses) {
-      if (!g || g.destroyed) continue;
-      if (far) {
-        this.placeGrassDisplay(g, false);
-      } else if (g.isWitheringOut) {
-        this.placeGrassDisplay(g, true);
-      } else {
-        // 近景：先放 far，本帧 tick 再按可视区挂回 sortLayer
-        this.placeGrassDisplay(g, false);
-      }
-    }
-    // 全景：草层内按 Y 排一次即可，不进角色每帧 sort
-    if (far && this.hooks.grassFarLayer?.sortableChildren) {
-      this.hooks.grassFarLayer.sortChildren();
-    }
+    // 草始终 far；全景时低频整理一次草层 Y 序
+    if (far) this.grassFarSortDirty = true;
+  }
+
+  /** 草层有新增时标记，tick 内低频 sort */
+  private markGrassFarSortDirty(): void {
+    this.grassFarSortDirty = true;
   }
 
   get isGrassLodFar(): boolean {
@@ -294,20 +394,10 @@ export class HarvestWorld {
   }
 
   /**
-   * 统计坐标 (x, y) 指定半径内的存活树木数量
+   * 统计坐标 (x, y) 指定半径内的存活树木数量（空间网格）
    */
   countNearbyTrees(x: number, y: number, radius: number): number {
-    const r2 = radius * radius;
-    let count = 0;
-    for (const tree of this.trees) {
-      if (!tree.isAlive) continue;
-      const dx = tree.worldX - x;
-      const dy = tree.worldY - y;
-      if (dx * dx + dy * dy <= r2) {
-        count += 1;
-      }
-    }
-    return count;
+    return this.treeIndex.countWithin(x, y, radius, (t) => t.isAlive);
   }
 
   /**
@@ -367,8 +457,8 @@ export class HarvestWorld {
     }
 
     if (spawned > 0) {
-      this.hooks.afterWorldChange();
-      this.hooks.persistMapDraft();
+      this.hooks.afterWorldChange({ redrawLand: true });
+      this.markTreePersistDirty();
     }
   }
 
@@ -379,26 +469,29 @@ export class HarvestWorld {
 
   /** 检查坐标 (x, y) 是否距离任何树木过近（树木遮荫与养分竞争，草无法存活生长） */
   isGrassTooCloseToTrees(x: number, y: number): boolean {
-    for (const tree of this.trees) {
+    // 最大竞争半径（large）；再按体型精确判定
+    let blocked = false;
+    this.treeIndex.forEachWithin(x, y, 135, (tree, dist2) => {
+      if (!tree.isAlive) return;
       const radius = TREE_GRASS_COMPETITION_RADIUS[tree.size] ?? 72;
-      const dx = tree.worldX - x;
-      const dy = tree.worldY - y;
-      if (dx * dx + dy * dy <= radius * radius) {
+      if (dist2 <= radius * radius) {
+        blocked = true;
         return true;
       }
-    }
-    return false;
+    });
+    return blocked;
   }
 
   /** 树被摧毁：掉木头（苹果树额外掉落苹果） + 移除 solid + 从草稿去掉 */
   onTreeDestroyed(tree: HarvestableTree): void {
+    this.treeIndex.remove(tree);
     if (tree.treeId) {
       removeRuntimeTreeObstacleById(tree.treeId);
       const mapDef = this.hooks.getMapDef();
       mapDef.trees = mapDef.trees.filter(
         (t) => treeIdOf(t) !== tree.treeId,
       );
-      this.hooks.persistMapDraft();
+      this.markTreePersistDirty();
     }
     const n = tree.woodDrop;
     for (let i = 0; i < n; i++) {
@@ -473,16 +566,18 @@ export class HarvestWorld {
 
     player.setFacingFromMoveX(best.worldX - player.worldX);
     const alive = best.applyDamage(HARVEST_MELEE_DAMAGE);
+    let felled = false;
     if (!alive) {
       const idx = this.trees.indexOf(best);
       if (idx >= 0) {
         this.onTreeDestroyed(best);
-        this.hooks.sortLayer.removeChild(best);
+        best.parent?.removeChild(best);
         best.destroy({ children: true });
         this.trees.splice(idx, 1);
+        felled = true;
       }
     }
-    this.hooks.afterWorldChange();
+    this.hooks.afterWorldChange(felled ? { redrawLand: true } : undefined);
     return true;
   }
 
@@ -490,6 +585,7 @@ export class HarvestWorld {
   removeTreeEntity(tree: HarvestableTree): void {
     const idx = this.trees.indexOf(tree);
     if (idx < 0) return;
+    this.treeIndex.remove(tree);
     tree.parent?.removeChild(tree);
     tree.destroy({ children: true });
     this.trees.splice(idx, 1);
@@ -566,10 +662,13 @@ export class HarvestWorld {
   }
 
   syncToWorld(): void {
+    // 树/草在 tick 里自行 sync；此处只补同步仍在深度排序层的可见实体
     for (const tree of this.trees) {
-      tree.syncToWorld();
+      if (tree.destroyed) continue;
+      if (tree.visible && tree.sortedForDepth) {
+        tree.syncToWorld();
+      }
     }
-    // 草在 tick 里自行 sync；此处只补同步仍在深度排序层的可见株
     for (const grass of this.grasses) {
       if (grass.destroyed) continue;
       if (grass.visible && grass.sortedForDepth) {
@@ -582,35 +681,33 @@ export class HarvestWorld {
   }
 
   /**
-   * @param view 镜头可视区（世界坐标）；近景屏外跳过摇摆并卸下 sortLayer
+   * @param view 镜头可视区（世界坐标）；屏外跳过视觉并卸下 sortLayer
    */
   tickTrees(
     deltaMS: number,
     creatures?: ReadonlyArray<Spider>,
-    view?: GrassViewBounds | null,
+    view?: GrassViewBounds | TreeViewBounds | null,
   ): void {
-    for (const tree of this.trees) {
-      if (!tree.isAlive) continue;
-      // 森林抱团庇护机制：周边 120px 内有 2 棵以上存活树木时，享受 1.35x 生长/播种加速
-      const neighborCount =
-        this.countNearbyTrees(tree.worldX, tree.worldY, TREE_CLUSTER_RADIUS) - 1;
-      const speedup = neighborCount >= 2 ? TREE_CLUSTER_SPEEDUP : 1.0;
-      tree.update(deltaMS, speedup);
-    }
     const dt = deltaMS / 1000;
     if (this.persistCooldown > 0) {
       this.persistCooldown = Math.max(0, this.persistCooldown - dt);
+    }
+    if (this.treePersistCooldown > 0) {
+      this.treePersistCooldown = Math.max(0, this.treePersistCooldown - dt);
     }
 
     // 场景为空白（全岛无树）时，在绿色陆地上随机孵化 1 棵生命火种树苗
     if (this.trees.length === 0) {
       this.spawnInitialSeedTree();
+    } else {
+      this.tickTreeEntities(deltaMS, view);
     }
 
     // 场景为空白（全岛无草）时，在绿色陆地上随机孵化 1 棵生命火种小草
     if (this.grasses.length === 0) {
       this.spawnInitialSeedGrass();
       this.flushGrassPersist();
+      this.flushTreePersist();
       return;
     }
 
@@ -632,24 +729,54 @@ export class HarvestWorld {
         runLogic,
         logicScale: runLogic && !g.isWitheringOut ? slices : 1,
       });
+    }
 
-      // 本帧已销毁（枯萎结束）→ 禁止再换层 / 写 transform
-      if (g.destroyed) continue;
-
-      // 近景：屏内进深度排序层，屏外进 far 层
-      if (!lodFar) {
-        const wantSort =
-          g.isWitheringOut || (g.visible && g.inView(view));
-        if (wantSort !== g.sortedForDepth) {
-          this.placeGrassDisplay(g, wantSort);
-        }
-      }
+    // 草层 Y 序：仅在新增/LOD 时低频整理一次（不进角色 sort）
+    if (this.grassFarSortDirty && this.hooks.grassFarLayer?.sortableChildren) {
+      this.hooks.grassFarLayer.sortChildren();
+      this.grassFarSortDirty = false;
     }
 
     this.tickNaturalAnimalSpawning(dt);
     this.tickNaturalWolfSpawning(dt, creatures);
     this.tickNaturalPineSpawning(dt, creatures);
     this.flushGrassPersist();
+    this.flushTreePersist();
+  }
+
+  /** 树：逻辑分片 + 屏外剔除 + Y 分带（减少 sortLayer 节点） */
+  private tickTreeEntities(
+    deltaMS: number,
+    view?: TreeViewBounds | null,
+  ): void {
+    const slices = Math.max(1, TREE_LOGIC_SLICES);
+    this.treeLogicSlice = (this.treeLogicSlice + 1) % slices;
+    const slice = this.treeLogicSlice;
+
+    // 快照：扩散可能 mount 新树改数组
+    const snapshot = this.trees.slice();
+    for (let i = 0; i < snapshot.length; i++) {
+      const tree = snapshot[i];
+      if (!tree || tree.destroyed || !tree.isAlive) continue;
+
+      const runLogic = i % slices === slice;
+      if (runLogic) {
+        this.refreshTreeClusterSpeedup(tree);
+      }
+
+      tree.update(deltaMS, {
+        view,
+        speedup: tree.clusterSpeedup,
+        runLogic,
+        logicScale: runLogic ? slices : 1,
+      });
+
+      if (tree.destroyed) continue;
+
+      // 每帧按可视 + 玩家 Y 分带（parent 不变时 addChild 极轻）
+      const inView = tree.visible && tree.inView(view);
+      this.placeTreeDisplay(tree, inView);
+    }
   }
 
   private naturalAnimalTimer = 20;
@@ -738,22 +865,23 @@ export class HarvestWorld {
         id,
       });
       this.mountTree(t);
-      this.hooks.afterWorldChange();
-      this.hooks.persistMapDraft();
+      this.hooks.afterWorldChange({ redrawLand: true });
+      this.markTreePersistDirty();
       return;
     }
   }
 
-  /** 树与树之间是否过近 */
+  /** 树与树之间是否过近（空间网格） */
   private isTreeTooClose(x: number, y: number, minDist: number): boolean {
-    const min2 = minDist * minDist;
-    for (const t of this.trees) {
-      if (!t.isAlive) continue;
-      const dx = t.worldX - x;
-      const dy = t.worldY - y;
-      if (dx * dx + dy * dy < min2) return true;
-    }
-    return false;
+    let tooClose = false;
+    this.treeIndex.forEachWithin(x, y, minDist, (t, dist2) => {
+      if (!t.isAlive) return;
+      if (dist2 < minDist * minDist) {
+        tooClose = true;
+        return true;
+      }
+    });
+    return tooClose;
   }
 
   /**
@@ -893,8 +1021,8 @@ export class HarvestWorld {
         id,
       });
       this.mountTree(t);
-      this.hooks.persistMapDraft();
-      this.hooks.afterWorldChange();
+      this.markTreePersistDirty();
+      this.hooks.afterWorldChange({ redrawLand: true });
       break;
     }
   }
