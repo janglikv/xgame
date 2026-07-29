@@ -470,12 +470,15 @@ export class Wolf extends WorldCreature {
       return { moved: false, attackHit: null };
     }
 
-    this.aiState = 'chase';
+    // 扑咬冷却中或踱步潜行：狼保持低速踱步观察(70px/s)，绝不全程疯狂加速“死追”！
+    const currentSpeed = this.attackCd > 0 ? 70 : WOLF_ECO.huntSpeed;
+
+    this.aiState = this.attackCd > 0 ? 'patrol' : 'chase';
     this.patrolPause = 0;
     const moved = this.moveTowardAvoidingTrees(
       prey.worldX,
       prey.worldY,
-      WOLF_ECO.huntSpeed,
+      currentSpeed,
       dt,
       WOLF_ECO.eatRange * 0.4,
       22,
