@@ -125,6 +125,15 @@ export const BODY_PROFILES: Record<BodyProfileId, BodyProfile> = {
       { type: 'circle', ox: 26.41, oy: -88.89, r: 25.39 },
     ],
   },
+  horse_king: {
+    id: 'horse_king',
+    label: '马王 Boss',
+    solid: [{ type: 'circle', ox: -12, oy: -40, r: 48 }],
+    hurt: [
+      { type: 'circle', ox: -12, oy: -76, r: 68 },
+      { type: 'circle', ox: 50, oy: -176, r: 50 },
+    ],
+  },
   wolf: {
     id: 'wolf',
     label: '狼',

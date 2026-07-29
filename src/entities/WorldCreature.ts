@@ -227,7 +227,7 @@ export type SpiderUpdateResult = {
  * 生态上下文类型见 CreatureEcology.ts。
  */
 export class WorldCreature extends Container implements WorldActor {
-  private sprite: Sprite | null = null;
+  protected sprite: Sprite | null = null;
   private readonly baseScale: number;
   private readonly healthBar: HealthBar;
   private readonly maxHp: number;

@@ -1,6 +1,6 @@
 import { isEnemyKindEnabled } from '../data/contentDisable';
 import type { EnemyKind } from '../data/maps';
-import { Bear, Chicken, Cow, Horse, Pig, Wolf } from '../entities/FarmAnimals';
+import { Bear, Chicken, Cow, Horse, HorseKing, Pig, Wolf } from '../entities/FarmAnimals';
 import { FlameFlower } from '../entities/FlameFlower';
 import { Spider } from '../entities/Spider';
 import type { WorldCreature } from '../entities/WorldCreature';
@@ -40,6 +40,9 @@ export function createEnemyAt(
   }
   if (kind === 'horse') {
     return new Horse(solid.x, solid.y);
+  }
+  if (kind === 'horse_king') {
+    return new HorseKing(solid.x, solid.y);
   }
   if (kind === 'wolf') {
     return new Wolf(solid.x, solid.y);

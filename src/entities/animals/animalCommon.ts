@@ -13,6 +13,7 @@ export const ANIMAL_SCALE = {
   pig: 0.115,
   cow: 0.125,
   horse: 0.155,
+  horse_king: 0.32,
   wolf: 0.06,
   bear: 0.175,
 } as const;

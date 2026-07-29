@@ -135,13 +135,22 @@ export class EcologySpawnerSystem {
       const cowCount = creatures
         ? countAliveWithKind(creatures, 'cow')
         : 0;
+      const horseKingCount = creatures
+        ? countAliveWithKind(creatures, 'horse_king')
+        : 0;
 
-      const hasHorseFoundation =
-        this.totalHorsesSpawned >= 2 || horseCount >= 2;
-      const chosenKind: EnemyKind =
-        hasHorseFoundation && cowCount <= horseCount
-          ? 'cow'
-          : 'horse';
+      // 特殊触发：全岛累计马匹数 >= 99 且场上无活马王时，震撼降临马王 Boss！
+      let chosenKind: EnemyKind;
+      if (this.totalHorsesSpawned >= 99 && horseKingCount === 0) {
+        chosenKind = 'horse_king';
+      } else {
+        const hasHorseFoundation =
+          this.totalHorsesSpawned >= 2 || horseCount >= 2;
+        chosenKind =
+          hasHorseFoundation && cowCount <= horseCount
+            ? 'cow'
+            : 'horse';
+      }
 
       if (chosenKind === 'horse') {
         this.totalHorsesSpawned += 1;

@@ -124,6 +124,13 @@ const CREATURE_SUBJECTS = {
     scale: ANIMAL_SCALE.horse,
     footY: 0.92,
   },
+  horse_king: {
+    id: 'horse_king',
+    kind: 'sprite',
+    url: '/assets/horse/horse.png',
+    scale: ANIMAL_SCALE.horse_king,
+    footY: 0.92,
+  },
   wolf: {
     id: 'wolf',
     kind: 'sprite',

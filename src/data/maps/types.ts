@@ -10,6 +10,7 @@ export const ENEMY_KINDS = [
   'pig',
   'cow',
   'horse',
+  'horse_king',
   'wolf',
   'bear',
 ] as const;

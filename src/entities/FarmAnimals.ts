@@ -7,5 +7,6 @@ export { ANIMAL_SCALE } from './animals/animalCommon';
 export { Chicken } from './animals/Chicken';
 export { Pig } from './animals/Pig';
 export { Cow, Horse } from './animals/GrassEaters';
+export { HorseKing } from './animals/HorseKing';
 export { Wolf } from './animals/Wolf';
 export { Bear } from './animals/Bear';
