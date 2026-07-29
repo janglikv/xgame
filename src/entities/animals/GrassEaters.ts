@@ -206,6 +206,23 @@ export abstract class GrassEater extends WorldCreature {
     playerY: number,
     playerBodyProfileId: BodyProfileId | null = null,
   ): { moved: boolean; attackHit: SpiderAttackHit | null } {
+    const eco = this.ecology;
+
+    // 只要附近（300px 内）有狼，持续刷新受惊状态
+    if (eco) {
+      const WOLF_SENSE_RANGE = 300;
+      for (const c of eco.creatures) {
+        if (c.isAlive && !c.destroyed && c.kind === 'wolf') {
+          const dx = c.worldX - this.worldX;
+          const dy = c.worldY - this.worldY;
+          if (dx * dx + dy * dy <= WOLF_SENSE_RANGE * WOLF_SENSE_RANGE) {
+            this.panicCd = Math.max(this.panicCd, 1.5);
+            break;
+          }
+        }
+      }
+    }
+
     if (this.panicCd > 0) {
       this.panicCd = Math.max(0, this.panicCd - dt);
       this.clearEating();
@@ -231,7 +248,6 @@ export abstract class GrassEater extends WorldCreature {
 
     const cfg = this.ecoCfg;
     this.hunger = Math.min(1, this.hunger + cfg.hungerPerSec * dt);
-    const eco = this.ecology;
     const speed = this.moveSpeed();
 
     if (eco && this.hunger >= 1) {
