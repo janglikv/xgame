@@ -25,6 +25,7 @@ import { spawnEnemiesInto } from '../systems/EnemySpawner';
 import { createEnemyAt } from '../systems/enemyFactory';
 import { GodModeController } from '../systems/GodModeController';
 import { HarvestWorld } from '../systems/HarvestWorld';
+import { canSpawnNaturalAnimal } from '../systems/ecologySpawn';
 import { Inventory } from '../systems/Inventory';
 import {
   GRASS_FAR_LOD_ZOOM_MUL,
@@ -227,21 +228,7 @@ export class LevelScene extends Container implements GameScene {
         }
       },
       onSpawnNaturalAnimal: (kind, x, y) => {
-        if (kind === 'wolf') {
-          const wolfCount = this.spiders.filter(
-            (s) => s.isAlive && !s.destroyed && s.label === 'Wolf',
-          ).length;
-          if (wolfCount >= 3) return;
-        } else {
-          // 限制全场农场食草动物自然孕育上限为 20 只
-          const farmAnimals = this.spiders.filter(
-            (s) =>
-              s.isAlive &&
-              !s.destroyed &&
-              ['Chicken', 'Pig', 'Cow', 'Horse'].includes(s.label ?? ''),
-          );
-          if (farmAnimals.length >= 20) return;
-        }
+        if (!canSpawnNaturalAnimal(kind, this.spiders)) return;
 
         const creature = createEnemyAt(kind, x, y);
         this.sortLayer.addChild(creature);

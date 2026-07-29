@@ -21,11 +21,17 @@ src/
 ├── data/                   # 存档、关卡地图定义、草稿
 │   └── maps/               # LEVEL_1/2、walkMask、网格模板、编辑导出
 ├── entities/               # 角色 / 怪物 / 投射物 / 弹药（玩法实体）
-├── systems/                # 跨实体规则：战斗、碰撞、角色池、收割、上帝模式
+│   ├── animals/            # 农场与野生动物（鸡猪牛马狼熊，按物种拆分）
+│   └── CreatureEcology.ts  # 生态上下文类型（与 Spider 解耦）
+├── systems/                # 跨实体规则：战斗、碰撞、收割、泥地、自然刷怪
+│   ├── HarvestWorld.ts     # 草/树/掉落编排
+│   ├── MudSpotField.ts     # 泥斑几何与合并
+│   └── ecologySpawn.ts     # 自然孕育上限与标签
 ├── scenes/                 # 场景编排：主菜单、关卡、体型编辑、镜头
 ├── world/                  # 地图表现：草坪、松树 chunk、夜色
 ├── ui/                     # 屏幕 HUD（血条、弹药、暂停、切换、上帝面板）
 ├── input/                  # 键盘 + 边沿检测
+├── data/                   # 存档、关卡、grass/tree/mud 数值配置
 └── utils/                  # 数学、描边贴图、Debug 配置
 public/assets/              # 运行时静态资源（角色图、炸弹、蜘蛛等）
 ```

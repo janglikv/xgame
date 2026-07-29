@@ -55,8 +55,36 @@ import {
   type MapGrass,
   type MapTree,
 } from '../data/maps';
+import {
+  COLLAPSE_MUD_RADIUS,
+  ECO_R,
+  FOREST_CLUSTER_JOIN_R,
+  FOREST_EDGE_DIST_MAX,
+  FOREST_EDGE_DIST_MIN,
+  FOREST_MAIN_NEIGHBOR_R,
+  FOREST_TREE_COLLAPSE,
+  MEADOW_GRASS_FOR_TREE,
+  MUD_ATTRACT_R,
+  MUD_CLEAR_GRASS,
+  MUD_FERTILITY_BARE,
+  MUD_FERTILITY_WITH_GRASS,
+  MUD_GRASS_CAP,
+  MUD_GRASS_SPACING,
+  MUD_RADIUS_MAX,
+  MUD_TREE_DEATH_MULT,
+  MUD_TREE_GROW_MULT,
+} from '../data/mudProfiles';
 import type { Inventory } from './Inventory';
 import { GrassSpatialIndex } from './GrassSpatialIndex';
+import {
+  MudSpotField,
+  type MudSpot,
+} from './MudSpotField';
+import {
+  NATURAL_SPAWN,
+  countAliveFarmHerbivores,
+  isFarmHerbivoreLabel,
+} from './ecologySpawn';
 
 /** 世界变更标志：控制昂贵的陆地泥土重绘 */
 export type HarvestWorldChangeOpts = {
@@ -67,64 +95,13 @@ export type HarvestWorldChangeOpts = {
   redrawLand?: boolean;
 };
 
-export type MudSpot = {
-  x: number;
-  y: number;
-  radius: number;
-  /** 0→100：稀草改土进度，满则泥地→草地 */
-  fertility: number;
-};
+/** 泥斑类型 re-export，外部/草稿兼容 */
+export type { MudSpot } from './MudSpotField';
 
 /**
- * 极简生态轮动：
- *   泥地 → 稀草 → 草地 → 密树 → 泥地
- *
- * 设计原则：先让「大片」成型，再塌缩轮动。
- * 塌缩阈值要高、泥斑要小；单株枯萎不造泥。
+ * 极简生态轮动：泥地 → 稀草 → 草地 → 密树 → 泥地
+ * 数值见 data/mudProfiles；泥斑几何见 MudSpotField。
  */
-/** 局部统计半径（草密/树密判定） */
-const ECO_R = 160;
-/** 泥地上草数量上限（稀） */
-const MUD_GRASS_CAP = 6;
-/** 泥地草间距 */
-const MUD_GRASS_SPACING = 62;
-/** 泥地内稀草达到此数后快速改土 */
-const MUD_CLEAR_GRASS = 3;
-/** 泥地改土速度：有草 / 无草（点/秒，满 100） */
-const MUD_FERTILITY_WITH_GRASS = 10;
-const MUD_FERTILITY_BARE = 1.2;
-/** 局部草数 ≥ 此值才可发芽成树（需成片草地） */
-const MEADOW_GRASS_FOR_TREE = 10;
-/** 局部树数 ≥ 此值才塌泥（够「大片林」后再轮动） */
-const FOREST_TREE_COLLAPSE = 16;
-/** 单次塌缩基础泥斑半径 */
-const COLLAPSE_MUD_RADIUS = 110;
-/** 两泥斑中心距 ≤ r1+r2+此值 → 合并成一片 */
-const MUD_MERGE_GAP = 55;
-/** 单片泥地半径上限（再大就盖满岛） */
-const MUD_RADIUS_MAX = 260;
-/** 单片泥地半径下限 */
-const MUD_RADIUS_MIN = 90;
-/** 塌缩点距已有泥斑 ≤ 此值时，优先并入该泥斑而非另开新斑 */
-const MUD_ATTRACT_R = 220;
-/** 泥地内树死亡率倍率（地力废了，逼林缘外迁） */
-const MUD_TREE_DEATH_MULT = 4.5;
-/** 泥地内树生长/播种减速 */
-const MUD_TREE_GROW_MULT = 0.25;
-/**
- * 抱团成林（硬规则）：
- * - 全岛只要有 ≥1 棵活树，新苗只能落在「主林」林缘，禁止开阔地开新核
- * - 仅全岛 0 棵树时，才允许茂密草地冒 1 个种核
- * - 扩张锚点按邻居数加权，孤树几乎不会成为扩散中心
- */
-/** 林缘落点：贴锚点，连成团而不是跳点 */
-const FOREST_EDGE_DIST_MIN = 44;
-const FOREST_EDGE_DIST_MAX = 86;
-/** 落点必须落在某棵活树此半径内（同簇） */
-const FOREST_CLUSTER_JOIN_R = 100;
-/** 选主林时统计邻居的半径 */
-const FOREST_MAIN_NEIGHBOR_R = 140;
-
 export type HarvestWorldHooks = {
   sortLayer: Container;
   /**
@@ -164,7 +141,11 @@ export class HarvestWorld {
   readonly trees: HarvestableTree[] = [];
   readonly grasses: GrassEntity[] = [];
   readonly pickups: ItemPickup[] = [];
-  readonly mudSpots: MudSpot[] = [];
+  private readonly mudField = new MudSpotField();
+  /** 与 mudField.spots 同一引用，供场景重绘泥土 */
+  get mudSpots(): MudSpot[] {
+    return this.mudField.spots;
+  }
 
   private readonly grassIndex = new GrassSpatialIndex<GrassEntity>(GRASS_GRID_CELL);
   private readonly treeIndex = new GrassSpatialIndex<HarvestableTree>(TREE_GRID_CELL);
@@ -180,15 +161,7 @@ export class HarvestWorld {
 
   /** 判定坐标 (x, y) 是否位于泥地/休耕地范围内 */
   isInMudSpot(x: number, y: number): boolean {
-    for (let i = 0; i < this.mudSpots.length; i++) {
-      const m = this.mudSpots[i]!;
-      const dx = x - m.x;
-      const dy = y - m.y;
-      if (dx * dx + dy * dy <= m.radius * m.radius) {
-        return true;
-      }
-    }
-    return false;
+    return this.mudField.isInMudSpot(x, y);
   }
 
   /** 从地图刷可砍树与无碰撞草地 */
@@ -507,14 +480,9 @@ export class HarvestWorld {
 
   /** 坐标所在泥地；无则 null */
   findMudSpot(x: number, y: number): MudSpot | null {
-    for (let i = 0; i < this.mudSpots.length; i++) {
-      const m = this.mudSpots[i]!;
-      const dx = x - m.x;
-      const dy = y - m.y;
-      if (dx * dx + dy * dy <= m.radius * m.radius) return m;
-    }
-    return null;
+    return this.mudField.findMudSpot(x, y);
   }
+
 
   /**
    * 统计坐标 (x, y) 指定半径内的存活树木数量（空间网格）
@@ -729,94 +697,12 @@ export class HarvestWorld {
     this.markTreePersistDirty();
   }
 
-  /**
-   * 新增/扩张泥地：能并就并，优先并入附近最大泥斑，趋近「一大片」。
-   */
   private addMudSpot(x: number, y: number, radius: number): void {
-    const rNew = Math.max(MUD_RADIUS_MIN, Math.min(MUD_RADIUS_MAX, radius));
-
-    // 1) 吸引半径内已有泥斑 → 并入最大的那块（哪怕还没重叠）
-    let attractIdx = -1;
-    let attractScore = -1;
-    for (let i = 0; i < this.mudSpots.length; i++) {
-      const m = this.mudSpots[i]!;
-      const d = Math.hypot(m.x - x, m.y - y);
-      if (d > MUD_ATTRACT_R + m.radius * 0.35) continue;
-      // 越大、越近越优先
-      const score = m.radius * 2.2 - d * 0.35;
-      if (score > attractScore) {
-        attractScore = score;
-        attractIdx = i;
-      }
-    }
-
-    if (attractIdx >= 0) {
-      this.mergeMudInto(this.mudSpots[attractIdx]!, x, y, rNew);
-    } else {
-      this.mudSpots.push({ x, y, radius: rNew, fertility: 0 });
-    }
-
-    // 2) 全局合并：邻近泥斑合成一片，直到稳定
-    this.consolidateMudSpots();
+    this.mudField.addMudSpot(x, y, radius);
   }
 
-  /** 把 (x,y,r) 并入目标泥斑：质心加权 + 半径包住两圆 */
-  private mergeMudInto(
-    target: MudSpot,
-    x: number,
-    y: number,
-    radius: number,
-  ): void {
-    const w1 = target.radius * target.radius;
-    const w2 = radius * radius;
-    const w = w1 + w2;
-    const nx = (target.x * w1 + x * w2) / w;
-    const ny = (target.y * w1 + y * w2) / w;
-    // 包络两圆的近似外接半径
-    const d1 = Math.hypot(target.x - nx, target.y - ny);
-    const d2 = Math.hypot(x - nx, y - ny);
-    const cover = Math.max(d1 + target.radius, d2 + radius);
-    // 略膨胀一点，让合并后更连成「一大片」
-    const grown = cover * 1.06 + MUD_MERGE_GAP * 0.15;
-    target.x = nx;
-    target.y = ny;
-    target.radius = Math.min(
-      MUD_RADIUS_MAX,
-      Math.max(target.radius, radius, grown),
-    );
-    // 合并后地力取更「废」的一侧，避免大斑被快速改土消掉
-    target.fertility = Math.min(target.fertility, 12);
-  }
-
-  /**
-   * 邻近泥斑反复合并，直到只剩互不挨着的几大片（通常 1～2 片）。
-   */
   private consolidateMudSpots(): void {
-    let guard = 0;
-    while (guard++ < 32) {
-      let merged = false;
-      outer: for (let i = 0; i < this.mudSpots.length; i++) {
-        const a = this.mudSpots[i]!;
-        for (let j = i + 1; j < this.mudSpots.length; j++) {
-          const b = this.mudSpots[j]!;
-          const d = Math.hypot(a.x - b.x, a.y - b.y);
-          // 重叠、相切、或仅隔一条缝 → 合成
-          if (d <= a.radius + b.radius + MUD_MERGE_GAP) {
-            // 总是并入更大的，保持主斑稳定
-            if (a.radius >= b.radius) {
-              this.mergeMudInto(a, b.x, b.y, b.radius);
-              this.mudSpots.splice(j, 1);
-            } else {
-              this.mergeMudInto(b, a.x, a.y, a.radius);
-              this.mudSpots.splice(i, 1);
-            }
-            merged = true;
-            break outer;
-          }
-        }
-      }
-      if (!merged) break;
-    }
+    this.mudField.consolidate();
   }
 
   /**
@@ -827,7 +713,7 @@ export class HarvestWorld {
     let mudCx = cx;
     let mudCy = cy;
     let r = COLLAPSE_MUD_RADIUS;
-    const nearMud = this.findNearestMud(cx, cy, MUD_ATTRACT_R);
+    const nearMud = this.mudField.findNearestMud(cx, cy, MUD_ATTRACT_R);
     if (nearMud) {
       const d = Math.hypot(nearMud.x - cx, nearMud.y - cy);
       // 向大泥靠 35%～55%，半径略加大以便搭上
@@ -875,7 +761,7 @@ export class HarvestWorld {
     this.addMudSpot(mudCx, mudCy, r);
 
     // 火种落在合并后的主泥斑上
-    const host = this.findNearestMud(mudCx, mudCy, MUD_RADIUS_MAX) ?? {
+    const host = this.mudField.findNearestMud(mudCx, mudCy, MUD_RADIUS_MAX) ?? {
       x: mudCx,
       y: mudCy,
       radius: r,
@@ -889,20 +775,6 @@ export class HarvestWorld {
     this.hooks.afterWorldChange({ redrawLand: true });
     this.markTreePersistDirty();
     this.markGrassPersistDirty();
-  }
-
-  /** 最近泥斑（中心距 ≤ maxDist） */
-  private findNearestMud(x: number, y: number, maxDist: number): MudSpot | null {
-    let best: MudSpot | null = null;
-    let bestD = maxDist;
-    for (const m of this.mudSpots) {
-      const d = Math.hypot(m.x - x, m.y - y);
-      if (d < bestD) {
-        bestD = d;
-        best = m;
-      }
-    }
-    return best;
   }
 
   private forceRemoveGrass(grass: GrassEntity): void {
@@ -1072,7 +944,7 @@ export class HarvestWorld {
       }
     }
     this.pickups.length = 0;
-    this.mudSpots.length = 0;
+    this.mudField.clear();
 
     const mapDef = this.hooks.getMapDef();
     mapDef.trees = [];
@@ -1294,7 +1166,11 @@ export class HarvestWorld {
       if (n < FOREST_TREE_COLLAPSE) continue;
       // 密度分 + 靠近已有泥地加分（趋近并片）
       let score = n * 3;
-      const mud = this.findNearestMud(t.worldX, t.worldY, MUD_ATTRACT_R);
+      const mud = this.mudField.findNearestMud(
+        t.worldX,
+        t.worldY,
+        MUD_ATTRACT_R,
+      );
       if (mud) {
         const d = Math.hypot(mud.x - t.worldX, mud.y - t.worldY);
         score += 12 + mud.radius * 0.08 - d * 0.04;
@@ -1472,24 +1348,21 @@ export class HarvestWorld {
   }
 
   /**
-   * 当全岛草繁水茂（草数量 >= 60 株）时，生态系统会自然孕育诞生牛、马、鸡、猪
+   * 草繁时自然孕育牛/马（阈值与上限见 ecologySpawn.NATURAL_SPAWN）。
    */
   private tickNaturalAnimalSpawning(dt: number): void {
     if (!this.hooks.onSpawnNaturalAnimal) return;
 
     const grassCount = this.grasses.length;
-    // 只有全岛草地足够茂盛（>= 60 株）时具备自然孕育条件
-    if (grassCount < 60) {
+    if (grassCount < NATURAL_SPAWN.grassForHerbivores) {
       this.naturalAnimalTimer = 20;
       return;
     }
 
     this.naturalAnimalTimer -= dt;
     if (this.naturalAnimalTimer <= 0) {
-      // 孕育倒计时重置为 20s ~ 30s
       this.naturalAnimalTimer = 20 + Math.random() * 10;
 
-      // 从中草/大草密集区挑选孕育落点
       const candidates = this.grasses.filter((g) => g.size !== 'small');
       const seedGrass =
         candidates.length > 0
@@ -1507,7 +1380,7 @@ export class HarvestWorld {
       if (!isOnGreenLand(spawnX, spawnY, mapDef, 255)) return;
       if (this.isGrassTooCloseToTrees(spawnX, spawnY)) return;
 
-      // 诞生动物类型限定：仅随机诞生牛 (cow) 和马 (horse)，不诞生猪和鸡
+      // 仅牛/马；猪鸡不自然刷
       const kinds: EnemyKind[] = ['cow', 'horse'];
       const chosenKind = kinds[Math.floor(Math.random() * kinds.length)]!;
 
@@ -1518,7 +1391,7 @@ export class HarvestWorld {
   private naturalWolfTimer = 35;
 
   /**
-   * 当全岛食草动物积累较多（食草动物 >= 8 只）时，自然吸引/生成天敌狼 (Wolf)
+   * 食草动物积累后自然引狼（阈值与上限见 ecologySpawn.NATURAL_SPAWN）。
    */
   private tickNaturalWolfSpawning(
     dt: number,
@@ -1526,16 +1399,7 @@ export class HarvestWorld {
   ): void {
     if (!this.hooks.onSpawnNaturalAnimal || !creatures) return;
 
-    // 统计场上存活的农场食草动物
-    const farmAnimals = creatures.filter(
-      (s) =>
-        s.isAlive &&
-        !s.destroyed &&
-        ['Chicken', 'Pig', 'Cow', 'Horse'].includes(s.label ?? ''),
-    );
-
-    // 食草动物不足 8 只时，不具备自然生成天敌狼的条件
-    if (farmAnimals.length < 8) {
+    if (countAliveFarmHerbivores(creatures) < NATURAL_SPAWN.herbivoresForWolf) {
       this.naturalWolfTimer = 30;
       return;
     }
@@ -1544,8 +1408,13 @@ export class HarvestWorld {
     if (this.naturalWolfTimer <= 0) {
       this.naturalWolfTimer = 35 + Math.random() * 15;
 
-      // 从食草动物周边随机挑选生成锚点
-      const target = farmAnimals[Math.floor(Math.random() * farmAnimals.length)]!;
+      const herbivores = creatures.filter(
+        (s) => s.isAlive && !s.destroyed && isFarmHerbivoreLabel(s.label),
+      );
+      if (herbivores.length === 0) return;
+
+      const target =
+        herbivores[Math.floor(Math.random() * herbivores.length)]!;
       const angle = Math.random() * Math.PI * 2;
       const dist = 110 + Math.random() * 60;
       const spawnX = target.worldX + Math.cos(angle) * dist;
