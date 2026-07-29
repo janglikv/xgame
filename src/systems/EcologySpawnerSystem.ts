@@ -35,13 +35,46 @@ export type EcologySpawnerHooks = {
 };
 
 /**
+ * 确定性伪随机数生成器 (Mulberry32 PRNG)
+ * 代码内严格禁止使用 non-deterministic 的 Math.random()。
+ */
+class SeededRandom {
+  private seed: number;
+
+  constructor(initialSeed = 0x61c88647) {
+    this.seed = initialSeed >>> 0;
+  }
+
+  /** 返回 [0, 1) 的确定性伪随机数 */
+  next01(): number {
+    this.seed = (this.seed + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(this.seed ^ (this.seed >>> 15), 1 | this.seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) >>> 0;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  }
+
+  /** 返回 [min, max) 之间的确定性伪随机数 */
+  range(min: number, max: number): number {
+    return min + this.next01() * (max - min);
+  }
+
+  /** 从只读数组中确定性挑选一个元素 */
+  pick<T>(arr: ReadonlyArray<T>): T | undefined {
+    if (arr.length === 0) return undefined;
+    const idx = Math.floor(this.next01() * arr.length);
+    return arr[idx];
+  }
+}
+
+/**
  * 生态自然孵化：草丰孕育牛/马、食草引狼、有狼后自然长松。
- * 定时与种群阈值在此；实际种树/刷怪经 hooks 回到世界。
+ * 全程使用伪随机 PRNG，禁止 Math.random()。
  */
 export class EcologySpawnerSystem {
   private naturalAnimalTimer = 20;
   private naturalWolfTimer = 35;
   private naturalPineTimer = 18;
+  private readonly rng = new SeededRandom(0x9e3779b9);
 
   constructor(private readonly hooks: EcologySpawnerHooks) {}
 
@@ -51,15 +84,19 @@ export class EcologySpawnerSystem {
     creatures?: ReadonlyArray<WorldCreature>,
     trees?: ReadonlyArray<EcologyTreeRef>,
   ): void {
-    this.tickNaturalAnimalSpawning(dt, grasses);
+    this.tickNaturalAnimalSpawning(dt, grasses, creatures);
     this.tickNaturalWolfSpawning(dt, creatures);
     this.tickNaturalPineSpawning(dt, creatures, trees, grasses);
   }
 
-  /** 草繁时自然孕育牛/马 */
+  /**
+   * 草繁时自然孕育牛/马（伪随机，马多了才生成牛）：
+   * 当存活的马数量 < 3 匹时只生成马；只有当马数量 >= 3 且马的数量多于牛时，才生成牛。
+   */
   private tickNaturalAnimalSpawning(
     dt: number,
     grasses: ReadonlyArray<GrassEntity>,
+    creatures?: ReadonlyArray<WorldCreature>,
   ): void {
     if (!this.hooks.onSpawnNaturalAnimal) return;
 
@@ -71,18 +108,18 @@ export class EcologySpawnerSystem {
 
     this.naturalAnimalTimer -= dt;
     if (this.naturalAnimalTimer <= 0) {
-      this.naturalAnimalTimer = 20 + Math.random() * 10;
+      this.naturalAnimalTimer = this.rng.range(20, 30);
 
       const candidates = grasses.filter((g) => g.size !== 'small');
       const seedGrass =
         candidates.length > 0
-          ? candidates[Math.floor(Math.random() * candidates.length)]!
-          : grasses[Math.floor(Math.random() * grasses.length)]!;
+          ? this.rng.pick(candidates)!
+          : this.rng.pick(grasses)!;
 
       if (!seedGrass) return;
 
-      const angle = Math.random() * Math.PI * 2;
-      const dist = 35 + Math.random() * 50;
+      const angle = this.rng.range(0, Math.PI * 2);
+      const dist = this.rng.range(35, 85);
       const spawnX = seedGrass.worldX + Math.cos(angle) * dist;
       const spawnY = seedGrass.worldY + Math.sin(angle) * dist;
 
@@ -90,8 +127,19 @@ export class EcologySpawnerSystem {
       if (!isOnGreenLand(spawnX, spawnY, mapDef, 255)) return;
       if (this.hooks.isGrassTooCloseToTrees(spawnX, spawnY)) return;
 
-      const kinds: EnemyKind[] = ['cow', 'horse'];
-      const chosenKind = kinds[Math.floor(Math.random() * kinds.length)]!;
+      // 马多了才生成牛
+      const horseCount = creatures
+        ? countAliveWithKind(creatures, 'horse')
+        : 0;
+      const cowCount = creatures
+        ? countAliveWithKind(creatures, 'cow')
+        : 0;
+
+      const HORSES_THRESHOLD_FOR_COW = 3;
+      const chosenKind: EnemyKind =
+        horseCount >= HORSES_THRESHOLD_FOR_COW && horseCount > cowCount
+          ? 'cow'
+          : 'horse';
 
       this.hooks.onSpawnNaturalAnimal(chosenKind, spawnX, spawnY);
     }
@@ -111,17 +159,16 @@ export class EcologySpawnerSystem {
 
     this.naturalWolfTimer -= dt;
     if (this.naturalWolfTimer <= 0) {
-      this.naturalWolfTimer = 35 + Math.random() * 15;
+      this.naturalWolfTimer = this.rng.range(35, 50);
 
       const herbivores = creatures.filter(
         (s) => s.isAlive && !s.destroyed && isFarmHerbivoreKind(s.kind),
       );
       if (herbivores.length === 0) return;
 
-      const target =
-        herbivores[Math.floor(Math.random() * herbivores.length)]!;
-      const angle = Math.random() * Math.PI * 2;
-      const dist = 110 + Math.random() * 60;
+      const target = this.rng.pick(herbivores)!;
+      const angle = this.rng.range(0, Math.PI * 2);
+      const dist = this.rng.range(110, 170);
       const spawnX = target.worldX + Math.cos(angle) * dist;
       const spawnY = target.worldY + Math.sin(angle) * dist;
 
@@ -166,7 +213,7 @@ export class EcologySpawnerSystem {
 
     // 狼多时稍快长树
     this.naturalPineTimer =
-      Math.max(12, 28 - wolfCount * 3) + Math.random() * 10;
+      Math.max(12, 28 - wolfCount * 3) + this.rng.range(0, 10);
 
     const mapDef = this.hooks.getMapDef();
     const land = landRectOf(mapDef);
@@ -183,15 +230,14 @@ export class EcologySpawnerSystem {
       let x: number;
       let y: number;
       if (grassList.length > 0) {
-        const g =
-          grassList[Math.floor(Math.random() * grassList.length)]!;
-        const ang = Math.random() * Math.PI * 2;
-        const dist = 16 + Math.random() * 32;
+        const g = this.rng.pick(grassList)!;
+        const ang = this.rng.range(0, Math.PI * 2);
+        const dist = this.rng.range(16, 48);
         x = g.worldX + Math.cos(ang) * dist;
         y = g.worldY + Math.sin(ang) * dist;
       } else {
-        x = land.x + 40 + Math.random() * Math.max(1, land.w - 80);
-        y = land.y + 40 + Math.random() * Math.max(1, land.h - 80);
+        x = land.x + 40 + this.rng.range(0, Math.max(1, land.w - 80));
+        y = land.y + 40 + this.rng.range(0, Math.max(1, land.h - 80));
       }
       if (!this.hooks.canPlantTreeAt(x, y)) continue;
       if (this.hooks.tryPlantPineAt(x, y)) return;
