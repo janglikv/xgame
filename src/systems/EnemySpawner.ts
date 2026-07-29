@@ -14,6 +14,7 @@ export function spawnEnemiesInto(
   const scale = options?.spiderScale ?? DEFAULT_SPIDER_SCALE;
   for (const e of mapDef.enemies) {
     const entity = createEnemyAt(e.kind, e.x, e.y, { spiderScale: scale });
+    if (!entity) continue;
     entity.faceToward(spawn.x, spawn.y);
     sortLayer.addChild(entity);
     out.push(entity);

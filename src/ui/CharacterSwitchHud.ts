@@ -1,5 +1,9 @@
 import { Assets, Container, Graphics, Rectangle, Sprite, Texture } from 'pixi.js';
-import type { CharacterId } from '../entities/types';
+import {
+  DEFAULT_PLAYABLE_CHARACTER,
+  isCharacterEnabled,
+} from '../data/contentDisable';
+import { CHARACTER_IDS, type CharacterId } from '../entities/types';
 
 export type CharacterSwitchHudOptions = {
   onSelect: (id: CharacterId) => void;
@@ -26,10 +30,15 @@ type Slot = {
   previewUrl: string;
 };
 
-const ROSTER: Array<{ id: CharacterId; previewUrl: string }> = [
-  { id: 'bomb-girl', previewUrl: '/assets/bomb-girl/preview.png' },
-  { id: 'ice-ranger', previewUrl: '/assets/ice-ranger/preview.png' },
-];
+const PREVIEW_URL: Record<CharacterId, string> = {
+  'bomb-girl': '/assets/bomb-girl/preview.png',
+  'ice-ranger': '/assets/ice-ranger/preview.png',
+};
+
+/** 仅启用角色；下线角色不出现在切换栏 */
+const ROSTER: Array<{ id: CharacterId; previewUrl: string }> = CHARACTER_IDS
+  .filter(isCharacterEnabled)
+  .map((id) => ({ id, previewUrl: PREVIEW_URL[id] }));
 
 /**
  * 右下角角色切换 HUD：横排长方形头像卡，点击切换当前操控角色。
@@ -43,7 +52,7 @@ export class CharacterSwitchHud extends Container {
   private readonly marginRight: number;
   private readonly marginBottom: number;
   private readonly slots: Slot[] = [];
-  private activeId: CharacterId = 'bomb-girl';
+  private activeId: CharacterId = DEFAULT_PLAYABLE_CHARACTER;
   private viewWidth = 0;
   private viewHeight = 0;
   /** 切换冷却剩余秒数；0 表示可切换 */

@@ -3,10 +3,12 @@ import type { PlayerCharacterBase } from '../entities/PlayerCharacterBase';
 import type { HarvestableTree } from '../entities/HarvestableTree';
 import type { GrassEntity } from '../entities/GrassEntity';
 import type { WorldCreature } from '../entities/WorldCreature';
+import { isEnemyKindEnabled } from '../data/contentDisable';
 import {
   addRuntimeTreeObstacle,
   allocGrassId,
   allocTreeId,
+  ENEMY_KINDS,
   grassIdOf,
   isOnLand,
   isOnGreenLand,
@@ -26,17 +28,10 @@ import type { LevelCamera } from '../scenes/LevelCamera';
 import { createEnemyAt, DEFAULT_SPIDER_SCALE } from './enemyFactory';
 import type { HarvestWorld } from './HarvestWorld';
 
-const ENEMY_BRUSHES = new Set<GodBrush>([
-  'spider',
-  'flame-flower',
-  'wooden-dummy',
-  'chicken',
-  'pig',
-  'cow',
-  'horse',
-  'wolf',
-  'bear',
-]);
+/** 与 ENEMY_KINDS 同步；下线 kind 不进刷子 */
+const ENEMY_BRUSHES = new Set<GodBrush>(
+  ENEMY_KINDS.filter((k) => isEnemyKindEnabled(k)),
+);
 
 export type GodModeDeps = {
   getMapDef: () => LevelMapDef;
@@ -196,14 +191,18 @@ export class GodModeController {
   }
 
   placeEnemy(x: number, y: number, kind: EnemyKind): void {
+    if (!isEnemyKindEnabled(kind)) return;
+
     const mapDef = this.deps.getMapDef();
     if (!mapDef.enemies) mapDef.enemies = [];
-    mapDef.enemies.push({ kind, x, y });
 
     const spawn = this.deps.getSpawn();
     const entity = createEnemyAt(kind, x, y, {
       spiderScale: this.deps.spiderScale ?? DEFAULT_SPIDER_SCALE,
     });
+    if (!entity) return;
+
+    mapDef.enemies.push({ kind, x, y });
     entity.faceToward(spawn.x, spawn.y);
     this.deps.sortLayer.addChild(entity);
     this.deps.creatures.push(entity);

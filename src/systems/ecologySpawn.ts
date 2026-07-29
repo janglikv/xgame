@@ -1,5 +1,6 @@
-import type { EnemyKind } from '../data/maps';
+import { isEnemyKindEnabled } from '../data/contentDisable';
 import { NATURAL_SPAWN } from '../data/ecologyLabels';
+import type { EnemyKind } from '../data/maps';
 import {
   isFarmHerbivoreKind,
   type CreatureKind,
@@ -48,6 +49,7 @@ export function canSpawnNaturalAnimal(
   kind: EnemyKind,
   creatures: ReadonlyArray<CreatureKindRef>,
 ): boolean {
+  if (!isEnemyKindEnabled(kind)) return false;
   if (kind === 'wolf') {
     return countAliveWithKind(creatures, 'wolf') < NATURAL_SPAWN.maxWolves;
   }

@@ -1,11 +1,18 @@
-import type { CharacterId } from '../entities/types';
+import { CHARACTER_IDS, type CharacterId } from '../entities/types';
+import {
+  DEFAULT_PLAYABLE_CHARACTER,
+  isCharacterEnabled,
+} from './contentDisable';
 import { createDefaultSave } from './defaults';
 import type { SaveData, SavedScene } from './types';
 
 const STORAGE_KEY = 'lu-o-lu:save:v1';
 
 function isCharacterId(value: unknown): value is CharacterId {
-  return value === 'bomb-girl' || value === 'ice-ranger';
+  return (
+    typeof value === 'string' &&
+    (CHARACTER_IDS as readonly string[]).includes(value)
+  );
 }
 
 function parseSavedScene(raw: unknown): SavedScene | null {
@@ -23,7 +30,8 @@ function parseSavedScene(raw: unknown): SavedScene | null {
 }
 
 function parseLastCharacter(raw: unknown): CharacterId {
-  return isCharacterId(raw) ? raw : 'bomb-girl';
+  if (isCharacterId(raw) && isCharacterEnabled(raw)) return raw;
+  return DEFAULT_PLAYABLE_CHARACTER;
 }
 
 /** 校验并归一化原始 JSON；无法识别则返回 null */

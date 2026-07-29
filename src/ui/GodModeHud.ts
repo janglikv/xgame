@@ -1,7 +1,22 @@
 import { Assets, Container, Graphics, Sprite, Text, Texture } from 'pixi.js';
+import { getBodyEditSubjects } from '../data/bodyEditCatalog';
+import { getBodyProfile } from '../data/bodyProfiles';
+import { isEnemyKindEnabled } from '../data/contentDisable';
+import { ENEMY_KINDS, type EnemyKind } from '../data/maps';
 import { drawPineLocal } from '../world/PineTree';
 import { drawGrassLocal } from '../world/GrassPatch';
 import { drawAppleTreeLocal } from '../world/AppleTree';
+
+/** 敌人刷子图标 URL（来自碰撞编辑目录，自动随 ENEMY_KINDS 扩展） */
+const ENEMY_ICON_URL: Partial<Record<EnemyKind, string>> = (() => {
+  const map: Partial<Record<EnemyKind, string>> = {};
+  for (const s of getBodyEditSubjects()) {
+    if (s.kind === 'sprite' && (ENEMY_KINDS as readonly string[]).includes(s.id)) {
+      map[s.id as EnemyKind] = s.url;
+    }
+  }
+  return map;
+})();
 
 export type GodBrush =
   | 'tree-sapling'
@@ -13,15 +28,7 @@ export type GodBrush =
   | 'grass-small'
   | 'grass-medium'
   | 'grass-large'
-  | 'spider'
-  | 'flame-flower'
-  | 'wooden-dummy'
-  | 'chicken'
-  | 'pig'
-  | 'cow'
-  | 'horse'
-  | 'wolf'
-  | 'bear'
+  | EnemyKind
   | 'spawn'
   | 'erase'
   | 'clear-scene';
@@ -115,17 +122,11 @@ export class GodModeHud extends Container {
       version: 'v1.1',
       name: '生物与实体',
       collapsed: false,
-      items: [
-        { brush: 'spider', label: '蜘蛛' },
-        { brush: 'flame-flower', label: '火焰花' },
-        { brush: 'wooden-dummy', label: '木桩' },
-        { brush: 'chicken', label: '鸡' },
-        { brush: 'pig', label: '猪' },
-        { brush: 'cow', label: '牛' },
-        { brush: 'horse', label: '马' },
-        { brush: 'wolf', label: '狼' },
-        { brush: 'bear', label: '熊' },
-      ],
+      /** 与 ENEMY_KINDS 同步（跳过 contentDisable 下线）；标签取自 BODY_PROFILES */
+      items: ENEMY_KINDS.filter(isEnemyKindEnabled).map((kind) => ({
+        brush: kind,
+        label: getBodyProfile(kind).label,
+      })),
     },
     {
       id: 'v1.2',
@@ -542,29 +543,8 @@ export class GodModeHud extends Container {
         .fill({ color: badgeColor })
         .stroke({ width: 1, color: 0xffffff });
       iconContainer.addChild(badge);
-    } else if (
-      brush === 'spider' ||
-      brush === 'flame-flower' ||
-      brush === 'wooden-dummy' ||
-      brush === 'chicken' ||
-      brush === 'pig' ||
-      brush === 'cow' ||
-      brush === 'horse' ||
-      brush === 'wolf' ||
-      brush === 'bear'
-    ) {
-      const urlMap: Record<string, string> = {
-        spider: '/assets/spider/spider.png',
-        'flame-flower': '/assets/flame-flower/flame-flower.png',
-        'wooden-dummy': '/assets/wooden-dummy/wooden-dummy.png',
-        chicken: '/assets/chicken/chicken.png',
-        pig: '/assets/pig/pig.png',
-        cow: '/assets/cow/cow.png',
-        horse: '/assets/horse/horse.png',
-        wolf: '/assets/wolf/wolf.png',
-        bear: '/assets/bear/bear.png',
-      };
-      const url = urlMap[brush];
+    } else if ((ENEMY_KINDS as readonly string[]).includes(brush)) {
+      const url = ENEMY_ICON_URL[brush as EnemyKind];
       if (url) {
         const sprite = new Sprite();
         sprite.anchor.set(0.5);

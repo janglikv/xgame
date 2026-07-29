@@ -7,12 +7,14 @@ import {
   Texture,
 } from 'pixi.js';
 import {
+  getBodyEditSubjects,
+  type BodyEditSubjectDef,
+} from '../data/bodyEditCatalog';
+import {
   getBodyProfile,
   type BodyProfileId,
   type BodyShape,
 } from '../data/bodyProfiles';
-import { TREE_SIZE_PROFILE } from '../data/treeProfiles';
-import { GRASS_SIZE_PROFILE } from '../data/grassProfiles';
 import { copyBodyProfilesTs } from '../data/exportBodyProfiles';
 import {
   ColliderEditController,
@@ -36,106 +38,15 @@ const PICKER_W = 168;
 const DEFAULT_ZOOM = 1.55;
 const STAGE_FEET_Y = 40;
 
-type SubjectDef =
-  | {
-      id: BodyProfileId;
-      kind: 'sprite';
-      url: string;
-      scale: number;
-      footY: number;
-    }
-  | {
-      id: BodyProfileId;
-      kind: 'pine';
-      pineScale: number;
-      tint: number;
-    }
-  | {
-      id: BodyProfileId;
-      kind: 'apple';
-      pineScale: number;
-      tint: number;
-    }
-  | {
-      id: BodyProfileId;
-      kind: 'grass';
-      grassScale: number;
-      tint: number;
-    };
-
-/** 可编辑主体目录（只加这里即可扩展） */
-const SUBJECTS: ReadonlyArray<SubjectDef> = [
-  {
-    id: 'bomb-girl',
-    kind: 'sprite',
-    url: '/assets/bomb-girl/preview.png',
-    scale: 0.07,
-    footY: 0.92,
-  },
-  {
-    id: 'ice-ranger',
-    kind: 'sprite',
-    url: '/assets/ice-ranger/preview.png',
-    scale: 0.066,
-    footY: 0.92,
-  },
-  {
-    id: 'spider',
-    kind: 'sprite',
-    url: '/assets/spider/spider.png',
-    scale: 0.1,
-    footY: 0.88,
-  },
-  {
-    id: 'flame-flower',
-    kind: 'sprite',
-    url: '/assets/flame-flower/flame-flower.png',
-    scale: 0.09,
-    footY: 0.94,
-  },
-  {
-    id: 'wooden-dummy',
-    kind: 'sprite',
-    url: '/assets/wooden-dummy/wooden-dummy.png',
-    scale: 0.09,
-    footY: 0.96,
-  },
-  {
-    id: 'tree',
-    kind: 'pine',
-    pineScale: TREE_SIZE_PROFILE.medium.scale,
-    tint: TREE_SIZE_PROFILE.medium.tint,
-  },
-  {
-    id: 'apple-tree',
-    kind: 'apple',
-    pineScale: TREE_SIZE_PROFILE.medium.scale,
-    tint: TREE_SIZE_PROFILE.medium.tint,
-  },
-  {
-    id: 'grass',
-    kind: 'grass',
-    grassScale: GRASS_SIZE_PROFILE.medium.scale,
-    tint: GRASS_SIZE_PROFILE.medium.tint,
-  },
-];
-
 /**
- * 编译时检查：SUBJECTS 必须覆盖所有 BodyProfileId，缺一报错。
- * 若新增了 BodyProfileId 但忘记在此加 SubjectDef，tsc 会提示
- * "Type 'false' is not assignable to type 'true'" 并指出缺失的 ID。
+ * 主体目录来自 bodyEditCatalog（角色 + ENEMY_KINDS + 环境）。
+ * 新增动物只需 ENEMY_KINDS + BODY_PROFILES + catalog 条目，列表自动出现。
  */
-type _SubjectIds = (typeof SUBJECTS)[number]['id'];
-/**
- * 编译时检查：SUBJECTS 必须覆盖所有 BodyProfileId，否则此行报错。
- * 若新增了 BodyProfileId 但忘记在 SUBJECTS 加条目，tsc 会在此行提示缺少哪个 key。
- * 运行时此表达式等价于 `({});`，无任何副作用。
- */
-({}) as Record<_SubjectIds, unknown> satisfies Record<BodyProfileId, unknown>;
+const SUBJECTS: ReadonlyArray<BodyEditSubjectDef> = getBodyEditSubjects();
 
 type Subject = {
   id: BodyProfileId;
-  def: SubjectDef;
+  def: BodyEditSubjectDef;
   root: Container;
   sprite: Sprite | null;
   worldX: number;
@@ -157,7 +68,7 @@ export type BodyEditSceneOptions = {
 
 /**
  * 碰撞 / 受击体编辑：左侧选主体 → 中间单独调整。
- * 扩展时只往 SUBJECTS 追加项，无需排一排。
+ * 主体列表由 getBodyEditSubjects() 自动生成。
  */
 export class BodyEditScene extends Container implements GameScene {
   private readonly bg: Graphics;

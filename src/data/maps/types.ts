@@ -1,14 +1,20 @@
-/** 当前支持的敌人种类（上帝模式放置 / 关卡刷怪） */
-export type EnemyKind =
-  | 'spider'
-  | 'flame-flower'
-  | 'wooden-dummy'
-  | 'chicken'
-  | 'pig'
-  | 'cow'
-  | 'horse'
-  | 'wolf'
-  | 'bear';
+/**
+ * 当前支持的敌人种类（上帝模式放置 / 关卡刷怪 / 碰撞模板）。
+ * 新增动物：先往本数组追加 id，再补 factory / 贴图 / BODY_PROFILES / bodyEditCatalog。
+ */
+export const ENEMY_KINDS = [
+  'spider',
+  'flame-flower',
+  'wooden-dummy',
+  'chicken',
+  'pig',
+  'cow',
+  'horse',
+  'wolf',
+  'bear',
+] as const;
+
+export type EnemyKind = (typeof ENEMY_KINDS)[number];
 
 /** 敌人出生点（世界坐标，须在陆地上） */
 export type EnemySpawn = {

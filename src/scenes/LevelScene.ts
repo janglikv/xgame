@@ -145,6 +145,7 @@ export class LevelScene extends Container implements GameScene {
         if (!canSpawnNaturalAnimal(kind, this.creatures)) return;
 
         const creature = createEnemyAt(kind, x, y);
+        if (!creature) return;
         this.layers.sortLayer.addChild(creature);
         this.creatures.push(creature);
         void creature.load();

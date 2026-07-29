@@ -4,20 +4,23 @@
  *
  * 坐标：相对脚底 worldX/Y 的世界像素偏移（oy 向上为负）。
  * solid / hurt 均为形状数组，可多圆 + 多矩形组合。
+ *
+ * BodyProfileId = 角色 + 敌人 kind + 环境模板。
+ * 敌人与 kind 同名；新增 ENEMY_KINDS 后本文件会因 Record 缺 key 报错，需补默认条目。
  */
 
-/** 与实体种类一一对应的模板 id（编的是类型，不是场上实例） */
-export type BodyProfileId =
-  | 'bomb-girl'
-  | 'ice-ranger'
-  | 'spider'
-  | 'flame-flower'
-  | 'wooden-dummy'
-  /** 可砍树模板（中树基准）；小/大树仅乘缩放 */
-  | 'tree'
-  /** 苹果树碰撞模板（中树基准）；小/大树仅乘缩放 */
-  | 'apple-tree'
-  | 'grass';
+import { CHARACTER_IDS, type CharacterId } from '../entities/types';
+import { ENEMY_KINDS, type EnemyKind } from './maps/types';
+
+/** 环境碰撞模板（非 EnemyKind） */
+export const ENV_BODY_PROFILE_IDS = ['tree', 'apple-tree', 'grass'] as const;
+export type EnvBodyProfileId = (typeof ENV_BODY_PROFILE_IDS)[number];
+
+/**
+ * 与实体种类 / 环境模板一一对应的模板 id（编的是类型，不是场上实例）。
+ * 角色 CharacterId · 敌人 EnemyKind · 环境 EnvBodyProfileId。
+ */
+export type BodyProfileId = CharacterId | EnemyKind | EnvBodyProfileId;
 
 /** 圆形：圆心 = 脚底 + (ox, oy) */
 export type CircleShape = {
@@ -50,81 +53,116 @@ export type BodyProfile = {
 
 /** 仓库内默认配置（碰撞编辑器导出） */
 export const BODY_PROFILES: Record<BodyProfileId, BodyProfile> = {
-  "bomb-girl": {
-    id: "bomb-girl",
-    label: "炸炸",
+  'bomb-girl': {
+    id: 'bomb-girl',
+    label: '炸炸',
     solid: [{ type: 'circle', ox: 0.21, oy: -9.42, r: 18 }],
     hurt: [
       { type: 'circle', ox: 0.5, oy: -35.99, r: 20.15 },
       { type: 'circle', ox: -0.52, oy: -14.09, r: 18.71 },
     ],
   },
-  "ice-ranger": {
-    id: "ice-ranger",
-    label: "冰冰",
+  'ice-ranger': {
+    id: 'ice-ranger',
+    label: '冰冰',
     solid: [{ type: 'circle', ox: 0.2, oy: -12.78, r: 19.4 }],
     hurt: [
       { type: 'circle', ox: -2.44, oy: -32.09, r: 22 },
       { type: 'circle', ox: 0, oy: -11.42, r: 20 },
     ],
   },
-  "spider": {
-    id: "spider",
-    label: "蜘蛛",
+  spider: {
+    id: 'spider',
+    label: '蜘蛛',
     solid: [{ type: 'circle', ox: -3.11, oy: -18.7, r: 23.06 }],
     hurt: [{ type: 'circle', ox: -1.67, oy: -22.58, r: 29.76 }],
   },
-  "flame-flower": {
-    id: "flame-flower",
-    label: "火焰花",
+  'flame-flower': {
+    id: 'flame-flower',
+    label: '火焰花',
     solid: [{ type: 'circle', ox: -6.25, oy: -17.95, r: 20 }],
     hurt: [
       { type: 'circle', ox: -7.56, oy: -17.33, r: 24 },
       { type: 'circle', ox: -11.59, oy: -50.19, r: 23.77 },
     ],
   },
-  "wooden-dummy": {
-    id: "wooden-dummy",
-    label: "木桩",
+  'wooden-dummy': {
+    id: 'wooden-dummy',
+    label: '木桩',
     solid: [{ type: 'circle', ox: 0.47, oy: -11.86, r: 11.21 }],
     hurt: [
       { type: 'rect', ox: 0, oy: -40.45, w: 21.31, h: 73.35 },
       { type: 'rect', ox: 0.8, oy: -44.47, w: 50.49, h: 8.51 },
     ],
   },
-  "tree": {
-    id: "tree",
-    label: "树",
+  /** 动物默认：按体型粗设，进编辑器再精调 */
+  chicken: {
+    id: 'chicken',
+    label: '鸡',
+    solid: [{ type: 'circle', ox: 0, oy: -8, r: 10 }],
+    hurt: [{ type: 'circle', ox: 0, oy: -12, r: 14 }],
+  },
+  pig: {
+    id: 'pig',
+    label: '猪',
+    solid: [{ type: 'circle', ox: 0, oy: -14, r: 22 }],
+    hurt: [{ type: 'circle', ox: 0, oy: -18, r: 28 }],
+  },
+  cow: {
+    id: 'cow',
+    label: '牛',
+    solid: [{ type: 'circle', ox: 0, oy: -16, r: 26 }],
+    hurt: [{ type: 'circle', ox: 0, oy: -22, r: 32 }],
+  },
+  horse: {
+    id: 'horse',
+    label: '马',
+    solid: [{ type: 'circle', ox: 0, oy: -18, r: 28 }],
+    hurt: [{ type: 'circle', ox: 0, oy: -28, r: 36 }],
+  },
+  wolf: {
+    id: 'wolf',
+    label: '狼',
+    solid: [{ type: 'circle', ox: 0, oy: -12, r: 16 }],
+    hurt: [{ type: 'circle', ox: 0, oy: -16, r: 22 }],
+  },
+  bear: {
+    id: 'bear',
+    label: '熊',
+    solid: [{ type: 'circle', ox: 0, oy: -20, r: 34 }],
+    hurt: [{ type: 'circle', ox: 0, oy: -28, r: 42 }],
+  },
+  tree: {
+    id: 'tree',
+    label: '树',
     solid: [{ type: 'circle', ox: -0.16, oy: -8.54, r: 11.05 }],
     hurt: [{ type: 'circle', ox: 0, oy: -18, r: 22 }],
   },
-  "apple-tree": {
-    id: "apple-tree",
-    label: "苹果树",
+  'apple-tree': {
+    id: 'apple-tree',
+    label: '苹果树',
     solid: [{ type: 'circle', ox: -0.31, oy: -10.92, r: 11.05 }],
     hurt: [{ type: 'circle', ox: 0, oy: -18, r: 22 }],
   },
-  "grass": {
-    id: "grass",
-    label: "草地",
+  grass: {
+    id: 'grass',
+    label: '草地',
     solid: [],
     hurt: [],
   },
 };
 
-
 /** 运行时覆盖（编辑器本局，不写盘） */
 const overrides = new Map<BodyProfileId, BodyProfile>();
 
+/**
+ * 有序列表：角色 → 敌人（= ENEMY_KINDS）→ 环境。
+ * 新增 ENEMY_KINDS / CHARACTER_IDS 会自动进入导出与遍历。
+ */
 export const BODY_PROFILE_IDS: readonly BodyProfileId[] = [
-  'bomb-girl',
-  'ice-ranger',
-  'spider',
-  'flame-flower',
-  'wooden-dummy',
-  'tree',
-  'apple-tree',
-  'grass',
+  ...CHARACTER_IDS,
+  ...ENEMY_KINDS,
+  ...ENV_BODY_PROFILE_IDS,
 ];
 
 /** 松树碰撞模板 id */

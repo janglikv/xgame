@@ -31,14 +31,10 @@ export function isFarmHerbivoreKind(
   );
 }
 
-/** 碰撞体模板：按 kind 映射，不再靠 display label 字符串 */
+/**
+ * 碰撞体模板：与 CreatureKind / EnemyKind 一一对应（identity）。
+ * 新增动物时只要 kind 已进 ENEMY_KINDS 且 BODY_PROFILES 有同名条目即可。
+ */
 export function bodyProfileIdForKind(kind: CreatureKind): BodyProfileId {
-  switch (kind) {
-    case 'wooden-dummy':
-      return 'wooden-dummy';
-    case 'flame-flower':
-      return 'flame-flower';
-    default:
-      return 'spider';
-  }
+  return kind;
 }

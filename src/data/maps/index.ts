@@ -8,6 +8,7 @@ export type {
   MapGrass,
   GrassSize,
 } from './types';
+export { ENEMY_KINDS } from './types';
 export {
   treeSolidR,
   treeSizeOf,
