@@ -73,45 +73,52 @@ export class HorseKing extends WorldCreature {
     g.clear();
 
     const t = this.auraTime;
-    const rx = 54;
-    const ry = 24;
+    const rx = 110;
+    const ry = 48;
     const pulse = 1.0 + Math.sin(t * 3.5) * 0.08;
-    const alphaPulse = 0.7 + Math.sin(t * 4.0) * 0.2;
+    const alphaPulse = 0.75 + Math.sin(t * 4.0) * 0.2;
 
-    // 1) 外圈绿色发光填充与外环 (0x00ff66 / 0x39ff14)
-    g.ellipse(0, -6, rx * pulse, ry * pulse)
-      .fill({ color: 0x00ff66, alpha: 0.16 })
-      .stroke({ width: 3, color: 0x39ff14, alpha: alphaPulse });
+    // 1) 最外层弥散光晕
+    g.ellipse(0, -8, rx * 1.15 * pulse, ry * 1.15 * pulse).stroke({
+      width: 2,
+      color: 0x00ff66,
+      alpha: alphaPulse * 0.35,
+    });
 
-    // 2) 内圈魔法阵同心环 (0x70ff8b)
-    g.ellipse(0, -6, rx * 0.68 * pulse, ry * 0.68 * pulse).stroke({
-      width: 1.5,
+    // 2) 外圈绿色发光主阵环 (0x00ff66 / 0x39ff14)
+    g.ellipse(0, -8, rx * pulse, ry * pulse)
+      .fill({ color: 0x00ff66, alpha: 0.2 })
+      .stroke({ width: 4, color: 0x39ff14, alpha: alphaPulse });
+
+    // 3) 内圈魔法阵同心环 (0x70ff8b)
+    g.ellipse(0, -8, rx * 0.68 * pulse, ry * 0.68 * pulse).stroke({
+      width: 2,
       color: 0x70ff8b,
       alpha: alphaPulse * 0.85,
     });
 
-    // 3) 动态旋转符文/法阵射线 (6条对称线)
-    const rays = 6;
+    // 4) 动态旋转符文/法阵射线 (8条对称线)
+    const rays = 8;
     const rot = t * 1.2;
     for (let i = 0; i < rays; i++) {
       const ang = rot + (i * Math.PI) / (rays / 2);
-      const x1 = Math.cos(ang) * rx * 0.22;
-      const y1 = Math.sin(ang) * ry * 0.22 - 6;
-      const x2 = Math.cos(ang) * rx * 0.82;
-      const y2 = Math.sin(ang) * ry * 0.82 - 6;
+      const x1 = Math.cos(ang) * rx * 0.2;
+      const y1 = Math.sin(ang) * ry * 0.2 - 8;
+      const x2 = Math.cos(ang) * rx * 0.85;
+      const y2 = Math.sin(ang) * ry * 0.85 - 8;
 
       g.moveTo(x1, y1)
         .lineTo(x2, y2)
-        .stroke({ width: 1.5, color: 0x00ff88, alpha: 0.45 });
+        .stroke({ width: 2, color: 0x00ff88, alpha: 0.5 });
     }
 
-    // 4) 环绕发光粒子
-    const dots = 4;
+    // 5) 环绕发光粒子 (6颗)
+    const dots = 6;
     for (let i = 0; i < dots; i++) {
       const dang = -rot * 1.5 + (i * Math.PI * 2) / dots;
-      const dx = Math.cos(dang) * rx * 0.48;
-      const dy = Math.sin(dang) * ry * 0.48 - 6;
-      g.circle(dx, dy, 2.5).fill({ color: 0x88ffbb, alpha: 0.85 });
+      const dx = Math.cos(dang) * rx * 0.52;
+      const dy = Math.sin(dang) * ry * 0.52 - 8;
+      g.circle(dx, dy, 3.5).fill({ color: 0x88ffbb, alpha: 0.9 });
     }
   }
 
