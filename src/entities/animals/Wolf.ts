@@ -30,19 +30,23 @@ export const WOLF_ECO = {
    */
   chaseMemory: 380,
   eatRange: 54,
-  /** 扑杀移速（高于牛马） */
-  huntSpeed: 188,
+  /** 扑杀移速（高于牛食草动作，但给猎物拉开空间） */
+  huntSpeed: 168,
   /** 觅食巡游移速（视野内无猎物时） */
-  forageSpeed: 118,
+  forageSpeed: 108,
   /** 觅食巡游半径 */
   forageRadius: 200,
-  walkSpeed: 96,
+  walkSpeed: 90,
   startHunger: 0.55,
-  /** 吃一顿回饱量 */
-  mealFeed: 0.55,
+  /** 单次咬伤伤害量 */
+  biteDamage: 30,
+  /** 咬伤攻击间隔（秒） */
+  attackInterval: 1.2,
+  /** 咬一口恢复的饱腹度 */
+  mealFeed: 0.25,
   restArrive: 28,
   restOffsetY: 40,
-  retargetCd: 0.22,
+  retargetCd: 1.2,
   maxHp: 120,
 } as const;
 
@@ -246,17 +250,23 @@ export class Wolf extends WorldCreature {
       prey.worldY - this.worldY,
     );
     if (dist <= WOLF_ECO.eatRange) {
-      prey.applyDamage(prey.maximumHp + 1);
-      if (!prey.isAlive) {
-        eco.removeCreature(prey);
+      if (this.attackCd <= 0) {
+        // 咬伤猎物：扣除固定数值伤害 (30 HP)，显示猎物血条
+        const isAlive = prey.applyDamage(WOLF_ECO.biteDamage);
+        this.hunger = Math.max(0, this.hunger - WOLF_ECO.mealFeed);
+        this.attackCd = WOLF_ECO.attackInterval;
+
+        // 若猎物被咬死：移除猎物，狼准备寻树休息
+        if (!isAlive) {
+          eco.removeCreature(prey);
+          this.wantRest = true;
+          this.prey = null;
+          this.restTree = null;
+          this.retargetCd = WOLF_ECO.retargetCd;
+          this.aiState = 'patrol';
+          return { moved: false, attackHit: null };
+        }
       }
-      this.hunger = Math.max(0, this.hunger - WOLF_ECO.mealFeed);
-      this.wantRest = true;
-      this.prey = null;
-      this.restTree = null;
-      this.retargetCd = WOLF_ECO.retargetCd;
-      this.aiState = 'patrol';
-      return { moved: false, attackHit: null };
     }
 
     this.aiState = 'chase';
