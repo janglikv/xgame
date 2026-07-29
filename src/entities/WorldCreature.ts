@@ -537,6 +537,11 @@ export class WorldCreature extends Container implements WorldActor {
       this.healthBar.applyDelta(-Math.abs(amount));
       this.revealHealthBar();
     }
+    // 受击受创跳跃与受击姿态反馈（木桩除外）
+    if (!this.passive) {
+      this.knock.velZ = Math.max(this.knock.velZ, 250);
+      this.poseController.triggerBlastKnock(0.7);
+    }
     return this.isAlive;
   }
 

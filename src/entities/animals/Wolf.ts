@@ -1,3 +1,4 @@
+import { applyRecoilHop } from '../knockArc';
 import {
   WorldCreature,
   type CreatureEcologyContext,
@@ -251,6 +252,13 @@ export class Wolf extends WorldCreature {
     );
     if (dist <= WOLF_ECO.eatRange) {
       if (this.attackCd <= 0) {
+        // 给予猎物受击起跳与推开受创反馈
+        const dx = prey.worldX - this.worldX;
+        const dy = prey.worldY - this.worldY;
+        const d = Math.hypot(dx, dy);
+        const inv = d > 1e-3 ? 1 / d : 1;
+        applyRecoilHop(prey.knock, dx * inv, dy * inv, 130, 260);
+
         // 咬伤猎物：扣除固定数值伤害 (30 HP)，显示猎物血条
         const isAlive = prey.applyDamage(WOLF_ECO.biteDamage);
         this.hunger = Math.max(0, this.hunger - WOLF_ECO.mealFeed);
