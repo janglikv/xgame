@@ -26,6 +26,7 @@ src/
 ├── systems/                # 跨实体规则：战斗、碰撞、收割、泥地、自然刷怪
 │   ├── HarvestWorld.ts     # 草/树/掉落编排
 │   ├── MudSpotField.ts     # 泥斑几何与合并
+│   ├── EcologySpawnerSystem.ts  # 自然孕育牛马/狼/松
 │   └── ecologySpawn.ts     # 自然孕育上限与标签
 ├── scenes/                 # 场景编排：主菜单、关卡、体型编辑、镜头
 ├── world/                  # 地图表现：草坪、松树 chunk、夜色
@@ -173,7 +174,7 @@ LevelScene.update
   ├─ player.updateEntrance
   ├─ player.update（走路晃动等）
   ├─ player.tickResources + syncAmmoHud
-  ├─ spiders.update + solid + 咬击结算
+  ├─ creatures.update + solid + 咬击结算
   ├─ combat.update（弹体与命中）
   └─ sortDepth
 ```

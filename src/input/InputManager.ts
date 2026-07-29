@@ -18,6 +18,7 @@ export class InputManager {
 
   public clear(): void {
     this.keyboard.clear();
+    this.edges.clear();
   }
 
   /** 获取归一化二维移动轴 (-1 ~ +1) */

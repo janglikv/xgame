@@ -58,8 +58,8 @@ export type CombatCameraView = {
  */
 export type CombatWorld = {
   player: PlayerCharacterBase | null;
-  /** 可变数组：死亡蜘蛛会从中 splice */
-  spiders: Spider[];
+  /** 可变数组：死亡生物会从中 splice */
+  creatures: Spider[];
   /** 可砍树；摧毁时 splice 并回调 onHarvestTreeDestroyed */
   harvestTrees: HarvestableTree[];
 };
@@ -442,8 +442,8 @@ export class CombatSystem {
       if (phase === 'flying' || phase === 'holding') {
         let hitSomething = false;
 
-        for (let s = world.spiders.length - 1; s >= 0; s--) {
-          const spider = world.spiders[s]!;
+        for (let s = world.creatures.length - 1; s >= 0; s--) {
+          const spider = world.creatures[s]!;
           if (!spider.isAlive) continue;
           if (
             !circleHitsHurt(
@@ -520,8 +520,8 @@ export class CombatSystem {
    */
   private applyBombBlast(bomb: BombProjectile, world: CombatWorld): void {
     let anyFx = false;
-    for (let i = world.spiders.length - 1; i >= 0; i--) {
-      const spider = world.spiders[i]!;
+    for (let i = world.creatures.length - 1; i >= 0; i--) {
+      const spider = world.creatures[i]!;
       if (!spider.isAlive) continue;
 
       const inner = distancePastHurt(
@@ -575,11 +575,11 @@ export class CombatSystem {
   }
 
   private removeSpider(world: CombatWorld, index: number): void {
-    const spider = world.spiders[index];
+    const spider = world.creatures[index];
     if (!spider) return;
     this.sortLayer.removeChild(spider);
     spider.destroy({ children: true });
-    world.spiders.splice(index, 1);
+    world.creatures.splice(index, 1);
   }
 
   private removeHarvestTree(world: CombatWorld, index: number): void {

@@ -44,7 +44,7 @@ export type GodModeDeps = {
   setSpawn: (x: number, y: number) => void;
   getPlayer: () => PlayerCharacterBase | null;
   sortLayer: Container;
-  spiders: Spider[];
+  creatures: Spider[];
   harvest: HarvestWorld;
   camera: LevelCamera;
   hud: GodModeHud;
@@ -206,7 +206,7 @@ export class GodModeController {
     });
     entity.faceToward(spawn.x, spawn.y);
     this.deps.sortLayer.addChild(entity);
-    this.deps.spiders.push(entity);
+    this.deps.creatures.push(entity);
     void entity.load();
     this.deps.syncWorldActors();
     this.deps.sortDepth();
@@ -229,7 +229,7 @@ export class GodModeController {
 
   eraseAt(x: number, y: number): void {
     const PICK_R = 40;
-    const { harvest, spiders, getMapDef } = this.deps;
+    const { harvest, creatures, getMapDef } = this.deps;
     const mapDef = getMapDef();
 
     let bestTree: HarvestableTree | null = null;
@@ -256,8 +256,8 @@ export class GodModeController {
     let bestEnemy: Spider | null = null;
     let bestEnemyD = PICK_R;
     let bestEnemyI = -1;
-    for (let i = 0; i < spiders.length; i++) {
-      const s = spiders[i]!;
+    for (let i = 0; i < creatures.length; i++) {
+      const s = creatures[i]!;
       if (!s.isAlive) continue;
       const d = Math.hypot(s.worldX - x, s.worldY - y);
       if (d < bestEnemyD) {
@@ -318,7 +318,7 @@ export class GodModeController {
       }
       bestEnemy.parent?.removeChild(bestEnemy);
       bestEnemy.destroy({ children: true });
-      spiders.splice(bestEnemyI, 1);
+      creatures.splice(bestEnemyI, 1);
       this.deps.persistMapDraft();
     }
   }
@@ -334,14 +334,14 @@ export class GodModeController {
     this.deps.harvest.clearAll();
 
     // 清空生物/敌人实体
-    const spiders = this.deps.spiders;
-    for (const s of spiders) {
+    const creatures = this.deps.creatures;
+    for (const s of creatures) {
       if (!s.destroyed) {
         s.parent?.removeChild(s);
         s.destroy({ children: true });
       }
     }
-    spiders.length = 0;
+    creatures.length = 0;
 
     // 同步 Actor、排序、渲染并写回草稿
     this.deps.syncWorldActors();

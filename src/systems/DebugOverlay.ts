@@ -21,7 +21,7 @@ const LABEL_STYLE = {
 
 export type DebugRenderWorld = {
   player: PlayerCharacterBase | null;
-  spiders: Spider[];
+  creatures: Spider[];
   bombs: ReadonlyArray<BombProjectile>;
   spears: ReadonlyArray<SpearProjectile>;
 };
@@ -64,7 +64,7 @@ export class DebugOverlay extends Container {
     this.gfx.clear();
     this.resetLabels();
 
-    for (const spider of world.spiders) {
+    for (const spider of world.creatures) {
       if (!spider.isAlive) continue;
       this.drawProfile(spider.worldX, spider.worldY, spider.bodyProfileId, {
         solidColor: 0x00e5ff,

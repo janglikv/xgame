@@ -33,7 +33,7 @@ export type AliveFootBody = FootBody & {
 
 export type SolidContext = {
   player: FootBody | null;
-  spiders: AliveFootBody[];
+  creatures: AliveFootBody[];
 };
 
 /**
@@ -50,7 +50,7 @@ export class SolidResolver {
   ): void {
     this.resolveFoot(player, fromX, fromY, {
       includePlayer: false,
-      spiderSkipIndex: -1,
+      creatureSkipIndex: -1,
     }, ctx);
   }
 
@@ -66,7 +66,7 @@ export class SolidResolver {
 
     this.resolveFoot(spider, fromX, fromY, {
       includePlayer: true,
-      spiderSkipIndex: spiderIndex,
+      creatureSkipIndex: spiderIndex,
     }, ctx);
   }
 
@@ -74,7 +74,7 @@ export class SolidResolver {
     body: FootBody,
     fromX: number,
     fromY: number,
-    options: { includePlayer: boolean; spiderSkipIndex: number },
+    options: { includePlayer: boolean; creatureSkipIndex: number },
     ctx: SolidContext,
   ): void {
     const primary = primarySolidCircle(body.bodyProfileId);
@@ -149,7 +149,7 @@ export class SolidResolver {
     cy: number,
     radius: number,
     ctx: SolidContext,
-    options: { includePlayer: boolean; spiderSkipIndex: number },
+    options: { includePlayer: boolean; creatureSkipIndex: number },
   ): CircleObstacle[] {
     const out: CircleObstacle[] = [];
     const r2 = radius * radius;
@@ -168,9 +168,9 @@ export class SolidResolver {
       }
     }
 
-    for (let i = 0; i < ctx.spiders.length; i++) {
-      if (i === options.spiderSkipIndex) continue;
-      const s = ctx.spiders[i]!;
+    for (let i = 0; i < ctx.creatures.length; i++) {
+      if (i === options.creatureSkipIndex) continue;
+      const s = ctx.creatures[i]!;
       if (!s.isAlive) continue;
       const dx = s.worldX - cx;
       const dy = s.worldY - cy;

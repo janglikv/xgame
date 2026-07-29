@@ -76,8 +76,8 @@ import {
   MUD_TREE_DEATH_MULT,
   MUD_TREE_GROW_MULT,
 } from '../data/mudProfiles';
+import { SpatialHashGrid } from '../utils/SpatialHashGrid';
 import type { Inventory } from './Inventory';
-import { GrassSpatialIndex } from './GrassSpatialIndex';
 import {
   MudSpotField,
   type MudSpot,
@@ -145,8 +145,8 @@ export class HarvestWorld {
     return this.mudField.spots;
   }
 
-  private readonly grassIndex = new GrassSpatialIndex<GrassEntity>(GRASS_GRID_CELL);
-  private readonly treeIndex = new GrassSpatialIndex<HarvestableTree>(TREE_GRID_CELL);
+  private readonly grassIndex = new SpatialHashGrid<GrassEntity>(GRASS_GRID_CELL);
+  private readonly treeIndex = new SpatialHashGrid<HarvestableTree>(TREE_GRID_CELL);
   private grassLogicSlice = 0;
   private treeLogicSlice = 0;
   private lodFar = false;
@@ -162,6 +162,26 @@ export class HarvestWorld {
       onSpawnNaturalAnimal: (kind, x, y) =>
         this.hooks.onSpawnNaturalAnimal?.(kind, x, y),
       isGrassTooCloseToTrees: (x, y) => this.isGrassTooCloseToTrees(x, y),
+      hasMainForest: () => this.pickMainForestAnchor() != null,
+      tryPlantPineOnMainForestEdge: () => {
+        const anchor = this.pickMainForestAnchor();
+        if (!anchor) return false;
+        const mapDef = this.hooks.getMapDef();
+        if (!this.tryPlantOnForestEdge(anchor, mapDef, 'pine')) return false;
+        this.hooks.afterWorldChange({ redrawLand: true });
+        this.markTreePersistDirty();
+        return true;
+      },
+      tryPlantPineAt: (x, y) => {
+        const mapDef = this.hooks.getMapDef();
+        if (!this.canPlantTreeAt(x, y, mapDef)) return false;
+        this.plantSapling(x, y, 'pine', mapDef);
+        this.hooks.afterWorldChange({ redrawLand: true });
+        this.markTreePersistDirty();
+        return true;
+      },
+      canPlantTreeAt: (x, y) =>
+        this.canPlantTreeAt(x, y, this.hooks.getMapDef()),
     });
   }
 
@@ -1138,8 +1158,7 @@ export class HarvestWorld {
       this.grassFarSortDirty = false;
     }
 
-    this.ecologySpawner.update(dt, this.grasses, creatures);
-    this.tickNaturalPineSpawning(dt, creatures);
+    this.ecologySpawner.update(dt, this.grasses, creatures, this.trees);
     this.flushGrassPersist();
     this.flushTreePersist();
   }
@@ -1258,84 +1277,6 @@ export class HarvestWorld {
     }
   }
 
-
-  private naturalPineTimer = 18;
-
-  /** 场上存活狼数量 */
-  private countWolves(creatures?: ReadonlyArray<Spider>): number {
-    if (!creatures) return 0;
-    let n = 0;
-    for (const s of creatures) {
-      if (s.isAlive && !s.destroyed && s.label === 'Wolf') n += 1;
-    }
-    return n;
-  }
-
-  /**
-   * 有狼之后：自然生成松树（狼吃完爱在松树边休息）。
-   * 狼越多略加快长树；优先向现有树木/树林抱团聚落。
-   */
-  private tickNaturalPineSpawning(
-    dt: number,
-    creatures?: ReadonlyArray<Spider>,
-  ): void {
-    const wolfCount = this.countWolves(creatures);
-    if (wolfCount <= 0) {
-      this.naturalPineTimer = 18;
-      return;
-    }
-
-    const pineCount = this.trees.filter(
-      (t) => t.isAlive && t.treeKind === 'pine',
-    ).length;
-    /** 自然松树上限：基础 6 + 每只狼 +3，最多 24 */
-    const pineCap = Math.min(24, 6 + wolfCount * 3);
-    if (pineCount >= pineCap) {
-      this.naturalPineTimer = 25;
-      return;
-    }
-
-    this.naturalPineTimer -= dt;
-    if (this.naturalPineTimer > 0) return;
-
-    // 狼多时稍快长树
-    this.naturalPineTimer = Math.max(12, 28 - wolfCount * 3) + Math.random() * 10;
-
-    const mapDef = this.hooks.getMapDef();
-    const land = landRectOf(mapDef);
-    if (land.w <= 0 || land.h <= 0) return;
-
-    // 有树：只扩主林；无树：才允许开一个松树种核
-    const anchor = this.pickMainForestAnchor();
-    if (anchor) {
-      if (this.tryPlantOnForestEdge(anchor, mapDef, 'pine')) {
-        this.hooks.afterWorldChange({ redrawLand: true });
-        this.markTreePersistDirty();
-      }
-      return;
-    }
-
-    for (let attempt = 0; attempt < 16; attempt++) {
-      let x: number;
-      let y: number;
-      if (this.grasses.length > 0) {
-        const g =
-          this.grasses[Math.floor(Math.random() * this.grasses.length)]!;
-        const ang = Math.random() * Math.PI * 2;
-        const dist = 16 + Math.random() * 32;
-        x = g.worldX + Math.cos(ang) * dist;
-        y = g.worldY + Math.sin(ang) * dist;
-      } else {
-        x = land.x + 40 + Math.random() * Math.max(1, land.w - 80);
-        y = land.y + 40 + Math.random() * Math.max(1, land.h - 80);
-      }
-      if (!this.canPlantTreeAt(x, y, mapDef)) continue;
-      this.plantSapling(x, y, 'pine', mapDef);
-      this.hooks.afterWorldChange({ redrawLand: true });
-      this.markTreePersistDirty();
-      return;
-    }
-  }
 
   /** 树与树之间是否过近（空间网格） */
   private isTreeTooClose(x: number, y: number, minDist: number): boolean {

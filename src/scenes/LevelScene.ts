@@ -12,8 +12,7 @@ import type {
   CreatureEcologyContext,
   Spider,
 } from '../entities/Spider';
-import { EdgeKeys } from '../input/EdgeKeys';
-import { Keyboard } from '../input/Keyboard';
+import { InputManager } from '../input/InputManager';
 import {
   CharacterRoster,
 } from '../systems/CharacterRoster';
@@ -114,11 +113,11 @@ export class LevelScene extends Container implements GameScene {
   private readonly characterHud: CharacterSwitchHud;
   private readonly inventoryHud: InventoryHud;
   private readonly hudLayout: LevelHudLayout;
-  private readonly spiders: Spider[] = [];
+  /** 场上全部生物（蜘蛛/农场动物/狼等），非仅蜘蛛 */
+  private readonly creatures: Spider[] = [];
   private readonly harvest: HarvestWorld;
   private readonly inventory: Inventory;
-  private readonly keyboard = new Keyboard();
-  private readonly edges = new EdgeKeys();
+  private readonly input = new InputManager();
   private readonly solid = new SolidResolver();
   private readonly combat: CombatSystem;
   private readonly debugOverlay: DebugOverlay;
@@ -221,11 +220,11 @@ export class LevelScene extends Container implements GameScene {
         }
       },
       onSpawnNaturalAnimal: (kind, x, y) => {
-        if (!canSpawnNaturalAnimal(kind, this.spiders)) return;
+        if (!canSpawnNaturalAnimal(kind, this.creatures)) return;
 
         const creature = createEnemyAt(kind, x, y);
         this.sortLayer.addChild(creature);
-        this.spiders.push(creature);
+        this.creatures.push(creature);
         void creature.load();
         this.syncWorldActors();
         this.sortDepth();
@@ -242,7 +241,7 @@ export class LevelScene extends Container implements GameScene {
     this.debugOverlay = new DebugOverlay();
     this.worldRoot.addChild(this.debugOverlay);
 
-    spawnEnemiesInto(this.mapDef, this.spawn, this.sortLayer, this.spiders);
+    spawnEnemiesInto(this.mapDef, this.spawn, this.sortLayer, this.creatures);
     this.harvest.spawnFromMap(this.mapDef);
 
     this.nightOverlay = new NightOverlay();
@@ -301,7 +300,7 @@ export class LevelScene extends Container implements GameScene {
       },
       getPlayer: () => this.roster.player,
       sortLayer: this.sortLayer,
-      spiders: this.spiders,
+      creatures: this.creatures,
       harvest: this.harvest,
       camera: this.camera,
       hud: this.godHud,
@@ -405,13 +404,13 @@ export class LevelScene extends Container implements GameScene {
           this.combat.cancelScriptedAttacks(player);
         },
       },
-      getTargets: () => this.spiders,
+      getTargets: () => this.creatures,
     };
   }
 
   async init(): Promise<void> {
     this.onBackground?.(getNightBackground());
-    this.keyboard.bind();
+    this.input.bind();
     window.addEventListener('wheel', this.onWheel, { passive: false });
 
     const rosterLoads = [...this.roster.values()].map(
@@ -422,13 +421,13 @@ export class LevelScene extends Container implements GameScene {
       preloadLevelAssets({
         loadMap: () => this.worldMap.load(),
         loadCharacters: rosterLoads,
-        spiders: this.spiders.length > 0,
+        spiders: this.creatures.length > 0,
       }),
       this.characterHud.load(),
     ]);
 
     this.stepCamera(0, true);
-    await Promise.all(this.spiders.map((s) => s.load()));
+    await Promise.all(this.creatures.map((s) => s.load()));
     if (this.player) this.syncAmmoHud(this.player);
     this.syncWorldActors();
     this.sortDepth();
@@ -469,7 +468,7 @@ export class LevelScene extends Container implements GameScene {
 
   private syncWorldActors(): void {
     this.player?.syncToWorld();
-    for (const spider of this.spiders) {
+    for (const spider of this.creatures) {
       spider.syncToWorld();
     }
     this.harvest.syncToWorld();
@@ -479,7 +478,7 @@ export class LevelScene extends Container implements GameScene {
   private combatWorld(): CombatWorld {
     return {
       player: this.player,
-      spiders: this.spiders,
+      creatures: this.creatures,
       harvestTrees: this.harvest.trees,
     };
   }
@@ -525,7 +524,7 @@ export class LevelScene extends Container implements GameScene {
       pickups: this.harvest.pickups,
       grasses: this.harvest.grasses,
       trees: this.ecoTreesCache,
-      creatures: this.spiders,
+      creatures: this.creatures,
       mapDef: this.mapDef,
       consumePickup: (p) => {
         const found = this.harvest.pickups.find((item) => item === p);
@@ -545,11 +544,11 @@ export class LevelScene extends Container implements GameScene {
 
   /** 生态捕食 / 死亡移除（不写回地图草稿） */
   private removeCreatureEntity(creature: Spider): void {
-    const idx = this.spiders.indexOf(creature);
+    const idx = this.creatures.indexOf(creature);
     if (idx < 0) return;
     creature.parent?.removeChild(creature);
     creature.destroy({ children: true });
-    this.spiders.splice(idx, 1);
+    this.creatures.splice(idx, 1);
   }
 
   private sortDepth(): void {
@@ -580,7 +579,7 @@ export class LevelScene extends Container implements GameScene {
   private solidContext(): SolidContext {
     return {
       player: this.player,
-      spiders: this.spiders,
+      creatures: this.creatures,
     };
   }
 
@@ -616,7 +615,7 @@ export class LevelScene extends Container implements GameScene {
     this.off('pointertap', this.onPointerTap);
     this.off('pointermove', this.onPointerMove);
     window.removeEventListener('wheel', this.onWheel);
-    this.keyboard.unbind();
+    this.input.unbind();
     super.destroy(options);
   }
 
@@ -629,7 +628,7 @@ export class LevelScene extends Container implements GameScene {
     const player = this.player;
     this.debugOverlay.update({
       player,
-      spiders: this.spiders,
+      creatures: this.creatures,
       bombs: this.combat.getBombs(),
       spears: this.combat.getSpears(),
     });
@@ -648,14 +647,14 @@ export class LevelScene extends Container implements GameScene {
 
   /** Esc / G / Tab */
   private pollModeKeys(): void {
-    if (this.edges.pressed('Escape', this.keyboard.isDown('Escape'))) {
+    if (this.input.pressed('Escape', this.input.isDown('Escape'))) {
       this.setPaused(!this.paused);
     }
-    if (this.edges.pressed('KeyG', this.keyboard.isDown('KeyG'))) {
+    if (this.input.pressed('KeyG', this.input.isDown('KeyG'))) {
       this.setGodMode(!this.god.enabled);
     }
     if (
-      this.edges.pressed('Tab', this.keyboard.isDown('Tab')) &&
+      this.input.pressed('Tab', this.input.isDown('Tab')) &&
       !this.paused &&
       !this.god.enabled
     ) {
@@ -667,15 +666,15 @@ export class LevelScene extends Container implements GameScene {
   private pollAbilityKeys(): void {
     if (this.paused || this.god.enabled) {
       // 仍推进边沿状态，避免退出暂停/上帝后连发
-      this.edges.pressed('KeyQ', this.keyboard.isDown('KeyQ'));
-      this.edges.pressed('KeyE', this.keyboard.isDown('KeyE'));
-      this.edges.pressed('KeyR', this.keyboard.isDown('KeyR'));
+      this.input.pressed('KeyQ', this.input.isDown('KeyQ'));
+      this.input.pressed('KeyE', this.input.isDown('KeyE'));
+      this.input.pressed('KeyR', this.input.isDown('KeyR'));
       return;
     }
 
     const p = this.player;
     if (
-      this.edges.pressed('KeyQ', this.keyboard.isDown('KeyQ')) &&
+      this.input.pressed('KeyQ', this.input.isDown('KeyQ')) &&
       p &&
       !p.entranceLocks.attack
     ) {
@@ -692,7 +691,7 @@ export class LevelScene extends Container implements GameScene {
     }
 
     if (
-      this.edges.pressed('KeyE', this.keyboard.isDown('KeyE')) &&
+      this.input.pressed('KeyE', this.input.isDown('KeyE')) &&
       p &&
       !p.entranceLocks.move
     ) {
@@ -707,7 +706,7 @@ export class LevelScene extends Container implements GameScene {
       }
     }
 
-    if (this.edges.pressed('KeyR', this.keyboard.isDown('KeyR')) && p) {
+    if (this.input.pressed('KeyR', this.input.isDown('KeyR')) && p) {
       this.harvest.tryMelee(p);
     }
   }
@@ -735,7 +734,7 @@ export class LevelScene extends Container implements GameScene {
     dt: number,
     player: PlayerCharacterBase,
   ): void {
-    const { x, y } = this.keyboard.getMoveAxis();
+    const { x, y } = this.input.getMoveAxis();
     const fromX = player.worldX;
     const fromY = player.worldY;
     const god = this.god.enabled;
@@ -799,9 +798,9 @@ export class LevelScene extends Container implements GameScene {
     if (!god) {
       const ecology = this.buildEcologyContext();
       // 快照：生态可能中途 removeCreature（吃鸡 / 饿死），避免下标错位
-      const tickList = this.spiders.slice();
+      const tickList = this.creatures.slice();
       for (const spider of tickList) {
-        if (!spider.isAlive || !this.spiders.includes(spider)) continue;
+        if (!spider.isAlive || !this.creatures.includes(spider)) continue;
         const sFromX = spider.worldX;
         const sFromY = spider.worldY;
         const result = spider.update(
@@ -811,25 +810,25 @@ export class LevelScene extends Container implements GameScene {
           player.bodyProfileId,
           ecology,
         );
-        const si = this.spiders.indexOf(spider);
+        const si = this.creatures.indexOf(spider);
         if (si < 0 || !spider.isAlive) continue;
         this.applySpiderSolid(spider, sFromX, sFromY, si);
         if (result.attackHit) {
           this.applySpiderAttack(result.attackHit);
         }
       }
-      for (const spider of this.spiders) {
+      for (const spider of this.creatures) {
         spider.syncToWorld();
       }
       this.combat.update(deltaMS, this.combatWorld());
     } else {
-      for (const spider of this.spiders) {
+      for (const spider of this.creatures) {
         spider.syncToWorld();
       }
     }
 
     this.updateGrassLod();
-    this.harvest.tickTrees(deltaMS, this.spiders, this.grassViewBounds());
+    this.harvest.tickTrees(deltaMS, this.creatures, this.grassViewBounds());
     this.harvest.update(deltaMS, player.worldX, player.worldY);
     this.sortDepth();
     // 前后树带节点少，每帧 sort 成本低，保证树与树之间遮挡正确
@@ -902,23 +901,23 @@ export class LevelScene extends Container implements GameScene {
   private handleZoomKeys(dt: number): void {
     // 合成键名：多物理键映射同一动作时只计一次边沿
     const fitDown =
-      this.keyboard.isDown('KeyF') || this.keyboard.isDown('KeyM');
-    if (this.edges.pressed('__fitOverview', fitDown)) {
+      this.input.isDown('KeyF') || this.input.isDown('KeyM');
+    if (this.input.pressed('__fitOverview', fitDown)) {
       this.camera.fitOverview();
     }
 
     const resetDown =
-      this.keyboard.isDown('Digit0') || this.keyboard.isDown('Numpad0');
-    if (this.edges.pressed('__resetZoom', resetDown)) {
+      this.input.isDown('Digit0') || this.input.isDown('Numpad0');
+    if (this.input.pressed('__resetZoom', resetDown)) {
       this.camera.resetZoom();
     }
 
     const zoomIn =
-      this.keyboard.isDown('Equal') ||
-      this.keyboard.isDown('NumpadAdd');
+      this.input.isDown('Equal') ||
+      this.input.isDown('NumpadAdd');
     const zoomOut =
-      this.keyboard.isDown('Minus') ||
-      this.keyboard.isDown('NumpadSubtract');
+      this.input.isDown('Minus') ||
+      this.input.isDown('NumpadSubtract');
     this.camera.applyZoomKeyHold(zoomIn, zoomOut, dt);
   }
 
@@ -958,8 +957,7 @@ export class LevelScene extends Container implements GameScene {
   private setPaused(value: boolean): void {
     this.paused = value;
     this.pauseMenu.setOpen(value);
-    this.keyboard.clear();
-    this.edges.clear();
+    this.input.clear();
   }
 
   private setGodMode(on: boolean): void {
