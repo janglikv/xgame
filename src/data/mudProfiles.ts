@@ -9,17 +9,17 @@
 export const ECO_R = 160;
 
 /** 泥地上草数量上限（稀） */
-export const MUD_GRASS_CAP = 6;
+export const MUD_GRASS_CAP = 3;
 /** 泥地草间距 */
-export const MUD_GRASS_SPACING = 62;
+export const MUD_GRASS_SPACING = 88;
 /** 泥地内稀草达到此数后快速改土 */
 export const MUD_CLEAR_GRASS = 3;
 /** 泥地改土速度：有草（点/秒，满 100，相比原本减慢 100 倍）；无草（删除自然恢复，为 0） */
 export const MUD_FERTILITY_WITH_GRASS = 0.1;
 export const MUD_FERTILITY_BARE = 0;
 
-/** 局部草数 ≥ 此值才可发芽成树（需成片草地） */
-export const MEADOW_GRASS_FOR_TREE = 10;
+/** 局部草数 ≥ 此值才可发芽成树（草密度减半后调整为 5） */
+export const MEADOW_GRASS_FOR_TREE = 5;
 /** 局部树数 ≥ 此值才塌泥（够「大片林」后再轮动） */
 export const FOREST_TREE_COLLAPSE = 16;
 

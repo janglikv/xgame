@@ -54,11 +54,11 @@ export const GRASS_SPREAD_ATTEMPTS: Record<GrassSize, number> = {
  * 新草相对母株距离（世界像素）。
  * 以近距为主，便于连成片草地；远距仅作稀有拓殖（见 trySpreadFrom）。
  */
-export const GRASS_SPREAD_RADIUS_MIN = 38;
-export const GRASS_SPREAD_RADIUS_MAX = 95;
+export const GRASS_SPREAD_RADIUS_MIN = 54;
+export const GRASS_SPREAD_RADIUS_MAX = 134;
 
-/** 草丛之间最小间距（世界像素）；越小密度越高、越连片 */
-export const GRASS_MIN_SPACING = 30;
+/** 草丛之间最小间距（世界像素）；间距增大 √2 倍以使密度减半 */
+export const GRASS_MIN_SPACING = 42;
 
 /**
  * 树木对草的遮荫死区（世界像素）。
