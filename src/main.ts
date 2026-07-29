@@ -13,6 +13,7 @@ import { BodyEditScene } from './scenes/BodyEditScene';
 import { LevelScene } from './scenes/LevelScene';
 import { MainScene } from './scenes/MainScene';
 import { SceneManager } from './scenes/SceneManager';
+import { FpsHud } from './ui/FpsHud';
 import { TimeScaleConfig } from './utils/TimeScaleConfig';
 
 async function bootstrap(): Promise<void> {
@@ -46,6 +47,10 @@ async function bootstrap(): Promise<void> {
     width: app.screen.width,
     height: app.screen.height,
   }));
+
+  // 全局 HUD：左上角 FPS（挂在 stage 最上，跨场景常驻）
+  const fpsHud = new FpsHud();
+  app.stage.addChild(fpsHud);
 
   const persistScene = (scene: SavedScene): void => {
     saveStore.saveScene(scene);
@@ -124,10 +129,17 @@ async function bootstrap(): Promise<void> {
   app.ticker.add((ticker) => {
     const scale = TimeScaleConfig.getScale();
     scenes.update(ticker.deltaMS * scale);
+    // FPS 用真实帧时间，不受游戏倍速影响
+    fpsHud.update(ticker.deltaMS, ticker.FPS);
+    // 确保始终画在最上层（场景切换后可能被盖住）
+    if (app.stage.children[app.stage.children.length - 1] !== fpsHud) {
+      app.stage.setChildIndex(fpsHud, app.stage.children.length - 1);
+    }
   });
 
   app.renderer.on('resize', () => {
     scenes.resize(app.screen.width, app.screen.height);
+    fpsHud.layout(app.screen.width, app.screen.height);
   });
 }
 

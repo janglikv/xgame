@@ -467,31 +467,12 @@ export class WorldMap extends Container {
     // 数量稀疏（仅 1~2 棵树），不足以形成树林硬泥土，保持纯绿草地
     if (clusterTrees.length === 0) return;
 
-    // 1) 边缘羽化柔和过渡带（最外圈浅暖黄渐隐软边界）
+    // 唯一单层平滑浅暖黄泥土地面 (Single Flat Organic Soil Layer)
     for (let idx = 0; idx < clusterTrees.length; idx++) {
       const t = clusterTrees[idx]!;
       const size = treeSizeOf(t);
-      const rx = size === 'large' ? 180 : size === 'medium' ? 120 : 68;
-      const ry = size === 'large' ? 108 : size === 'medium' ? 70 : 40;
-
-      this.drawSmoothOrganicPath(
-        g,
-        t.x,
-        t.y + ry * 0.12,
-        rx,
-        ry,
-        0x0500 + idx * 29,
-        16,
-      );
-      g.fill({ color: 0xd6ae74, alpha: 0.35 });
-    }
-
-    // 2) 主亮黄泥土过渡带（清新浅黄泥土色）
-    for (let idx = 0; idx < clusterTrees.length; idx++) {
-      const t = clusterTrees[idx]!;
-      const size = treeSizeOf(t);
-      const rx = size === 'large' ? 160 : size === 'medium' ? 105 : 58;
-      const ry = size === 'large' ? 94 : size === 'medium' ? 60 : 34;
+      const rx = size === 'large' ? 145 : size === 'medium' ? 95 : 52;
+      const ry = size === 'large' ? 85 : size === 'medium' ? 55 : 30;
 
       this.drawSmoothOrganicPath(
         g,
@@ -502,55 +483,7 @@ export class WorldMap extends Container {
         0x1000 + idx * 37,
         14,
       );
-      g.fill({ color: 0xc29958, alpha: 0.65 });
-    }
-
-    // 3) 核心柔和暖木黄泥土块（温润浅棕黄泥土区）
-    for (let idx = 0; idx < clusterTrees.length; idx++) {
-      const t = clusterTrees[idx]!;
-      const size = treeSizeOf(t);
-      const rx = size === 'large' ? 122 : size === 'medium' ? 78 : 40;
-      const ry = size === 'large' ? 70 : size === 'medium' ? 44 : 22;
-
-      this.drawSmoothOrganicPath(
-        g,
-        t.x,
-        t.y + ry * 0.12,
-        rx,
-        ry,
-        0x5000 + idx * 43,
-        12,
-      );
-      g.fill({ color: 0xa67c42, alpha: 0.78 });
-    }
-
-    // 4) 林下明亮颗粒与细碎点缀
-    const rng = createRng(this.seed ^ 0x7777);
-    for (const t of clusterTrees) {
-      const size = treeSizeOf(t);
-      const count = size === 'large' ? 12 : size === 'medium' ? 7 : 4;
-      const spread = size === 'large' ? 120 : size === 'medium' ? 75 : 40;
-
-      for (let i = 0; i < count; i++) {
-        const ang = rng() * Math.PI * 2;
-        const dist = (0.15 + rng() * 0.85) * spread;
-        const px = t.x + Math.cos(ang) * dist;
-        const py = t.y + Math.sin(ang) * dist * 0.58;
-        const prx = 2.5 + rng() * 5.0;
-        const pry = 1.5 + rng() * 3.2;
-
-        this.drawSmoothOrganicPath(
-          g,
-          px,
-          py,
-          prx,
-          pry,
-          (i * 19 + Math.floor(px)) ^ 0xabc,
-          7,
-        );
-        const pColor = rng() < 0.65 ? 0xe8c78c : 0x8c6636;
-        g.fill({ color: pColor, alpha: 0.7 });
-      }
+      g.fill({ color: 0xcaa76d, alpha: 0.78 });
     }
   }
 
