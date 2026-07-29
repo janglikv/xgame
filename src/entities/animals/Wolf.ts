@@ -26,23 +26,26 @@ export const WOLF_ECO = {
   eatRange: 58,
   /** 常规逼近移速 */
   huntSpeed: 220,
-  /** 猛冲触发感知距离 */
+  /** 猛冲「扑咬」触发感知距离 */
   chargeRange: 160,
-  /** 猛冲极速 (540px/s) */
+  /** 猛冲「扑咬」极速 (540px/s) */
   dashSpeed: 540,
-  /** 蓄力时间（秒） */
+  /** 「扑咬」前摇蓄力时间（秒） */
   windupDuration: 0.25,
-  /** 猛冲持续时间（秒） */
+  /** 「扑咬」猛冲持续时间（秒） */
   dashDuration: 0.35,
   forageSpeed: 108,
   forageRadius: 200,
   walkSpeed: 90,
   startHunger: 0.55,
-  /** 单次扑杀大量伤害（翻倍至 60 HP） */
-  biteDamage: 60,
-  /** 扑杀攻击间隔（秒） */
+  /** 捕获猎物所需的「扑咬」次数（需连续 4 次扑咬才能成功捕获/击杀） */
+  pounceBitesToKill: 4,
+  /** 对玩家反击时的攻击力 */
+  counterAttackDamage: 60,
+  /** 「扑咬」攻击冷却间隔（秒） */
   attackInterval: 1.5,
-  mealFeed: 0.35,
+  /** 每次「扑咬」摄入/恢复 25% 饱腹度 (4 次全饱) */
+  mealFeed: 0.25,
   restArrive: 28,
   restOffsetY: 40,
   retargetCd: 1.2,
@@ -309,11 +312,16 @@ export class Wolf extends WorldCreature {
           const d = Math.hypot(dx, dy);
           const inv = d > 1e-3 ? 1 / d : 1;
 
+          // 执行「扑咬」伤害结算：按猎物最大血量的 25% 结算，需连续 4 次「扑咬」方可捕获/击杀
+          const pounceDamage = Math.max(
+            15,
+            Math.ceil(prey.maximumHp / WOLF_ECO.pounceBitesToKill),
+          );
+
           // 猛烈推开与冲击高弹跳 (220px/s 位移, 320px/s 垂直起跳)
           applyRecoilHop(prey.knock, dx * inv, dy * inv, 220, 320);
 
-          // 造成 60 点大量伤害（翻倍）
-          const isAlive = prey.applyDamage(WOLF_ECO.biteDamage);
+          const isAlive = prey.applyDamage(pounceDamage);
           this.hunger = Math.max(0, this.hunger - WOLF_ECO.mealFeed);
           this.attackCd = WOLF_ECO.attackInterval;
 
