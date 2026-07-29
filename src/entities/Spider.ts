@@ -88,13 +88,27 @@ const AI = {
   patrolWaypointSamples: 7,
 } as const;
 
-/** 走路晃动（局部） */
-const WALK = {
-  period: 0.22,
-  ampY: 5,
-  ampX: 2.5,
-  ampRot: 0.05,
-} as const;
+/** 走路晃动默认（局部）；农场动物等可在 options 覆盖 */
+export type WalkBobConfig = {
+  /** 完整一步周期（秒）；越大越沉稳 */
+  period: number;
+  /** 上下抬脚像素 */
+  ampY: number;
+  /** 左右微摆像素 */
+  ampX: number;
+  /** 旋转幅度（弧度） */
+  ampRot: number;
+  /** 停步时回正速度 */
+  settle: number;
+};
+
+const WALK: WalkBobConfig = {
+  period: 0.34,
+  ampY: 2.2,
+  ampX: 1.0,
+  ampRot: 0.022,
+  settle: 10,
+};
 
 /** 被炸飞姿态（作用在 sprite 局部；高度由 knock 抛物线负责） */
 const BLAST = {
@@ -207,6 +221,10 @@ export type SpiderOptions = {
    * 软分散最大移速。缺省 AI.separationSpeed。
    */
   separationSpeed?: number;
+  /**
+   * 走路晃动参数（局部）。缺省 WALK；大体型动物宜加长 period、减小 amp。
+   */
+  walkBob?: Partial<WalkBobConfig>;
 };
 
 /** 蜘蛛 AI 状态 */
@@ -320,6 +338,8 @@ export class Spider extends Container implements WorldActor {
   protected readonly personalSpace: number;
   /** 软分散最大移速 */
   protected readonly separationSpeed: number;
+  /** 走路晃动参数 */
+  private readonly walkBob: WalkBobConfig;
   /** 描边外扩后换算出的实际脚底锚点。 */
   private footAnchorY: number;
   /** 碰撞模板；子类外观决定 id */
@@ -363,6 +383,10 @@ export class Spider extends Container implements WorldActor {
   protected attackDealt = false;
   /** 走路相位 */
   private walkPhase = 0;
+  /** 走路姿态（停步时指数回正，避免硬切） */
+  private walkPoseX = 0;
+  private walkPoseY = 0;
+  private walkPoseRot = 0;
   /** 攻击姿态 0→1 */
   protected attackPose = 0;
 
@@ -404,6 +428,7 @@ export class Spider extends Container implements WorldActor {
     this.territoryRadius = options.territoryRadius ?? AI.territoryRadius;
     this.personalSpace = options.personalSpace ?? AI.personalSpace;
     this.separationSpeed = options.separationSpeed ?? AI.separationSpeed;
+    this.walkBob = { ...WALK, ...options.walkBob };
     this.worldX = worldX;
     this.worldY = worldY;
     this.homeX = worldX;
@@ -1251,17 +1276,38 @@ export class Spider extends Container implements WorldActor {
     let oy = 0;
     let orot = 0;
     const spinning = this.spinTarget > 0 && this.spinT < 1;
+    const bob = this.walkBob;
+    const canBob = walking && !spinning && this.blastKnock < 0.15;
 
-    if (walking && !spinning && this.blastKnock < 0.15) {
-      this.walkPhase += (Math.PI * 2 * dt) / WALK.period;
+    if (canBob) {
+      this.walkPhase += (Math.PI * 2 * dt) / bob.period;
+      // 双频抬脚；左右/旋转用 cos 错相，避免整只同步拧
       const step = Math.sin(this.walkPhase * 2);
-      const sway = Math.sin(this.walkPhase);
-      oy += -Math.abs(step) * WALK.ampY;
-      ox += sway * WALK.ampX;
-      orot += sway * WALK.ampRot;
-    } else if (!walking) {
-      this.walkPhase = 0;
+      const sway = Math.cos(this.walkPhase);
+      this.walkPoseY = -Math.abs(step) * bob.ampY;
+      this.walkPoseX = sway * bob.ampX;
+      this.walkPoseRot = sway * bob.ampRot;
+    } else {
+      // 停步 / 受击中断：指数回正，避免硬切闪一下
+      const k = 1 - Math.exp(-bob.settle * dt);
+      this.walkPoseX += (0 - this.walkPoseX) * k;
+      this.walkPoseY += (0 - this.walkPoseY) * k;
+      this.walkPoseRot += (0 - this.walkPoseRot) * k;
+      if (Math.abs(this.walkPoseX) < 0.05) this.walkPoseX = 0;
+      if (Math.abs(this.walkPoseY) < 0.05) this.walkPoseY = 0;
+      if (Math.abs(this.walkPoseRot) < 0.001) this.walkPoseRot = 0;
+      if (
+        this.walkPoseX === 0 &&
+        this.walkPoseY === 0 &&
+        this.walkPoseRot === 0
+      ) {
+        this.walkPhase = 0;
+      }
     }
+
+    ox += this.walkPoseX;
+    oy += this.walkPoseY;
+    orot += this.walkPoseRot;
 
     // 攻击姿态：局部空间（贴图已按 facing 翻转，负 X = 朝向后方）
     if (this.attackPose > 0.01 && this.aiState === 'attack') {

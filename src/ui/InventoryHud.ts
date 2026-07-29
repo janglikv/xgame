@@ -1,6 +1,6 @@
-import { Container, Graphics, Text } from 'pixi.js';
+import { Container, Graphics, Sprite, Text } from 'pixi.js';
 import type { InventorySlot } from '../systems/Inventory';
-import { getItemDef } from '../data/items';
+import { getItemDef, getItemTexture } from '../data/items';
 
 export type InventoryHudOptions = {
   slotSize?: number;
@@ -8,7 +8,8 @@ export type InventoryHudOptions = {
 };
 
 /**
- * 背包 HUD：底部一排固定格，显示物品色块 + 数量。
+ * 背包 HUD：底部一排固定格，显示物品图标 + 数量。
+ * 优先真实贴图，未加载时回退色块。
  */
 export class InventoryHud extends Container {
   private readonly slotSize: number;
@@ -17,7 +18,7 @@ export class InventoryHud extends Container {
   private slotCount = 0;
   private cells: Array<{
     root: Container;
-    fill: Graphics;
+    iconHost: Container;
     countText: Text;
   }> = [];
 
@@ -95,8 +96,9 @@ export class InventoryHud extends Container {
       });
       root.addChild(bg);
 
-      const fill = new Graphics();
-      root.addChild(fill);
+      const iconHost = new Container();
+      iconHost.label = 'InvIcon';
+      root.addChild(iconHost);
 
       const countText = new Text({
         text: '',
@@ -113,27 +115,40 @@ export class InventoryHud extends Container {
       root.addChild(countText);
 
       this.slotsRoot.addChild(root);
-      this.cells.push({ root, fill, countText });
+      this.cells.push({ root, iconHost, countText });
     }
   }
 
   private paintCell(index: number, slot: InventorySlot): void {
     const cell = this.cells[index];
     if (!cell) return;
-    cell.fill.clear();
+    cell.iconHost.removeChildren();
     if (!slot) {
       cell.countText.text = '';
       return;
     }
     const def = getItemDef(slot.id);
-    const pad = 7;
-    const s = this.slotSize - pad * 2;
-    cell.fill
-      .roundRect(pad, pad, s, s, 4)
-      .fill({ color: def.color });
-    cell.fill
-      .roundRect(pad, pad, s, s, 4)
-      .stroke({ width: 1.2, color: def.outline, alpha: 0.9 });
+    const pad = 5;
+    const box = this.slotSize - pad * 2;
+    const tex = getItemTexture(slot.id);
+    if (tex) {
+      const sprite = new Sprite(tex);
+      sprite.anchor.set(0.5, 0.5);
+      sprite.position.set(this.slotSize / 2, this.slotSize / 2);
+      const scale = box / Math.max(tex.width, tex.height);
+      sprite.scale.set(scale);
+      sprite.eventMode = 'none';
+      cell.iconHost.addChild(sprite);
+    } else {
+      const fill = new Graphics();
+      fill
+        .roundRect(pad, pad, box, box, 4)
+        .fill({ color: def.color });
+      fill
+        .roundRect(pad, pad, box, box, 4)
+        .stroke({ width: 1.2, color: def.outline, alpha: 0.9 });
+      cell.iconHost.addChild(fill);
+    }
     cell.countText.text = slot.count > 1 ? String(slot.count) : '';
   }
 }

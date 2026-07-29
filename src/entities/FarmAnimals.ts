@@ -5,6 +5,7 @@ import {
   type EcologyTree,
   type SpiderAttackHit,
   type SpiderOptions,
+  type WalkBobConfig,
 } from './Spider';
 import type { BodyProfileId } from '../data/bodyProfiles';
 import { GRASS_ANIMAL_RETARGET_SEC } from '../data/grassProfiles';
@@ -21,6 +22,37 @@ export const ANIMAL_SCALE = {
   wolf: 0.06,
   bear: 0.175,
 } as const;
+
+/**
+ * 按体型分档走路晃动：体型越大 period 越长、幅度越小。
+ * （比蜘蛛默认更稳，避免农场动物「抖」）
+ */
+const ANIMAL_WALK_BOB = {
+  /** 鸡：碎步，略活泼但仍远慢于旧 0.22 抖 */
+  chicken: {
+    period: 0.36,
+    ampY: 2.0,
+    ampX: 0.9,
+    ampRot: 0.02,
+    settle: 11,
+  },
+  /** 猪 / 狼：中等 */
+  medium: {
+    period: 0.48,
+    ampY: 1.6,
+    ampX: 0.8,
+    ampRot: 0.016,
+    settle: 9,
+  },
+  /** 牛 / 马 / 熊：沉稳 */
+  large: {
+    period: 0.64,
+    ampY: 1.2,
+    ampX: 0.6,
+    ampRot: 0.01,
+    settle: 8,
+  },
+} as const satisfies Record<string, WalkBobConfig>;
 
 /** 动物脱战距离（世界像素）；超出后取消追击，回游荡 */
 const ANIMAL_LEASH_RANGE = 380;
@@ -126,6 +158,7 @@ function animalOptions(
     label: string;
     spriteLabel: string;
   },
+  walkBob: WalkBobConfig,
 ): SpiderOptions {
   return {
     scale: options.scale ?? defaultScale,
@@ -136,6 +169,7 @@ function animalOptions(
     territoryRadius: ANIMAL_TERRITORY,
     personalSpace: ANIMAL_PERSONAL_SPACE,
     separationSpeed: ANIMAL_SEPARATION_SPEED,
+    walkBob,
     appearance: {
       textureUrl: appearance.textureUrl,
       label: appearance.label,
@@ -178,11 +212,16 @@ export class Chicken extends RoamingAnimal {
     super(
       worldX,
       worldY,
-      animalOptions(options, ANIMAL_SCALE.chicken, {
-        textureUrl: '/assets/chicken/chicken.png',
-        label: 'Chicken',
-        spriteLabel: 'ChickenSprite',
-      }),
+      animalOptions(
+        options,
+        ANIMAL_SCALE.chicken,
+        {
+          textureUrl: '/assets/chicken/chicken.png',
+          label: 'Chicken',
+          spriteLabel: 'ChickenSprite',
+        },
+        ANIMAL_WALK_BOB.chicken,
+      ),
     );
   }
 }
@@ -218,11 +257,16 @@ export class Pig extends Spider {
     super(
       worldX,
       worldY,
-      animalOptions(options, ANIMAL_SCALE.pig, {
-        textureUrl: '/assets/pig/pig.png',
-        label: 'Pig',
-        spriteLabel: 'PigSprite',
-      }),
+      animalOptions(
+        options,
+        ANIMAL_SCALE.pig,
+        {
+          textureUrl: '/assets/pig/pig.png',
+          label: 'Pig',
+          spriteLabel: 'PigSprite',
+        },
+        ANIMAL_WALK_BOB.medium,
+      ),
     );
     this.stuckX = worldX;
     this.stuckY = worldY;
@@ -740,12 +784,9 @@ abstract class GrassEater extends Spider {
     scale: number,
     appearance: { textureUrl: string; label: string; spriteLabel: string },
     ecoCfg: HerbivoreEco,
+    walkBob: WalkBobConfig = ANIMAL_WALK_BOB.large,
   ) {
-    super(
-      worldX,
-      worldY,
-      animalOptions(options, scale, appearance),
-    );
+    super(worldX, worldY, animalOptions(options, scale, appearance, walkBob));
     this.ecoCfg = ecoCfg;
     this.hunger = ecoCfg.startHunger;
   }
@@ -980,6 +1021,7 @@ export class Wolf extends Spider {
           label: 'Wolf',
           spriteLabel: 'WolfSprite',
         },
+        ANIMAL_WALK_BOB.medium,
       ),
     );
   }
@@ -1249,11 +1291,16 @@ export class Bear extends RoamingAnimal {
     super(
       worldX,
       worldY,
-      animalOptions(options, ANIMAL_SCALE.bear, {
-        textureUrl: '/assets/bear/bear.png',
-        label: 'Bear',
-        spriteLabel: 'BearSprite',
-      }),
+      animalOptions(
+        options,
+        ANIMAL_SCALE.bear,
+        {
+          textureUrl: '/assets/bear/bear.png',
+          label: 'Bear',
+          spriteLabel: 'BearSprite',
+        },
+        ANIMAL_WALK_BOB.large,
+      ),
     );
   }
 }

@@ -11,6 +11,13 @@ import {
   TREE_GRASS_COMPETITION_RADIUS,
 } from '../data/grassProfiles';
 import {
+  TREE_MIN_SPACING,
+  TREE_MAX_COUNT,
+  TREE_SPREAD_ATTEMPTS,
+  TREE_SPREAD_RADIUS_MAX,
+  TREE_SPREAD_RADIUS_MIN,
+} from '../data/treeProfiles';
+import {
   HARVEST_MELEE_DAMAGE,
   HarvestableTree,
 } from '../entities/HarvestableTree';
@@ -116,6 +123,9 @@ export class HarvestWorld {
         });
         this.hooks.afterWorldChange();
         this.hooks.persistMapDraft();
+      },
+      onSpread: (source) => {
+        this.trySpreadTreeFrom(source);
       },
       onAppleDrop: (worldX, worldY) => {
         this.spawnPickup(worldX, worldY, 'apple', 1);
@@ -278,6 +288,61 @@ export class HarvestWorld {
     if (spawned > 0) {
       this.hooks.afterWorldChange();
       this.markGrassPersistDirty();
+    }
+  }
+
+  /**
+   * 母树向四周尝试播种新树苗。
+   * 仅在绿色陆地上、与已有树木保持最小安全间距。
+   */
+  private trySpreadTreeFrom(source: HarvestableTree): void {
+    if (this.trees.length >= TREE_MAX_COUNT) return;
+
+    const mapDef = this.hooks.getMapDef();
+    const targetQuota = TREE_SPREAD_ATTEMPTS[source.size] ?? 1;
+    let spawned = 0;
+
+    for (let q = 0; q < targetQuota; q++) {
+      if (this.trees.length >= TREE_MAX_COUNT) break;
+
+      for (let attempt = 0; attempt < 8; attempt++) {
+        const angle = Math.random() * Math.PI * 2;
+        const dist =
+          TREE_SPREAD_RADIUS_MIN +
+          Math.random() * (TREE_SPREAD_RADIUS_MAX - TREE_SPREAD_RADIUS_MIN);
+        const x = source.worldX + Math.cos(angle) * dist;
+        const y = source.worldY + Math.sin(angle) * dist;
+
+        // 仅限绿色陆地
+        if (!isOnGreenLand(x, y, mapDef, 255)) continue;
+        // 树木之间保持最小安全间距
+        if (this.isTreeTooClose(x, y, TREE_MIN_SPACING)) continue;
+
+        const prefix = source.treeKind === 'apple' ? 'apsap' : 'sap';
+        const id = allocTreeId(prefix);
+        const t: MapTree = {
+          x,
+          y,
+          size: 'sapling',
+          kind: source.treeKind,
+          id,
+        };
+        mapDef.trees.push(t);
+        addRuntimeTreeObstacle({
+          x,
+          y,
+          r: treeSolidR('sapling'),
+          id,
+        });
+        this.mountTree(t);
+        spawned += 1;
+        break;
+      }
+    }
+
+    if (spawned > 0) {
+      this.hooks.afterWorldChange();
+      this.hooks.persistMapDraft();
     }
   }
 
@@ -504,6 +569,11 @@ export class HarvestWorld {
     const dt = deltaMS / 1000;
     if (this.persistCooldown > 0) {
       this.persistCooldown = Math.max(0, this.persistCooldown - dt);
+    }
+
+    // 场景为空白（全岛无树）时，在绿色陆地上随机孵化 1 棵生命火种树苗
+    if (this.trees.length === 0) {
+      this.spawnInitialSeedTree();
     }
 
     // 场景为空白（全岛无草）时，在绿色陆地上随机孵化 1 棵生命火种小草
@@ -751,6 +821,37 @@ export class HarvestWorld {
       const g: MapGrass = { x, y, size: 'small', id };
       mapDef.grasses.push(g);
       this.mountGrass(g);
+      this.hooks.persistMapDraft();
+      this.hooks.afterWorldChange();
+      break;
+    }
+  }
+
+  /** 当场景中完全无树时，随机挑选一处绿地生成 1 棵初始树苗（生命火种） */
+  private spawnInitialSeedTree(): void {
+    const mapDef = this.hooks.getMapDef();
+    const land = landRectOf(mapDef);
+    if (land.w <= 0 || land.h <= 0) return;
+
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const x = land.x + Math.random() * land.w;
+      const y = land.y + Math.random() * land.h;
+
+      if (!isOnGreenLand(x, y, mapDef, 255)) continue;
+      if (this.isTreeTooClose(x, y, TREE_MIN_SPACING)) continue;
+
+      const kind = Math.random() < 0.5 ? 'pine' : 'apple';
+      const prefix = kind === 'apple' ? 'apsap' : 'sap';
+      const id = allocTreeId(prefix);
+      const t: MapTree = { x, y, size: 'sapling', kind, id };
+      mapDef.trees.push(t);
+      addRuntimeTreeObstacle({
+        x,
+        y,
+        r: treeSolidR('sapling'),
+        id,
+      });
+      this.mountTree(t);
       this.hooks.persistMapDraft();
       this.hooks.afterWorldChange();
       break;

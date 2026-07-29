@@ -84,10 +84,34 @@ export function treeHurtR(size: TreeSize): number {
 
 /** 各体型生长到下一阶段的时间（秒），null 表示已是最终期 */
 export const TREE_GROWTH_TIME_SEC: Record<TreeSize, number | null> = {
-  sapling: 20,
-  medium: 35,
+  sapling: 80,
+  medium: 140,
   large: null,
 };
+
+/** 各体型向四周播种树苗的间隔（秒），null 表示不扩散 */
+export const TREE_SPREAD_TIME_SEC: Record<TreeSize, number | null> = {
+  sapling: null,
+  medium: 120,
+  large: 90,
+};
+
+/** 一次扩散尝试的新树苗数量 */
+export const TREE_SPREAD_ATTEMPTS: Record<TreeSize, number> = {
+  sapling: 0,
+  medium: 1,
+  large: 1,
+};
+
+/** 新树苗相对母树的距离（世界像素） */
+export const TREE_SPREAD_RADIUS_MIN = 120;
+export const TREE_SPREAD_RADIUS_MAX = 280;
+
+/** 树木之间最小间距（世界像素），避免树木挤在一起死锁 */
+export const TREE_MIN_SPACING = 88;
+
+/** 场上树木数量上限 */
+export const TREE_MAX_COUNT = 150;
 
 /** 获取树的下一阶段体型 */
 export function nextTreeSize(size: TreeSize): TreeSize | null {
@@ -95,3 +119,11 @@ export function nextTreeSize(size: TreeSize): TreeSize | null {
   if (size === 'medium') return 'large';
   return null;
 }
+
+/** 获取树的上一阶段体型 */
+export function prevTreeSize(size: TreeSize): TreeSize | null {
+  if (size === 'large') return 'medium';
+  if (size === 'medium') return 'sapling';
+  return null;
+}
+

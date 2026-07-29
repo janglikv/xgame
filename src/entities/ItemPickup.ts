@@ -1,12 +1,14 @@
-import { Container, Graphics, Text } from 'pixi.js';
+import { Container, Graphics, Sprite, Text } from 'pixi.js';
 import type { ItemId } from '../data/items';
-import { getItemDef } from '../data/items';
+import { getItemDef, getItemTexture } from '../data/items';
 
 /** 自动拾取半径（脚底距离） */
 export const PICKUP_RADIUS = 42;
 /** 拾取物存在上限（秒），超时仍可捡 */
 const BOB_SPEED = 3.2;
 const BOB_AMP = 3.5;
+/** 掉落图标显示高度（世界像素） */
+const ICON_DISPLAY_H = 26;
 
 export type ItemPickupOptions = {
   count?: number;
@@ -15,6 +17,7 @@ export type ItemPickupOptions = {
 /**
  * 地上掉落物：靠近自动进包。
  * 原点 ≈ 图标中心略抬；zIndex 用脚底 worldY。
+ * 优先用真实物品贴图，未加载时回退矢量简图。
  */
 export class ItemPickup extends Container {
   readonly itemId: ItemId;
@@ -42,35 +45,42 @@ export class ItemPickup extends Container {
     this.bobPhase = Math.random() * Math.PI * 2;
 
     const def = getItemDef(itemId);
-    const g = new Graphics();
-    g.label = 'PickupGfx';
+    const tex = getItemTexture(itemId);
 
-    if (itemId === 'apple') {
-      // 苹果掉落物图形：红润鲜艳 + 顶尖嫩绿树叶与黑色微描边
-      g.circle(0, 1, 7.5).fill({ color: def.color });
-      g.circle(0, 1, 7.5).stroke({
-        width: 1.2,
-        color: def.outline,
-        alpha: 0.95,
-      });
-      // 左上果面反射高亮
-      g.circle(-2.5, -2, 2.2).fill({ color: 0xffffff, alpha: 0.45 });
-      // 顶端微果柄
-      g.moveTo(0, -6.5).lineTo(1, -9.5).stroke({ width: 1.5, color: 0x422612 });
-      // 小绿树叶
-      g.poly([1, -9.5, 5, -11, 4, -7.5], true).fill({ color: 0x64c832 });
+    if (tex) {
+      const sprite = new Sprite(tex);
+      sprite.label = 'PickupIcon';
+      sprite.anchor.set(0.5, 0.5);
+      const scale = ICON_DISPLAY_H / Math.max(1, tex.height);
+      sprite.scale.set(scale);
+      sprite.eventMode = 'none';
+      this.addChild(sprite);
     } else {
-      // 简易「原木」方块
-      g.roundRect(-9, -7, 18, 14, 3).fill({ color: def.color });
-      g.roundRect(-9, -7, 18, 14, 3).stroke({
-        width: 1.5,
-        color: def.outline,
-        alpha: 0.95,
-      });
-      g.circle(-4, 0, 2.2).fill({ color: def.outline, alpha: 0.35 });
-      g.circle(3, 1, 1.8).fill({ color: def.outline, alpha: 0.28 });
+      // 贴图未就绪时的矢量回退
+      const g = new Graphics();
+      g.label = 'PickupGfx';
+      if (itemId === 'apple') {
+        g.circle(0, 1, 7.5).fill({ color: def.color });
+        g.circle(0, 1, 7.5).stroke({
+          width: 1.2,
+          color: def.outline,
+          alpha: 0.95,
+        });
+        g.circle(-2.5, -2, 2.2).fill({ color: 0xffffff, alpha: 0.45 });
+        g.moveTo(0, -6.5).lineTo(1, -9.5).stroke({ width: 1.5, color: 0x422612 });
+        g.poly([1, -9.5, 5, -11, 4, -7.5], true).fill({ color: 0x64c832 });
+      } else {
+        g.roundRect(-9, -7, 18, 14, 3).fill({ color: def.color });
+        g.roundRect(-9, -7, 18, 14, 3).stroke({
+          width: 1.5,
+          color: def.outline,
+          alpha: 0.95,
+        });
+        g.circle(-4, 0, 2.2).fill({ color: def.outline, alpha: 0.35 });
+        g.circle(3, 1, 1.8).fill({ color: def.outline, alpha: 0.28 });
+      }
+      this.addChild(g);
     }
-    this.addChild(g);
 
     if (this.count > 1) {
       const t = new Text({
@@ -84,7 +94,7 @@ export class ItemPickup extends Container {
         },
       });
       t.anchor.set(0.5, 0);
-      t.position.set(0, 8);
+      t.position.set(0, 10);
       this.addChild(t);
     }
 

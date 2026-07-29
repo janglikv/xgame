@@ -1,3 +1,4 @@
+import { loadItemTextures } from '../data/items';
 import { loadBombTextures } from '../entities/BombProjectile';
 import { loadSpearTexture } from '../entities/SpearProjectile';
 import { loadSpiderTexture } from '../entities/Spider';
@@ -13,7 +14,7 @@ export type LevelPreloadOptions = {
 
 /**
  * 关卡共用资源并行预加载。
- * 炸弹 / 飞剑 /（可选）蜘蛛贴图与地图、角色一起拉，避免各处零散 load*。
+ * 炸弹 / 飞剑 / 物品图标 /（可选）蜘蛛贴图与地图、角色一起拉，避免各处零散 load*。
  */
 export async function preloadLevelAssets(
   options: LevelPreloadOptions,
@@ -23,6 +24,7 @@ export async function preloadLevelAssets(
     ...options.loadCharacters.map((fn) => fn()),
     loadBombTextures(),
     loadSpearTexture(),
+    loadItemTextures(),
   ];
   if (options.spiders) {
     loads.push(loadSpiderTexture());
