@@ -1,4 +1,5 @@
-import { Assets, Container, Sprite, Texture } from 'pixi.js';
+import { Assets, Sprite, Texture } from 'pixi.js';
+import { BaseProjectile } from './BaseProjectile';
 
 const BOMB_URL = '/assets/bomb/bomb.png';
 const EXPLOSION_URL = '/assets/bomb/explosion.png';
@@ -82,7 +83,9 @@ const BOMB_SCALE_START = 0.028;
 const BOMB_SCALE_END = 0.095;
 const EXPLOSION_SCALE = 0.14;
 
-export type BombPhase = 'flying' | 'exploding' | 'done';
+import type { BaseProjectilePhase } from './BaseProjectile';
+
+export type BombPhase = BaseProjectilePhase;
 
 export type BombProjectileOptions = {
   /** 覆盖满尺寸基准爆炸属性（再被 sizeScale 缩放） */
@@ -131,12 +134,16 @@ export function scaleBlastStats(
   };
 }
 
+
+
 /**
  * 抛物线投出的炸弹：沿地面插值飞向落点，视觉上抬起再落下，落地后播爆炸。
  * 默认满尺寸满伤；可用 sizeScale 手动缩放视觉与威力。
  */
-export class BombProjectile extends Container {
-  private readonly bomb: Sprite;
+export class BombProjectile extends BaseProjectile {
+  private get bomb(): Sprite {
+    return this.sprite;
+  }
   private readonly explosion: Sprite;
   private readonly startX: number;
   private readonly startY: number;
@@ -154,7 +161,6 @@ export class BombProjectile extends Container {
   /** 本颗实际尺寸倍率（相对满尺寸），越小越弱 */
   readonly sizeScale: number;
 
-  private phase: BombPhase = 'flying';
   private elapsed = 0;
   private explodeElapsed = 0;
   private blastResolved = false;
@@ -170,8 +176,7 @@ export class BombProjectile extends Container {
     endY: number,
     options: BombProjectileOptions = {},
   ) {
-    super();
-    this.label = 'BombProjectile';
+    super('BombProjectile');
 
     if (!sharedBomb || !sharedExplosion) {
       throw new Error('Bomb textures not loaded — call loadBombTextures() first');
@@ -208,11 +213,9 @@ export class BombProjectile extends Container {
     const t = Math.min(1, dist / BOMB_MAX_RANGE);
     this.flightDuration = MIN_FLIGHT + (MAX_FLIGHT - MIN_FLIGHT) * t;
 
-    this.bomb = new Sprite(sharedBomb);
-    this.bomb.anchor.set(0.5, 0.7);
-    this.bomb.scale.set(this.bombScaleStart);
-    this.bomb.label = 'BombSprite';
-    this.addChild(this.bomb);
+    this.sprite.texture = sharedBomb;
+    this.sprite.anchor.set(0.5, 0.7);
+    this.sprite.scale.set(this.bombScaleStart);
 
     this.explosion = new Sprite(sharedExplosion);
     this.explosion.anchor.set(0.5, 0.55);

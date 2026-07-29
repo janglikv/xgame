@@ -1,4 +1,4 @@
-import { Container, Sprite, Texture } from 'pixi.js';
+import { Texture } from 'pixi.js';
 import { hitsTreeObstacle } from '../data/maps';
 import {
   loadOutlinedTexture,
@@ -55,7 +55,9 @@ const FORMATION_LAUNCH_ACCEL = 3200;
 /** 剑阵飞剑静止时的最大视觉倍率 */
 const FORMATION_MAX_SCALE_MULTIPLIER = 2;
 
-export type SpearPhase = 'flying' | 'holding' | 'stuck' | 'done';
+import { BaseProjectile, type BaseProjectilePhase } from './BaseProjectile';
+
+export type SpearPhase = BaseProjectilePhase;
 
 /** 内部运动模式：普攻直线 / 剑阵就位 / 剑阵发射 */
 type SpearMotion = 'linear' | 'deploy' | 'launch';
@@ -118,8 +120,7 @@ export function getSpearTexture(): Texture | null {
  * - 普攻：沿固定方向匀速飞行，撞敌/墙钉住。
  * - 剑阵：减速就位 → 短暂停顿 → 朝目标加速发射。
  */
-export class SpearProjectile extends Container {
-  private readonly sprite: Sprite;
+export class SpearProjectile extends BaseProjectile {
   private dirX: number;
   private dirY: number;
   private readonly speed: number;
@@ -143,7 +144,6 @@ export class SpearProjectile extends Container {
   private holdElapsed = 0;
   private currentSpeed = 0;
 
-  private phase: SpearPhase = 'flying';
   private stuckElapsed = 0;
   private hitResolved = false;
   /** 已飞行路程（世界像素）；linear / launch 用 */
@@ -162,8 +162,7 @@ export class SpearProjectile extends Container {
     dirY: number,
     options: SpearProjectileOptions = {},
   ) {
-    super();
-    this.label = 'SpearProjectile';
+    super('SpearProjectile');
 
     if (!sharedSpear) {
       throw new Error('Spear texture not loaded — call loadSpearTexture() first');
@@ -222,10 +221,8 @@ export class SpearProjectile extends Container {
       this.currentSpeed = this.speed;
     }
 
-    this.sprite = new Sprite(sharedSpear);
+    this.sprite.texture = sharedSpear;
     this.sprite.anchor.set(0.5, 0.5);
-    this.sprite.label = 'SpearSprite';
-    this.addChild(this.sprite);
     this.applySpeedScale();
     this.applyFacingRotation();
   }

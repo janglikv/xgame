@@ -35,6 +35,7 @@ export {
   clearRuntimeTreeObstacles,
   syncRuntimeTreesFromDef,
   addRuntimeTreeObstacle,
+  updateMapTreeSize,
   hitsTreeObstacle,
   isSpawnValid,
   cloneLevelDef,

@@ -1,18 +1,9 @@
 import { Graphics } from 'pixi.js';
+import { TREE_COLORS as COLORS } from './treeCommon';
 
 /** 程序化苹果树视觉尺寸（与松树保持同一画风规范） */
 const APPLE_TREE_SCALE = 2.7;
 const TRUNK_H = 3.4;
-
-const COLORS = {
-  canopyDeep: 0x1f5a1a,
-  canopy: 0x2d7a28,
-  canopyMid: 0x3d9634,
-  canopyLight: 0x58b848,
-  canopyHi: 0x7ed45f,
-  trunkDark: 0x4a2e18,
-  trunkHi: 0x8b5a32,
-} as const;
 
 export type AppleDot = {
   ox: number;

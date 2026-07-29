@@ -1,6 +1,7 @@
 import { Texture } from 'pixi.js';
 import type { TreeKind } from '../data/maps/types';
 import { APPLE_POSITIONS } from './AppleTree';
+import { hexToRgbString as hex, TREE_BAKE_SCALE } from './treeCommon';
 
 /**
  * 共享树贴图：矢量树烘焙成 Texture，全场 Sprite 复用（对齐草的 grassTextures 路径）。
@@ -14,7 +15,7 @@ const FOOT_X = W * 0.5;
 const FOOT_Y = H - 10;
 
 /** 烘焙时用的画布缩放（与 drawPineLocal / drawAppleTreeLocal 内部 2.7 一致） */
-const BAKE_SCALE = 2.7;
+const BAKE_SCALE = TREE_BAKE_SCALE;
 
 let pineTexture: Texture | null = null;
 const appleTextures: Array<Texture | null> = [null, null, null, null];
@@ -38,14 +39,6 @@ function strokePoly(
   ctx.strokeStyle = stroke;
   ctx.lineWidth = lineW;
   ctx.stroke();
-}
-
-function hex(c: number, a = 1): string {
-  const r = (c >> 16) & 0xff;
-  const g = (c >> 8) & 0xff;
-  const b = c & 0xff;
-  if (a >= 1) return `rgb(${r},${g},${b})`;
-  return `rgba(${r},${g},${b},${a})`;
 }
 
 function paintPine(ctx: CanvasRenderingContext2D): void {

@@ -50,6 +50,7 @@ import {
   treeKindOf,
   treeSizeOf,
   treeSolidR,
+  updateMapTreeSize,
   type EnemyKind,
   type LevelMapDef,
   type MapGrass,
@@ -185,13 +186,11 @@ export class HarvestWorld {
       kind,
       treeId: id,
       onGrown: (grownTree) => {
-        const mapDef = this.hooks.getMapDef();
-        const found = mapDef.trees.find(
-          (item) => treeIdOf(item) === grownTree.treeId,
+        updateMapTreeSize(
+          this.hooks.getMapDef(),
+          grownTree.treeId,
+          grownTree.size,
         );
-        if (found) {
-          found.size = grownTree.size;
-        }
         addRuntimeTreeObstacle({
           x: grownTree.worldX,
           y: grownTree.worldY,

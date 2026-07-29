@@ -592,6 +592,19 @@ export function normalizeGrasses(def: LevelMapDef): MapGrass[] {
   return out;
 }
 
+export function updateMapTreeSize(
+  def: LevelMapDef,
+  treeId: string,
+  newSize: TreeSize,
+): boolean {
+  const found = def.trees.find((item) => treeIdOf(item) === treeId);
+  if (found) {
+    found.size = newSize;
+    return true;
+  }
+  return false;
+}
+
 export function isSpawnValid(def: LevelMapDef): boolean {
   return isOnLand(def.spawn.x, def.spawn.y, def, 8);
 }
