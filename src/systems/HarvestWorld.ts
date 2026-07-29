@@ -16,6 +16,8 @@ import {
   TREE_SPREAD_ATTEMPTS,
   TREE_SPREAD_RADIUS_MAX,
   TREE_SPREAD_RADIUS_MIN,
+  TREE_CLUSTER_RADIUS,
+  TREE_CLUSTER_SPEEDUP,
 } from '../data/treeProfiles';
 import {
   HARVEST_MELEE_DAMAGE,
@@ -292,8 +294,25 @@ export class HarvestWorld {
   }
 
   /**
+   * 统计坐标 (x, y) 指定半径内的存活树木数量
+   */
+  countNearbyTrees(x: number, y: number, radius: number): number {
+    const r2 = radius * radius;
+    let count = 0;
+    for (const tree of this.trees) {
+      if (!tree.isAlive) continue;
+      const dx = tree.worldX - x;
+      const dy = tree.worldY - y;
+      if (dx * dx + dy * dy <= r2) {
+        count += 1;
+      }
+    }
+    return count;
+  }
+
+  /**
    * 母树向四周尝试播种新树苗。
-   * 仅在绿色陆地上、与已有树木保持最小安全间距。
+   * 抱团机制：优先在母树/树丛周边 (45~135px) 紧凑吸附落点，天然形成林区。
    */
   private trySpreadTreeFrom(source: HarvestableTree): void {
     if (this.trees.length >= TREE_MAX_COUNT) return;
@@ -305,17 +324,24 @@ export class HarvestWorld {
     for (let q = 0; q < targetQuota; q++) {
       if (this.trees.length >= TREE_MAX_COUNT) break;
 
-      for (let attempt = 0; attempt < 8; attempt++) {
+      // 寻找落点：优先以母树或现有集群为中心抱团聚落
+      for (let attempt = 0; attempt < 12; attempt++) {
+        // 80% 概率紧贴母树周边，20% 概率随机向外伸展
+        const anchor =
+          Math.random() < 0.8 || this.trees.length <= 1
+            ? source
+            : this.trees[Math.floor(Math.random() * this.trees.length)]!;
+
         const angle = Math.random() * Math.PI * 2;
         const dist =
           TREE_SPREAD_RADIUS_MIN +
           Math.random() * (TREE_SPREAD_RADIUS_MAX - TREE_SPREAD_RADIUS_MIN);
-        const x = source.worldX + Math.cos(angle) * dist;
-        const y = source.worldY + Math.sin(angle) * dist;
+        const x = anchor.worldX + Math.cos(angle) * dist;
+        const y = anchor.worldY + Math.sin(angle) * dist;
 
         // 仅限绿色陆地
         if (!isOnGreenLand(x, y, mapDef, 255)) continue;
-        // 树木之间保持最小安全间距
+        // 树木之间保持最小保护间距
         if (this.isTreeTooClose(x, y, TREE_MIN_SPACING)) continue;
 
         const prefix = source.treeKind === 'apple' ? 'apsap' : 'sap';
@@ -564,7 +590,12 @@ export class HarvestWorld {
     view?: GrassViewBounds | null,
   ): void {
     for (const tree of this.trees) {
-      tree.update(deltaMS);
+      if (!tree.isAlive) continue;
+      // 森林抱团庇护机制：周边 120px 内有 2 棵以上存活树木时，享受 1.35x 生长/播种加速
+      const neighborCount =
+        this.countNearbyTrees(tree.worldX, tree.worldY, TREE_CLUSTER_RADIUS) - 1;
+      const speedup = neighborCount >= 2 ? TREE_CLUSTER_SPEEDUP : 1.0;
+      tree.update(deltaMS, speedup);
     }
     const dt = deltaMS / 1000;
     if (this.persistCooldown > 0) {
@@ -636,7 +667,7 @@ export class HarvestWorld {
 
   /**
    * 有狼之后：自然生成松树（狼吃完爱在松树边休息）。
-   * 狼越多略加快长树；全岛松树有上限。
+   * 狼越多略加快长树；优先向现有树木/树林抱团聚落。
    */
   private tickNaturalPineSpawning(
     dt: number,
@@ -668,15 +699,25 @@ export class HarvestWorld {
     const land = landRectOf(mapDef);
     if (land.w <= 0 || land.h <= 0) return;
 
-    // 优先在草地区域附近落树，否则绿地随机
+    // 优先向场上已有树木周边（50px ~ 130px）抱团聚落，更容易形成森林
     for (let attempt = 0; attempt < 16; attempt++) {
       let x: number;
       let y: number;
-      if (this.grasses.length > 0 && Math.random() < 0.7) {
+
+      if (this.trees.length > 0 && Math.random() < 0.75) {
+        const anchor =
+          this.trees[Math.floor(Math.random() * this.trees.length)]!;
+        const ang = Math.random() * Math.PI * 2;
+        const dist =
+          TREE_SPREAD_RADIUS_MIN +
+          Math.random() * (TREE_SPREAD_RADIUS_MAX - TREE_SPREAD_RADIUS_MIN);
+        x = anchor.worldX + Math.cos(ang) * dist;
+        y = anchor.worldY + Math.sin(ang) * dist;
+      } else if (this.grasses.length > 0 && Math.random() < 0.7) {
         const g =
           this.grasses[Math.floor(Math.random() * this.grasses.length)]!;
         const ang = Math.random() * Math.PI * 2;
-        const dist = 80 + Math.random() * 140;
+        const dist = 60 + Math.random() * 100;
         x = g.worldX + Math.cos(ang) * dist;
         y = g.worldY + Math.sin(ang) * dist;
       } else {
@@ -685,7 +726,7 @@ export class HarvestWorld {
       }
 
       if (!isOnGreenLand(x, y, mapDef, 255)) continue;
-      if (this.isTreeTooClose(x, y, 130)) continue;
+      if (this.isTreeTooClose(x, y, TREE_MIN_SPACING)) continue;
 
       const id = allocTreeId('pine');
       const t: MapTree = { x, y, size: 'sapling', kind: 'pine', id };

@@ -97,7 +97,6 @@ export class HarvestableTree extends Container {
   private hp: number;
   private readonly healthBar: HealthBar;
   private readonly gfx: Graphics;
-  private readonly sparkleGfx: Graphics;
   private shakeT = 0;
   private felled = false;
   private baseTint: number;
@@ -108,7 +107,6 @@ export class HarvestableTree extends Container {
   private spreadTimer: number | null = null;
   private emergeTimer: number | null = null;
   private emergeDuration = TREE_EMERGE_SEC;
-  private growthAnimT = 0;
   private onGrown?: (tree: HarvestableTree) => void;
   private onSpread?: (tree: HarvestableTree) => void;
   private onAppleDrop?: (worldX: number, worldY: number) => void;
@@ -163,11 +161,6 @@ export class HarvestableTree extends Container {
     this.gfx.scale.set(profile.scale);
     this.gfx.tint = this.baseTint;
     this.addChild(this.gfx);
-
-    this.sparkleGfx = new Graphics();
-    this.sparkleGfx.label = 'GrowthSparkle';
-    this.sparkleGfx.visible = false;
-    this.addChild(this.sparkleGfx);
 
     this.healthBar = new HealthBar({
       maxHp: this.maxHp,
@@ -328,8 +321,6 @@ export class HarvestableTree extends Container {
     this.redrawTreeGfx();
     this.applyGrowthVisual();
 
-    // 触发生长动画与闪光
-    this.growthAnimT = 0.5;
     this.onGrown?.(this);
     return true;
   }
@@ -342,23 +333,25 @@ export class HarvestableTree extends Container {
     this.zIndex = this.worldY;
   }
 
-  update(deltaMS: number): void {
+  update(deltaMS: number, speedup = 1.0): void {
     if (this.destroyed) return;
-    const dt = deltaMS / 1000;
+    const realDt = deltaMS / 1000;
+    const dt = realDt * Math.max(0.1, speedup);
+
     if (this.shakeT > 0) {
-      this.shakeT = Math.max(0, this.shakeT - dt);
+      this.shakeT = Math.max(0, this.shakeT - realDt);
       this.syncToWorld();
     }
 
     // 树苗淡入
     if (this.emergeTimer !== null) {
-      this.emergeTimer -= dt;
+      this.emergeTimer -= realDt;
       if (this.emergeTimer <= 0) {
         this.emergeTimer = null;
       }
     }
 
-    // 自动平滑生长计时
+    // 自动平滑生长计时（受到森林抱团 speedup 庇护加速）
     if (this.isAlive && this.growthTimer !== null) {
       this.growthTimer -= dt;
       if (this.growthTimer <= 0) {
@@ -366,7 +359,7 @@ export class HarvestableTree extends Container {
       }
     }
 
-    // 自动播种扩散计时
+    // 自动播种扩散计时（受到森林抱团 speedup 庇护加速）
     if (this.isAlive && this.spreadTimer !== null) {
       this.spreadTimer -= dt;
       if (this.spreadTimer <= 0) {
@@ -390,27 +383,8 @@ export class HarvestableTree extends Container {
       }
     }
 
-    // 生长过渡/进阶弹跳补间动画
-    const profile = TREE_SIZE_PROFILE[this.size];
-    if (this.growthAnimT > 0) {
-      this.growthAnimT = Math.max(0, this.growthAnimT - dt);
-      const progress = 1 - this.growthAnimT / 0.5;
-      const bounce = Math.sin(progress * Math.PI) * 0.28;
-      const currentScale = profile.scale * (1 + bounce);
-      this.gfx.scale.set(currentScale);
-
-      this.sparkleGfx.visible = true;
-      this.sparkleGfx.clear();
-      const radius = (12 + progress * 24) * profile.scale;
-      const alpha = Math.sin((1 - progress) * Math.PI) * 0.85;
-      this.sparkleGfx
-        .circle(0, profile.hpBarY * 0.4, radius)
-        .stroke({ width: 3, color: 0x88ff66, alpha });
-    } else {
-      this.applyGrowthVisual();
-      this.sparkleGfx.visible = false;
-    }
-
+    // 平滑线性放大与色彩渲染更新（与草一致，无强加特效）
+    this.applyGrowthVisual();
     this.healthBar.update(deltaMS);
   }
 

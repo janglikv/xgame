@@ -92,26 +92,32 @@ export const TREE_GROWTH_TIME_SEC: Record<TreeSize, number | null> = {
 /** 各体型向四周播种树苗的间隔（秒），null 表示不扩散 */
 export const TREE_SPREAD_TIME_SEC: Record<TreeSize, number | null> = {
   sapling: null,
-  medium: 120,
-  large: 90,
+  medium: 80,
+  large: 55,
 };
 
 /** 一次扩散尝试的新树苗数量 */
 export const TREE_SPREAD_ATTEMPTS: Record<TreeSize, number> = {
   sapling: 0,
   medium: 1,
-  large: 1,
+  large: 2,
 };
 
-/** 新树苗相对母树的距离（世界像素） */
-export const TREE_SPREAD_RADIUS_MIN = 120;
-export const TREE_SPREAD_RADIUS_MAX = 280;
+/** 新树苗相对母树的聚集落点距离（世界像素） */
+export const TREE_SPREAD_RADIUS_MIN = 45;
+export const TREE_SPREAD_RADIUS_MAX = 135;
 
-/** 树木之间最小间距（世界像素），避免树木挤在一起死锁 */
-export const TREE_MIN_SPACING = 88;
+/** 树木之间最小保护间距（世界像素），适度紧凑以形成密林冠层 */
+export const TREE_MIN_SPACING = 48;
 
 /** 场上树木数量上限 */
-export const TREE_MAX_COUNT = 150;
+export const TREE_MAX_COUNT = 200;
+
+/** 森林抱团庇护半径（世界像素） */
+export const TREE_CLUSTER_RADIUS = 120;
+
+/** 森林抱团加速倍率（周围有 2 棵以上同伴时加速 35%） */
+export const TREE_CLUSTER_SPEEDUP = 1.35;
 
 /** 获取树的下一阶段体型 */
 export function nextTreeSize(size: TreeSize): TreeSize | null {
