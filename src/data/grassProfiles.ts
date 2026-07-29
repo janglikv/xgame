@@ -77,7 +77,7 @@ export const TREE_GRASS_COMPETITION_RADIUS: Record<string, number> = {
 export const GRASS_GREEN_LAND_MARGIN = 96;
 
 /** 场上草丛数量上限 */
-export const GRASS_MAX_COUNT = 1600;
+export const GRASS_MAX_COUNT = 800;
 
 /** 屏外草不更新摇摆的边距（世界像素，相对镜头可视区） */
 export const GRASS_VIEW_CULL_MARGIN = 120;
