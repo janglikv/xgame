@@ -74,6 +74,7 @@ export class EcologySpawnerSystem {
   private naturalAnimalTimer = 20;
   private naturalWolfTimer = 35;
   private naturalPineTimer = 18;
+  private totalHorsesSpawned = 0;
   private readonly rng = new SeededRandom(0x9e3779b9);
 
   constructor(private readonly hooks: EcologySpawnerHooks) {}
@@ -91,7 +92,7 @@ export class EcologySpawnerSystem {
 
   /**
    * 草繁时自然孕育牛/马（伪随机，马多了才生成牛）：
-   * 当存活的马数量 < 3 匹时只生成马；只有当马数量 >= 3 且马的数量多于牛时，才生成牛。
+   * 记录累计诞生的马匹数，避免狼捕食马导致“马存活数永远达不到阈值”而卡死牛的生成。
    */
   private tickNaturalAnimalSpawning(
     dt: number,
@@ -127,7 +128,7 @@ export class EcologySpawnerSystem {
       if (!isOnGreenLand(spawnX, spawnY, mapDef, 255)) return;
       if (this.hooks.isGrassTooCloseToTrees(spawnX, spawnY)) return;
 
-      // 马多了才生成牛
+      // 马多了才生成牛：当累计诞生马匹 >= 2（或当前存活马 >= 2）且牛数量 <= 马数量时允许生成牛
       const horseCount = creatures
         ? countAliveWithKind(creatures, 'horse')
         : 0;
@@ -135,11 +136,16 @@ export class EcologySpawnerSystem {
         ? countAliveWithKind(creatures, 'cow')
         : 0;
 
-      const HORSES_THRESHOLD_FOR_COW = 3;
+      const hasHorseFoundation =
+        this.totalHorsesSpawned >= 2 || horseCount >= 2;
       const chosenKind: EnemyKind =
-        horseCount >= HORSES_THRESHOLD_FOR_COW && horseCount > cowCount
+        hasHorseFoundation && cowCount <= horseCount
           ? 'cow'
           : 'horse';
+
+      if (chosenKind === 'horse') {
+        this.totalHorsesSpawned += 1;
+      }
 
       this.hooks.onSpawnNaturalAnimal(chosenKind, spawnX, spawnY);
     }
