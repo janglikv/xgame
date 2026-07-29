@@ -20,7 +20,12 @@ import {
   OUTLINE_PX_CHARACTER,
   paddedFootAnchorY,
 } from '../utils/outlineTexture';
-import { getRuntimeTreeObstacles, isOnLand, landRectOf } from '../data/maps';
+import {
+  getRuntimeTreeObstacles,
+  isOnGreenLand,
+  isOnLand,
+  landRectOf,
+} from '../data/maps';
 
 const SPIDER_URL = '/assets/spider/spider.png';
 
@@ -260,8 +265,6 @@ export type CreatureEcologyContext = {
   creatures: ReadonlyArray<Spider>;
   /** 地图定义（用于动物避开海岸与海面） */
   mapDef?: import('../data/maps').LevelMapDef;
-  /** 牛马拉粑粑生成天然肥料 */
-  spawnDung?: (x: number, y: number) => void;
   /** 吃掉地上的苹果等 */
   consumePickup: (pickup: {
     itemId: string;
@@ -276,6 +279,13 @@ export type CreatureEcologyContext = {
   consumeGrass: (
     grass: EcologyGrass,
   ) => 'small' | 'medium' | 'large' | null;
+  /**
+   * 网格加速：最近可啃大草（牛马优先用，避免扫全表）
+   */
+  findNearestLargeGrass?: (
+    x: number,
+    y: number,
+  ) => { grass: EcologyGrass; dist: number } | null;
   /** 移除死亡生物（猪吃鸡 / 饿死等） */
   removeCreature: (creature: Spider) => void;
 };
@@ -828,6 +838,8 @@ export class Spider extends Container implements WorldActor {
       preferFar?: number;
       /** true 时用 patrol 姿态（踱步）；false 用 chase（找食感） */
       leisurely?: boolean;
+      /** 只走绿地，避开沙滩（牛马觅食区） */
+      greenOnly?: boolean;
     },
   ): boolean {
     const radius = Math.max(40, options.radius);
@@ -836,6 +848,7 @@ export class Spider extends Container implements WorldActor {
     const pauseMax = options.pauseMax ?? 0.18;
     const preferFar = options.preferFar ?? 0.55;
     const leisurely = options.leisurely ?? false;
+    const greenOnly = options.greenOnly ?? false;
 
     this.aiState = leisurely ? 'patrol' : 'chase';
 
@@ -844,6 +857,7 @@ export class Spider extends Container implements WorldActor {
         centerX: options.centerX,
         centerY: options.centerY,
         preferFar,
+        greenOnly,
       });
     };
 
@@ -880,6 +894,7 @@ export class Spider extends Container implements WorldActor {
   /**
    * 采游荡航点。
    * center 缺省 = 当前位置；preferFar 控制近/远环带。
+   * greenOnly：只落在绿地上（与草生长区一致，避开沙滩）。
    */
   protected pickSearchWaypoint(
     radius: number,
@@ -887,10 +902,12 @@ export class Spider extends Container implements WorldActor {
       centerX?: number;
       centerY?: number;
       preferFar?: number;
+      greenOnly?: boolean;
     },
   ): void {
     const eco = this.ecology;
-    const samples = 8;
+    const samples = 12;
+    const greenOnly = opts?.greenOnly ?? false;
     const cx = opts?.centerX ?? this.worldX;
     const cy = opts?.centerY ?? this.worldY;
     const preferFar = opts?.preferFar ?? 0.55;
@@ -899,9 +916,34 @@ export class Spider extends Container implements WorldActor {
       opts?.centerX !== undefined && opts?.centerY !== undefined;
     const preferAngle = this.facingDir > 0 ? 0 : Math.PI;
 
+    // 默认回落：岛中心方向，避免采样全失败时仍走向沙滩
     let bestX = cx + radius * 0.4;
     let bestY = cy;
+    if (eco?.mapDef) {
+      const land = landRectOf(eco.mapDef);
+      const islandCx = land.x + land.w * 0.5;
+      const islandCy = land.y + land.h * 0.5;
+      const toCx = islandCx - this.worldX;
+      const toCy = islandCy - this.worldY;
+      const d = Math.hypot(toCx, toCy);
+      if (d > 1e-3) {
+        const step = Math.min(radius * 0.55, d * 0.35);
+        bestX = this.worldX + (toCx / d) * step;
+        bestY = this.worldY + (toCy / d) * step;
+      } else {
+        bestX = islandCx;
+        bestY = islandCy;
+      }
+    }
     let bestScore = -Infinity;
+
+    const walkOk = (x: number, y: number): boolean => {
+      if (!eco?.mapDef) return true;
+      if (greenOnly) {
+        return isOnGreenLand(x, y, eco.mapDef);
+      }
+      return isOnLand(x, y, eco.mapDef, 48);
+    };
 
     for (let i = 0; i < samples; i++) {
       // preferFar 高 → 更多远点；低 → 更贴锚点（食物区踱步）
@@ -918,10 +960,7 @@ export class Spider extends Container implements WorldActor {
       const x = cx + Math.cos(angle) * r;
       const y = cy + Math.sin(angle) * r;
 
-      // 严格检查：如果采样航点落入海中或沙滩边缘，直接丢弃该点
-      if (eco?.mapDef && !isOnLand(x, y, eco.mapDef, 48)) {
-        continue;
-      }
+      if (!walkOk(x, y)) continue;
 
       let score = Math.random() * 22;
       if (!anchored) {
@@ -932,13 +971,19 @@ export class Spider extends Container implements WorldActor {
         score += Math.abs(r - radius * 0.55) * -0.08;
       }
 
-      // 海岸避让偏好：如果动物本身靠近海岸，大幅给指向岛中心的方向加分，引导自动掉头回内陆
+      // 靠近海岸 / 已在沙滩：大幅偏向岛中心
       if (eco?.mapDef) {
         const land = landRectOf(eco.mapDef);
         const islandCx = land.x + land.w * 0.5;
         const islandCy = land.y + land.h * 0.5;
-        if (!isOnLand(this.worldX, this.worldY, eco.mapDef, 180)) {
-          const toCenterAngle = Math.atan2(islandCy - this.worldY, islandCx - this.worldX);
+        const nearCoast = greenOnly
+          ? !isOnGreenLand(this.worldX, this.worldY, eco.mapDef)
+          : !isOnLand(this.worldX, this.worldY, eco.mapDef, 180);
+        if (nearCoast) {
+          const toCenterAngle = Math.atan2(
+            islandCy - this.worldY,
+            islandCx - this.worldX,
+          );
           score += Math.cos(angle - toCenterAngle) * 50;
         }
       }

@@ -27,6 +27,10 @@ import { GodModeController } from '../systems/GodModeController';
 import { HarvestWorld } from '../systems/HarvestWorld';
 import { Inventory } from '../systems/Inventory';
 import {
+  GRASS_FAR_LOD_ZOOM_MUL,
+  GRASS_VIEW_CULL_MARGIN,
+} from '../data/grassProfiles';
+import {
   SolidResolver,
   type SolidContext,
 } from '../systems/SolidResolver';
@@ -91,6 +95,8 @@ export type LevelSceneOptions = {
 export class LevelScene extends Container implements GameScene {
   private readonly worldRoot: Container;
   private readonly worldMap: WorldMap;
+  /** 全景/屏外草：不参与角色每帧 z 排序 */
+  private readonly grassFarLayer: Container;
   private readonly sortLayer: Container;
   private readonly nightOverlay: NightOverlay;
 
@@ -158,6 +164,13 @@ export class LevelScene extends Container implements GameScene {
     this.worldMap = new WorldMap(this.mapDef);
     this.worldRoot.addChild(this.worldMap);
 
+    // 草 far 层在角色层之下；全景时全部草挂这里
+    this.grassFarLayer = new Container();
+    this.grassFarLayer.label = 'GrassFarLayer';
+    this.grassFarLayer.sortableChildren = true;
+    this.grassFarLayer.eventMode = 'none';
+    this.worldRoot.addChild(this.grassFarLayer);
+
     this.sortLayer = new Container();
     this.sortLayer.label = 'SortLayer';
     this.sortLayer.sortableChildren = true;
@@ -173,6 +186,7 @@ export class LevelScene extends Container implements GameScene {
 
     this.harvest = new HarvestWorld({
       sortLayer: this.sortLayer,
+      grassFarLayer: this.grassFarLayer,
       inventory: this.inventory,
       getMapDef: () => this.mapDef,
       persistMapDraft: () => this.persistMapDraft(),
@@ -460,12 +474,16 @@ export class LevelScene extends Container implements GameScene {
       })),
       creatures: this.spiders,
       mapDef: this.mapDef,
-      spawnDung: (x, y) => this.harvest.spawnDung(x, y),
       consumePickup: (p) => {
         const found = this.harvest.pickups.find((item) => item === p);
         if (found) this.harvest.consumePickup(found);
       },
       consumeGrass: (g) => this.harvest.consumeGrass(g),
+      findNearestLargeGrass: (x, y) => {
+        const hit = this.harvest.findNearestLargeGrass(x, y);
+        if (!hit) return null;
+        return { grass: hit.grass, dist: hit.dist };
+      },
       removeCreature: (creature) => {
         this.removeCreatureEntity(creature);
       },
@@ -736,9 +754,36 @@ export class LevelScene extends Container implements GameScene {
       }
     }
 
-    this.harvest.tickTrees(deltaMS, this.spiders);
+    this.updateGrassLod();
+    this.harvest.tickTrees(deltaMS, this.spiders, this.grassViewBounds());
     this.harvest.update(deltaMS, player.worldX, player.worldY);
     this.sortDepth();
+  }
+
+  /** 全景 zoom → 草退出角色深度排序 */
+  private updateGrassLod(): void {
+    const minZ = this.camera.getMinZoom();
+    const far =
+      this.camera.currentZoom <= minZ * GRASS_FAR_LOD_ZOOM_MUL;
+    this.harvest.setGrassLodFar(far);
+  }
+
+  /** 镜头世界可视区（含边距），供草屏外剔除 */
+  private grassViewBounds(): {
+    minX: number;
+    maxX: number;
+    minY: number;
+    maxY: number;
+  } {
+    const z = Math.max(0.05, this.camera.currentZoom);
+    const halfW = this.camera.width / (2 * z) + GRASS_VIEW_CULL_MARGIN;
+    const halfH = this.camera.height / (2 * z) + GRASS_VIEW_CULL_MARGIN;
+    return {
+      minX: this.camera.x - halfW,
+      maxX: this.camera.x + halfW,
+      minY: this.camera.y - halfH,
+      maxY: this.camera.y + halfH,
+    };
   }
 
   private applySpiderAttack(hit: {

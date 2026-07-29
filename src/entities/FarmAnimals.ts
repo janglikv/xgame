@@ -7,7 +7,8 @@ import {
   type SpiderOptions,
 } from './Spider';
 import type { BodyProfileId } from '../data/bodyProfiles';
-import { getRuntimeTreeObstacles } from '../data/maps';
+import { GRASS_ANIMAL_RETARGET_SEC } from '../data/grassProfiles';
+import { getRuntimeTreeObstacles, isOnGreenLand, landRectOf } from '../data/maps';
 
 export type FarmAnimalOptions = Pick<SpiderOptions, 'scale' | 'maxHp'>;
 
@@ -33,40 +34,12 @@ const ANIMAL_SEPARATION_SPEED = 78;
 const FOOT_ANCHOR_Y = 0.92;
 const HP_BAR_OFFSET_Y = 720;
 
-/**
- * 日常移动：
- * - 有食物 → 在食物周围转悠（路过够近且饿了就吃）
- * - 没食物 → 更大范围到处走着找
- * - 饿急了 → 更快、更远
- */
+/** 日常闲逛（当前位置滚动） */
 const ANIMAL_ROAM = {
-  /** 日常闲逛（当前位置滚动） */
   idleRadius: 340,
   idleSpeed: 64,
   idlePauseMin: 0.2,
   idlePauseMax: 0.95,
-  /** 有食物时在食物区踱步 */
-  grazeRadius: 150,
-  grazeSpeed: 58,
-  grazePauseMin: 0.28,
-  grazePauseMax: 1.15,
-  /** 进入「围着食物转」的距离（比 graze 略大） */
-  foodZoneEnter: 200,
-  /** 无食物时的搜索游荡 */
-  searchRadius: 560,
-  searchSpeed: 82,
-  searchPauseMin: 0.08,
-  searchPauseMax: 0.4,
-  /** 开始扩大搜索 / 极饿（阈值抬高，平时不狂奔） */
-  panicAt: 0.68,
-  desperateAt: 0.88,
-  sensePanicMul: 1.35,
-  senseDesperateMul: 1.9,
-  searchRadiusPanic: 640,
-  searchRadiusDesperate: 820,
-  speedPanicMul: 1.2,
-  speedDesperateMul: 1.45,
-  pauseMaxDesperate: 0.22,
 } as const;
 
 /** 猪：找苹果树睡觉 + 饿了吃掉落苹果 */
@@ -138,62 +111,6 @@ function clearOfTreeSolids(
     if (!moved) break;
   }
   return { x: px, y: py };
-}
-
-/** 按饥饿程度缩放感知与无食物搜索强度 */
-function hungerSenseAndSearch(
-  hunger: number,
-  baseSense: number,
-  baseForageSpeed: number,
-): {
-  sense: number;
-  searchRadius: number;
-  searchSpeed: number;
-  pauseMin: number;
-  pauseMax: number;
-  approachSpeed: number;
-  panicking: boolean;
-  desperate: boolean;
-} {
-  const desperate = hunger >= ANIMAL_ROAM.desperateAt;
-  const panicking = hunger >= ANIMAL_ROAM.panicAt;
-  if (!panicking) {
-    return {
-      sense: baseSense,
-      searchRadius: ANIMAL_ROAM.searchRadius,
-      searchSpeed: ANIMAL_ROAM.searchSpeed,
-      pauseMin: ANIMAL_ROAM.searchPauseMin,
-      pauseMax: ANIMAL_ROAM.searchPauseMax,
-      approachSpeed: baseForageSpeed,
-      panicking: false,
-      desperate: false,
-    };
-  }
-  const t = desperate
-    ? 1
-    : (hunger - ANIMAL_ROAM.panicAt) /
-      (ANIMAL_ROAM.desperateAt - ANIMAL_ROAM.panicAt);
-  const senseMul =
-    ANIMAL_ROAM.sensePanicMul +
-    t * (ANIMAL_ROAM.senseDesperateMul - ANIMAL_ROAM.sensePanicMul);
-  const speedMul =
-    ANIMAL_ROAM.speedPanicMul +
-    t * (ANIMAL_ROAM.speedDesperateMul - ANIMAL_ROAM.speedPanicMul);
-  return {
-    sense: baseSense * senseMul,
-    searchRadius:
-      ANIMAL_ROAM.searchRadiusPanic +
-      t *
-        (ANIMAL_ROAM.searchRadiusDesperate - ANIMAL_ROAM.searchRadiusPanic),
-    searchSpeed: ANIMAL_ROAM.searchSpeed * speedMul,
-    pauseMin: 0.03,
-    pauseMax: desperate
-      ? ANIMAL_ROAM.pauseMaxDesperate
-      : ANIMAL_ROAM.searchPauseMax * 0.7,
-    approachSpeed: baseForageSpeed * speedMul,
-    panicking: true,
-    desperate,
-  };
 }
 
 /**
@@ -775,56 +692,46 @@ export class Pig extends Spider {
   }
 }
 
-/** 食草动物（牛 / 马）共用觅食参数 */
+/** 食草动物（牛 / 马）共用参数 */
 type HerbivoreEco = {
-  /** 饥饿增长速度：约 1/hungerPerSec 秒从 0→1 */
   hungerPerSec: number;
-  /** 开始找草 */
-  seekGrassAt: number;
-  /** 感知草半径 */
-  grassSense: number;
-  /** 吃到距离 */
   eatRange: number;
-  /** 觅食移速 */
+  /** 饿时移速 */
   forageSpeed: number;
-  /** 啃不同体型草（按啃前体型）减少的饥饿 */
+  /** 饱时移速（更慢） */
+  fullSpeed: number;
   grassFeed: { small: number; medium: number; large: number };
-  /** 开局饥饿 */
   startHunger: number;
 };
 
 const COW_ECO: HerbivoreEco = {
   hungerPerSec: 0.02,
-  seekGrassAt: 0.28,
-  grassSense: 580,
   eatRange: 38,
   forageSpeed: 72,
+  fullSpeed: 28,
   grassFeed: { small: 0.22, medium: 0.4, large: 0.62 },
   startHunger: 0.25,
 };
 
 const HORSE_ECO: HerbivoreEco = {
   hungerPerSec: 0.024,
-  seekGrassAt: 0.26,
-  grassSense: 640,
   eatRange: 36,
   forageSpeed: 108,
+  fullSpeed: 42,
   grassFeed: { small: 0.18, medium: 0.34, large: 0.52 },
   startHunger: 0.25,
 };
 
-
-
-
 /**
- * 食草基类：自由寻找最近的大草走过去直接吃掉（草消失）；饿死。
- * 无认领机制，无领地巡视。
+ * 食草基类：只找最近的大草吃；饱了走慢、饿了走快；没草会饿死。
+ * 无闲逛。
  */
 abstract class GrassEater extends Spider {
   private hunger: number;
   private readonly ecoCfg: HerbivoreEco;
-  /** 排泄粑粑倒计时（15s ~ 30s，频率翻倍） */
-  private poopTimer = 10 + Math.random() * 12.5;
+  /** 锁定的大草目标（降频重选） */
+  private grassTarget: CreatureEcologyContext['grasses'][number] | null = null;
+  private retargetT = 0;
 
   protected constructor(
     worldX: number,
@@ -847,16 +754,55 @@ abstract class GrassEater extends Spider {
     return this.hunger;
   }
 
-  private tickPoop(dt: number): void {
-    if (!this.isAlive || this.destroyed || !this.ecology?.spawnDung) return;
-    this.poopTimer -= dt;
-    if (this.poopTimer <= 0) {
-      this.poopTimer = 17.5 + Math.random() * 12.5;
-      const backAngle = (this.facingDir > 0 ? Math.PI : 0) + (Math.random() - 0.5) * 0.5;
-      const dungX = this.worldX + Math.cos(backAngle) * 12;
-      const dungY = this.worldY + Math.sin(backAngle) * 12;
-      this.ecology.spawnDung(dungX, dungY);
+  /** 越饿越快：hunger 0→fullSpeed，1→forageSpeed */
+  private moveSpeed(): number {
+    const cfg = this.ecoCfg;
+    const t = Math.min(1, Math.max(0, this.hunger));
+    return cfg.fullSpeed + t * (cfg.forageSpeed - cfg.fullSpeed);
+  }
+
+  /** 场上最近一丛可啃的大草（优先网格） */
+  private findNearestGrass(
+    eco: CreatureEcologyContext,
+  ): { grass: CreatureEcologyContext['grasses'][number]; dist: number } | null {
+    if (eco.findNearestLargeGrass) {
+      return eco.findNearestLargeGrass(this.worldX, this.worldY);
     }
+    let best: CreatureEcologyContext['grasses'][number] | null = null;
+    let bestD = Infinity;
+    for (const g of eco.grasses) {
+      if (g.size !== 'large') continue;
+      const grazable =
+        'isGrazable' in g ? (g as { isGrazable: boolean }).isGrazable : true;
+      if (!grazable) continue;
+      const d = Math.hypot(g.worldX - this.worldX, g.worldY - this.worldY);
+      if (d < bestD) {
+        bestD = d;
+        best = g;
+      }
+    }
+    return best ? { grass: best, dist: bestD } : null;
+  }
+
+  private refreshGrassTarget(
+    eco: CreatureEcologyContext,
+    force: boolean,
+  ): { grass: CreatureEcologyContext['grasses'][number]; dist: number } | null {
+    if (!force && this.grassTarget) {
+      const g = this.grassTarget;
+      const still =
+        g.size === 'large' &&
+        ('isGrazable' in g ? (g as { isGrazable: boolean }).isGrazable : true) &&
+        eco.grasses.includes(g as (typeof eco.grasses)[number]);
+      if (still) {
+        const dist = Math.hypot(g.worldX - this.worldX, g.worldY - this.worldY);
+        return { grass: g, dist };
+      }
+      this.grassTarget = null;
+    }
+    const nearest = this.findNearestGrass(eco);
+    this.grassTarget = nearest?.grass ?? null;
+    return nearest;
   }
 
   protected override updateAI(
@@ -866,73 +812,80 @@ abstract class GrassEater extends Spider {
     playerBodyProfileId: BodyProfileId | null = null,
   ): { moved: boolean; attackHit: SpiderAttackHit | null } {
     if (this.locked) {
+      this.grassTarget = null;
       return super.updateAI(dt, playerX, playerY, playerBodyProfileId);
     }
 
-    this.tickPoop(dt);
-
     const cfg = this.ecoCfg;
     this.hunger = Math.min(1, this.hunger + cfg.hungerPerSec * dt);
-
     const eco = this.ecology;
+    const speed = this.moveSpeed();
 
-    // 饿死
     if (eco && this.hunger >= 1) {
       this.applyDamage(this.maximumHp + 1);
       if (!this.isAlive) eco.removeCreature(this);
       return { moved: false, attackHit: null };
     }
 
-    const hs = hungerSenseAndSearch(this.hunger, cfg.grassSense, cfg.forageSpeed);
-
-    if (eco && this.hunger >= cfg.seekGrassAt) {
-      // 找感知范围内最近的大草
-      let best: CreatureEcologyContext['grasses'][number] | null = null;
-      let bestD = hs.sense;
-      for (const g of eco.grasses) {
-        if (g.size !== 'large') continue;
-        const grazable = 'isGrazable' in g ? (g as { isGrazable: boolean }).isGrazable : true;
-        if (!grazable) continue;
-        const d = Math.hypot(g.worldX - this.worldX, g.worldY - this.worldY);
-        if (d < bestD) { bestD = d; best = g; }
-      }
-
-      if (best) {
-        // 够近则直接吃掉（草立即消失）
-        if (bestD <= cfg.eatRange) {
-          const sizeBefore = best.size;
-          const result = eco.consumeGrass(best);
-          if (result) {
-            const feed = cfg.grassFeed[result] ?? cfg.grassFeed[sizeBefore] ?? cfg.grassFeed.medium;
-            this.hunger = Math.max(0, this.hunger - feed);
-          }
-          return { moved: false, attackHit: null };
-        }
-        // 向最近大草走去
-        this.aiState = 'chase';
-        const moved = this.moveTowardAvoidingTrees(
-          best.worldX, best.worldY, hs.approachSpeed, dt, 8, 20,
-        );
-        return { moved, attackHit: null };
-      }
+    if (!eco) {
+      return { moved: false, attackHit: null };
     }
 
-    // 无草可觅：随机漫步
-    return {
-      moved: this.updateSearchRoam(dt, {
-        radius: hs.searchRadius,
-        speed: hs.panicking ? hs.searchSpeed : ANIMAL_ROAM.idleSpeed,
-        pauseMin: hs.panicking ? hs.pauseMin : ANIMAL_ROAM.idlePauseMin,
-        pauseMax: hs.panicking ? hs.pauseMax : ANIMAL_ROAM.idlePauseMax,
-        preferFar: hs.panicking ? 0.72 : 0.58,
-        leisurely: !hs.panicking,
-      }),
-      attackHit: null,
-    };
+    this.retargetT -= dt;
+    const forceRetarget = this.retargetT <= 0 || !this.grassTarget;
+    if (forceRetarget) {
+      this.retargetT = GRASS_ANIMAL_RETARGET_SEC;
+    }
+    const nearest = this.refreshGrassTarget(eco, forceRetarget);
+
+    if (nearest) {
+      const { grass, dist } = nearest;
+      if (dist <= cfg.eatRange) {
+        const sizeBefore = grass.size;
+        const result = eco.consumeGrass(grass);
+        if (result) {
+          const feed =
+            cfg.grassFeed[result] ??
+            cfg.grassFeed[sizeBefore] ??
+            cfg.grassFeed.medium;
+          this.hunger = Math.max(0, this.hunger - feed);
+        }
+        this.grassTarget = null;
+        this.retargetT = 0;
+        return { moved: false, attackHit: null };
+      }
+      this.aiState = 'chase';
+      const moved = this.moveTowardAvoidingTrees(
+        grass.worldX,
+        grass.worldY,
+        speed,
+        dt,
+        8,
+        20,
+      );
+      return { moved, attackHit: null };
+    }
+
+    // 没草：若在沙滩，慢走回岛中心；否则站着等草长
+    if (eco.mapDef && !isOnGreenLand(this.worldX, this.worldY, eco.mapDef)) {
+      const land = landRectOf(eco.mapDef);
+      this.aiState = 'chase';
+      const moved = this.moveTowardAvoidingTrees(
+        land.x + land.w * 0.5,
+        land.y + land.h * 0.5,
+        speed,
+        dt,
+        8,
+        20,
+      );
+      return { moved, attackHit: null };
+    }
+
+    return { moved: false, attackHit: null };
   }
 }
 
-/** 牛：慢步觅食，大草更顶饱；没草可吃会饿死 */
+/** 牛：只找最近大草吃，饱了走慢；没草会饿死 */
 export class Cow extends GrassEater {
   constructor(worldX: number, worldY: number, options: FarmAnimalOptions = {}) {
     super(
@@ -950,7 +903,7 @@ export class Cow extends GrassEater {
   }
 }
 
-/** 马：跑得快、饿得也快；没草可吃会饿死 */
+/** 马：只找最近大草吃，饱了走慢、饿了跑快；没草会饿死 */
 export class Horse extends GrassEater {
   constructor(worldX: number, worldY: number, options: FarmAnimalOptions = {}) {
     super(
@@ -968,17 +921,326 @@ export class Horse extends GrassEater {
   }
 }
 
-export class Wolf extends RoamingAnimal {
+/** 狼：有限视野觅食；吃完后视野内就近找松树休息 */
+const WOLF_ECO = {
+  /** 饥饿增长（很慢，长时间休息） */
+  hungerPerSec: 0.003,
+  /** 开始猎食 */
+  seekPreyAt: 0.18,
+  /**
+   * 视野半径：发现猎物 / 发现歇脚松树（无透视，只认范围内的）
+   */
+  visionRange: 300,
+  /**
+   * 已锁定目标的追击记忆半径：略大于视野，贴边不立刻丢；
+   * 超出则彻底丢失，需重新进入视野才能锁定。
+   */
+  chaseMemory: 380,
+  eatRange: 54,
+  /** 扑杀移速（高于牛马） */
+  huntSpeed: 188,
+  /** 觅食巡游移速（视野内无猎物时） */
+  forageSpeed: 118,
+  /** 觅食巡游半径 */
+  forageRadius: 200,
+  walkSpeed: 96,
+  startHunger: 0.55,
+  /** 吃一顿回饱量 */
+  mealFeed: 0.55,
+  restArrive: 28,
+  restOffsetY: 40,
+  retargetCd: 0.22,
+  maxHp: 120,
+} as const;
+
+/** 可被狼吃的农场动物 label */
+const WOLF_PREY_LABELS = new Set(['Chicken', 'Pig', 'Cow', 'Horse']);
+
+/**
+ * 狼：视野内觅食猎杀；成功后在视野内就近找松树休息。
+ * 无「全图透视」。
+ */
+export class Wolf extends Spider {
+  private hunger: number = WOLF_ECO.startHunger;
+  private prey: Spider | null = null;
+  private restTree: EcologyTree | null = null;
+  private retargetCd = 0;
+  /** 刚吃完，优先在视野内找树歇 */
+  private wantRest = false;
+
   constructor(worldX: number, worldY: number, options: FarmAnimalOptions = {}) {
     super(
       worldX,
       worldY,
-      animalOptions(options, ANIMAL_SCALE.wolf, {
-        textureUrl: '/assets/wolf/wolf.png',
-        label: 'Wolf',
-        spriteLabel: 'WolfSprite',
-      }),
+      animalOptions(
+        { ...options, maxHp: options.maxHp ?? WOLF_ECO.maxHp },
+        ANIMAL_SCALE.wolf,
+        {
+          textureUrl: '/assets/wolf/wolf.png',
+          label: 'Wolf',
+          spriteLabel: 'WolfSprite',
+        },
+      ),
     );
+  }
+
+  get hunger01(): number {
+    return this.hunger;
+  }
+
+  /** 点是否在给定半径内（默认视野） */
+  private inVision(tx: number, ty: number, range?: number): boolean {
+    const r = range ?? WOLF_ECO.visionRange;
+    const dx = tx - this.worldX;
+    const dy = ty - this.worldY;
+    return dx * dx + dy * dy <= r * r;
+  }
+
+  protected override updateAI(
+    dt: number,
+    playerX: number,
+    playerY: number,
+    playerBodyProfileId: BodyProfileId | null = null,
+  ): { moved: boolean; attackHit: SpiderAttackHit | null } {
+    if (this.locked) {
+      this.prey = null;
+      return super.updateAI(dt, playerX, playerY, playerBodyProfileId);
+    }
+
+    this.hunger = Math.min(1, this.hunger + WOLF_ECO.hungerPerSec * dt);
+    if (this.retargetCd > 0) {
+      this.retargetCd = Math.max(0, this.retargetCd - dt);
+    }
+
+    const eco = this.ecology;
+    if (!eco) {
+      return { moved: false, attackHit: null };
+    }
+
+    // 1) 饿了：视野内觅食 / 追击
+    if (this.hunger >= WOLF_ECO.seekPreyAt) {
+      this.wantRest = false;
+      this.refreshPrey(eco);
+      if (this.prey) {
+        return this.huntPrey(dt, eco);
+      }
+      // 视野内无猎物：扩大巡游寻找（仍不是透视）
+      return this.forageRoam(dt);
+    }
+
+    this.prey = null;
+
+    // 2) 不饿 / 刚吃完：视野内就近松树休息
+    this.refreshRestTree(eco);
+    if (this.restTree) {
+      return this.goRestNearPine(dt, this.restTree);
+    }
+
+    // 3) 视野内没树：小范围走着找（与觅食同机制）
+    return this.forageRoam(dt, /* lookingForRest */ true);
+  }
+
+  /** 视野内觅食 / 找歇脚点游荡 */
+  private forageRoam(
+    dt: number,
+    lookingForRest = false,
+  ): { moved: boolean; attackHit: SpiderAttackHit | null } {
+    return {
+      moved: this.updateSearchRoam(dt, {
+        radius: lookingForRest
+          ? WOLF_ECO.forageRadius * 0.85
+          : WOLF_ECO.forageRadius,
+        speed: lookingForRest
+          ? WOLF_ECO.walkSpeed
+          : WOLF_ECO.forageSpeed,
+        pauseMin: 0.12,
+        pauseMax: lookingForRest ? 0.55 : 0.35,
+        preferFar: 0.62,
+        leisurely: lookingForRest,
+      }),
+      attackHit: null,
+    };
+  }
+
+  /**
+   * 刷新猎物：
+   * - 新锁定：必须在 visionRange 内
+   * - 已锁定：chaseMemory 内可继续追，超出则丢失
+   */
+  private refreshPrey(eco: CreatureEcologyContext): void {
+    if (this.prey) {
+      if (
+        this.prey.isAlive &&
+        !this.prey.destroyed &&
+        eco.creatures.includes(this.prey) &&
+        this.inVision(
+          this.prey.worldX,
+          this.prey.worldY,
+          WOLF_ECO.chaseMemory,
+        )
+      ) {
+        return;
+      }
+      this.prey = null;
+      this.retargetCd = WOLF_ECO.retargetCd;
+    }
+    if (this.retargetCd > 0) return;
+
+    let best: Spider | null = null;
+    let bestD: number = WOLF_ECO.visionRange;
+    for (const c of eco.creatures) {
+      if (c === this || !c.isAlive || c.destroyed) continue;
+      if (!WOLF_PREY_LABELS.has(c.label ?? '')) continue;
+      const d = Math.hypot(c.worldX - this.worldX, c.worldY - this.worldY);
+      if (d < bestD) {
+        bestD = d;
+        best = c;
+      }
+    }
+    this.prey = best;
+  }
+
+  private huntPrey(
+    dt: number,
+    eco: CreatureEcologyContext,
+  ): { moved: boolean; attackHit: SpiderAttackHit | null } {
+    const prey = this.prey;
+    if (!prey || !prey.isAlive || prey.destroyed) {
+      this.prey = null;
+      return { moved: false, attackHit: null };
+    }
+
+    // 追击中超出记忆距离 → 丢失
+    if (!this.inVision(prey.worldX, prey.worldY, WOLF_ECO.chaseMemory)) {
+      this.prey = null;
+      this.retargetCd = WOLF_ECO.retargetCd;
+      return this.forageRoam(dt);
+    }
+
+    const dist = Math.hypot(
+      prey.worldX - this.worldX,
+      prey.worldY - this.worldY,
+    );
+    if (dist <= WOLF_ECO.eatRange) {
+      prey.applyDamage(prey.maximumHp + 1);
+      if (!prey.isAlive) {
+        eco.removeCreature(prey);
+      }
+      this.hunger = Math.max(0, this.hunger - WOLF_ECO.mealFeed);
+      this.wantRest = true;
+      this.prey = null;
+      this.restTree = null;
+      this.retargetCd = WOLF_ECO.retargetCd;
+      this.aiState = 'patrol';
+      return { moved: false, attackHit: null };
+    }
+
+    this.aiState = 'chase';
+    this.patrolPause = 0;
+    const moved = this.moveTowardAvoidingTrees(
+      prey.worldX,
+      prey.worldY,
+      WOLF_ECO.huntSpeed,
+      dt,
+      WOLF_ECO.eatRange * 0.4,
+      22,
+    );
+    return { moved, attackHit: null };
+  }
+
+  /**
+   * 刷新歇脚松树：与觅食同一套视野。
+   * - 新目标：必须在 visionRange 内就近
+   * - 已锁定：chaseMemory 内可继续走向该树
+   */
+  private refreshRestTree(eco: CreatureEcologyContext): void {
+    if (this.restTree) {
+      const live = eco.trees.find(
+        (t) =>
+          t.kind === 'pine' &&
+          t.isAlive &&
+          Math.hypot(
+            t.worldX - this.restTree!.worldX,
+            t.worldY - this.restTree!.worldY,
+          ) < 12,
+      );
+      if (
+        live &&
+        this.inVision(live.worldX, live.worldY, WOLF_ECO.chaseMemory)
+      ) {
+        this.restTree = live;
+        return;
+      }
+      this.restTree = null;
+    }
+
+    let best: EcologyTree | null = null;
+    let bestD: number = WOLF_ECO.visionRange;
+    for (const t of eco.trees) {
+      if (!t.isAlive || t.kind !== 'pine') continue;
+      const d = Math.hypot(t.worldX - this.worldX, t.worldY - this.worldY);
+      if (d < bestD) {
+        bestD = d;
+        best = t;
+      }
+    }
+    this.restTree = best;
+  }
+
+  private restSpot(tree: EcologyTree): { x: number; y: number } {
+    const hash =
+      (Math.abs(Math.sin(this.worldX * 12.9898 + this.worldY * 78.233)) *
+        43758.5453) %
+      1;
+    const offsetX = (hash - 0.5) * 40;
+    const offsetY = WOLF_ECO.restOffsetY + (((hash * 17) % 1) - 0.5) * 14;
+    return clearOfTreeSolids(
+      tree.worldX + offsetX,
+      tree.worldY + offsetY,
+      22,
+    );
+  }
+
+  private goRestNearPine(
+    dt: number,
+    tree: EcologyTree,
+  ): { moved: boolean; attackHit: SpiderAttackHit | null } {
+    if (!tree.isAlive) {
+      this.restTree = null;
+      return { moved: false, attackHit: null };
+    }
+
+    // 走向歇脚点途中若树已远超记忆距离，放弃重觅
+    if (!this.inVision(tree.worldX, tree.worldY, WOLF_ECO.chaseMemory)) {
+      this.restTree = null;
+      return this.forageRoam(dt, true);
+    }
+
+    const spot = this.restSpot(tree);
+    const dist = Math.hypot(spot.x - this.worldX, spot.y - this.worldY);
+
+    if (dist <= WOLF_ECO.restArrive) {
+      this.aiState = 'patrol';
+      this.patrolPause = 1;
+      this.wantRest = false;
+      this.faceToward(tree.worldX, tree.worldY);
+      return { moved: false, attackHit: null };
+    }
+
+    this.aiState = 'chase';
+    this.patrolPause = 0;
+    const speed = this.wantRest
+      ? WOLF_ECO.walkSpeed * 1.1
+      : WOLF_ECO.walkSpeed;
+    const moved = this.moveTowardAvoidingTrees(
+      spot.x,
+      spot.y,
+      speed,
+      dt,
+      WOLF_ECO.restArrive * 0.65,
+      22,
+    );
+    return { moved, attackHit: null };
   }
 }
 

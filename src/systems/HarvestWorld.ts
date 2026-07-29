@@ -1,9 +1,10 @@
 import type { Container } from 'pixi.js';
 import {
+  GRASS_GRID_CELL,
+  GRASS_LOGIC_SLICES,
   GRASS_MAX_COUNT,
   GRASS_MIN_SPACING,
-  GRASS_OVERCROWD_CHECK_RADIUS,
-  GRASS_OVERCROWD_MAX_NEIGHBORS,
+  GRASS_PERSIST_DEBOUNCE_SEC,
   GRASS_SPREAD_ATTEMPTS,
   GRASS_SPREAD_RADIUS_MAX,
   GRASS_SPREAD_RADIUS_MIN,
@@ -13,8 +14,10 @@ import {
   HARVEST_MELEE_DAMAGE,
   HarvestableTree,
 } from '../entities/HarvestableTree';
-import { DungEntity } from '../entities/DungEntity';
-import { GrassEntity } from '../entities/GrassEntity';
+import {
+  GrassEntity,
+  type GrassViewBounds,
+} from '../entities/GrassEntity';
 import type { Spider } from '../entities/Spider';
 import {
   ItemPickup,
@@ -24,6 +27,7 @@ import type { PlayerCharacterBase } from '../entities/PlayerCharacterBase';
 import {
   addRuntimeTreeObstacle,
   allocGrassId,
+  allocTreeId,
   grassIdOf,
   grassSizeOf,
   isOnGreenLand,
@@ -41,9 +45,15 @@ import {
   type MapTree,
 } from '../data/maps';
 import type { Inventory } from './Inventory';
+import { GrassSpatialIndex } from './GrassSpatialIndex';
 
 export type HarvestWorldHooks = {
   sortLayer: Container;
+  /**
+   * 全景 / 屏外草层：不参与角色每帧深度排序。
+   * 缺省时草始终在 sortLayer。
+   */
+  grassFarLayer?: Container;
   inventory: Inventory;
   getMapDef: () => LevelMapDef;
   /** 树从 def 移除 solid 后持久化草稿 */
@@ -56,13 +66,18 @@ export type HarvestWorldHooks = {
 
 /**
  * 可砍树 + 装饰草地 + 掉落拾取：生成、近战、自动生长、四面八方扩散、摧毁掉落、进包。
- * 投射物摧毁走 onTreeDestroyed（由 CombatSystem 回调）。
+ * 草：空间网格 + 全景 LOD 合批层 + 逻辑分片；投射物摧毁走 onTreeDestroyed。
  */
 export class HarvestWorld {
   readonly trees: HarvestableTree[] = [];
   readonly grasses: GrassEntity[] = [];
   readonly pickups: ItemPickup[] = [];
-  readonly dungs: DungEntity[] = [];
+
+  private readonly grassIndex = new GrassSpatialIndex<GrassEntity>(GRASS_GRID_CELL);
+  private grassLogicSlice = 0;
+  private lodFar = false;
+  private persistDirty = false;
+  private persistCooldown = 0;
 
   constructor(private readonly hooks: HarvestWorldHooks) {}
 
@@ -72,6 +87,7 @@ export class HarvestWorld {
       this.mountTree(t);
     }
     for (const g of normalizeGrasses(mapDef)) {
+      if (this.grasses.length >= GRASS_MAX_COUNT) break;
       this.mountGrass(g);
     }
   }
@@ -125,7 +141,7 @@ export class HarvestWorld {
           found.size = grownGrass.size;
         }
         this.hooks.afterWorldChange();
-        this.hooks.persistMapDraft();
+        this.markGrassPersistDirty();
       },
       onSpread: (source) => {
         this.trySpreadFrom(source);
@@ -139,12 +155,84 @@ export class HarvestWorld {
         }
         this.removeGrassEntity(withered);
         this.hooks.afterWorldChange();
-        this.hooks.persistMapDraft();
+        this.markGrassPersistDirty();
       },
     });
-    this.hooks.sortLayer.addChild(grass);
     this.grasses.push(grass);
+    this.grassIndex.insert(grass);
+    this.placeGrassDisplay(grass, /* forceInView */ this.lodFar);
     return grass;
+  }
+
+  private get farLayer(): Container {
+    return this.hooks.grassFarLayer ?? this.hooks.sortLayer;
+  }
+
+  /** 近景：屏内进 sortLayer；全景 / 屏外进 far 层 */
+  private placeGrassDisplay(grass: GrassEntity, inDepthSort: boolean): void {
+    if (!grass || grass.destroyed) return;
+    const target =
+      inDepthSort && !this.lodFar
+        ? this.hooks.sortLayer
+        : this.farLayer;
+    if (grass.parent !== target) {
+      // addChild 会自动从旧 parent 卸下；避免对已销毁节点操作
+      target.addChild(grass);
+    }
+    if (grass.destroyed) return;
+    grass.sortedForDepth = inDepthSort && !this.lodFar;
+    grass.zIndex = grass.worldY;
+  }
+
+  /** 由场景根据 zoom 设置全景 LOD */
+  setGrassLodFar(far: boolean): void {
+    if (this.lodFar === far) return;
+    this.lodFar = far;
+    for (const g of this.grasses) {
+      if (!g || g.destroyed) continue;
+      if (far) {
+        this.placeGrassDisplay(g, false);
+      } else if (g.isWitheringOut) {
+        this.placeGrassDisplay(g, true);
+      } else {
+        // 近景：先放 far，本帧 tick 再按可视区挂回 sortLayer
+        this.placeGrassDisplay(g, false);
+      }
+    }
+    // 全景：草层内按 Y 排一次即可，不进角色每帧 sort
+    if (far && this.hooks.grassFarLayer?.sortableChildren) {
+      this.hooks.grassFarLayer.sortChildren();
+    }
+  }
+
+  get isGrassLodFar(): boolean {
+    return this.lodFar;
+  }
+
+  /** 牛马：网格查最近可啃大草 */
+  findNearestLargeGrass(
+    x: number,
+    y: number,
+  ): { grass: GrassEntity; dist: number } | null {
+    const hit = this.grassIndex.findNearest(
+      x,
+      y,
+      (g) => g.size === 'large' && g.isGrazable,
+    );
+    if (!hit) return null;
+    return { grass: hit.item, dist: hit.dist };
+  }
+
+  private markGrassPersistDirty(): void {
+    this.persistDirty = true;
+  }
+
+  private flushGrassPersist(force = false): void {
+    if (!this.persistDirty) return;
+    if (!force && this.persistCooldown > 0) return;
+    this.persistDirty = false;
+    this.persistCooldown = GRASS_PERSIST_DEBOUNCE_SEC;
+    this.hooks.persistMapDraft();
   }
 
   /**
@@ -189,61 +277,13 @@ export class HarvestWorld {
 
     if (spawned > 0) {
       this.hooks.afterWorldChange();
-      this.hooks.persistMapDraft();
+      this.markGrassPersistDirty();
     }
   }
 
-  /** 排泄生出一堆天然有机肥料粑粑 */
-  spawnDung(x: number, y: number): DungEntity | null {
-    const mapDef = this.hooks.getMapDef();
-    if (!isOnGreenLand(x, y, mapDef, 255)) return null;
-
-    const dung = new DungEntity(x, y, {
-      onDepleted: (d) => {
-        const idx = this.dungs.indexOf(d);
-        if (idx >= 0) this.dungs.splice(idx, 1);
-        d.parent?.removeChild(d);
-        d.destroy({ children: true });
-      },
-    });
-    this.hooks.sortLayer.addChild(dung);
-    this.dungs.push(dung);
-    this.hooks.afterWorldChange();
-    return dung;
-  }
-
-  /** 获取处于某个坐标处的粑粑肥力实体（若有，作用半径随着养分消耗动态从 120px 逐渐收缩缩小） */
-  private findFertileDung(x: number, y: number): DungEntity | null {
-    for (const d of this.dungs) {
-      if (d.nutrient <= 0) continue;
-      const r = d.effectiveRadius;
-      const dx = d.worldX - x;
-      const dy = d.worldY - y;
-      if (dx * dx + dy * dy <= r * r) {
-        return d;
-      }
-    }
-    return null;
-  }
-
-  /** 与已有草丛是否过近（在粑粑肥力影响圈 120px 范畴内，草密度解禁允许翻 2 倍） */
+  /** 与已有草丛是否过近（网格邻域） */
   private isGrassTooClose(x: number, y: number, minDist: number): boolean {
-    const dung = this.findFertileDung(x, y);
-    // 在粑粑肥力圈内，最小间距缩小为 1/2（如 48px -> 24px），草的密度允许翻两倍
-    const effectiveMinDist = dung ? Math.max(16, minDist / 2) : minDist;
-    const min2 = effectiveMinDist * effectiveMinDist;
-
-    for (const g of this.grasses) {
-      const dx = g.worldX - x;
-      const dy = g.worldY - y;
-      if (dx * dx + dy * dy < min2) return true;
-    }
-
-    // 成功在肥沃的粑粑光环圈内落子生长新草，消耗 1 点养分
-    if (dung) {
-      dung.consumeNutrient(1);
-    }
-    return false;
+    return this.grassIndex.anyWithin(x, y, minDist);
   }
 
   /** 检查坐标 (x, y) 是否距离任何树木过近（树木遮荫与养分竞争，草无法存活生长） */
@@ -367,10 +407,13 @@ export class HarvestWorld {
   /** 移除草地实体 */
   removeGrassEntity(grass: GrassEntity): void {
     const idx = this.grasses.indexOf(grass);
-    if (idx < 0) return;
-    grass.parent?.removeChild(grass);
+    if (idx >= 0) {
+      this.grasses.splice(idx, 1);
+    }
+    this.grassIndex.remove(grass);
+    if (!grass || grass.destroyed) return;
+    // destroy 会从 parent 卸下；勿在 destroy 后再 addChild/换层
     grass.destroy({ children: true });
-    this.grasses.splice(idx, 1);
   }
 
   /**
@@ -397,7 +440,7 @@ export class HarvestWorld {
       );
     }
     this.hooks.afterWorldChange();
-    this.hooks.persistMapDraft();
+    this.markGrassPersistDirty();
     return before;
   }
 
@@ -435,85 +478,172 @@ export class HarvestWorld {
     for (const tree of this.trees) {
       tree.syncToWorld();
     }
+    // 草在 tick 里自行 sync；此处只补同步仍在深度排序层的可见株
     for (const grass of this.grasses) {
-      grass.syncToWorld();
+      if (grass.destroyed) continue;
+      if (grass.visible && grass.sortedForDepth) {
+        grass.syncToWorld(!this.lodFar);
+      }
     }
     for (const p of this.pickups) {
       p.syncToWorld();
     }
   }
 
-  tickTrees(deltaMS: number, creatures?: ReadonlyArray<Spider>): void {
+  /**
+   * @param view 镜头可视区（世界坐标）；近景屏外跳过摇摆并卸下 sortLayer
+   */
+  tickTrees(
+    deltaMS: number,
+    creatures?: ReadonlyArray<Spider>,
+    view?: GrassViewBounds | null,
+  ): void {
     for (const tree of this.trees) {
       tree.update(deltaMS);
     }
-    for (const dung of this.dungs.slice()) {
-      dung.update(deltaMS);
-    }
     const dt = deltaMS / 1000;
+    if (this.persistCooldown > 0) {
+      this.persistCooldown = Math.max(0, this.persistCooldown - dt);
+    }
+
     // 场景为空白（全岛无草）时，在绿色陆地上随机孵化 1 棵生命火种小草
     if (this.grasses.length === 0) {
       this.spawnInitialSeedGrass();
+      this.flushGrassPersist();
       return;
     }
 
-    // 固定本帧数量，避免扩散或老死导致数组变动影响迭代
-    const grassCount = this.grasses.length;
-    const overcrowdDistSq =
-      GRASS_OVERCROWD_CHECK_RADIUS * GRASS_OVERCROWD_CHECK_RADIUS;
+    const slices = Math.max(1, GRASS_LOGIC_SLICES);
+    this.grassLogicSlice = (this.grassLogicSlice + 1) % slices;
+    const slice = this.grassLogicSlice;
+    const lodFar = this.lodFar;
 
-    const mapDef = this.hooks.getMapDef();
-    for (let i = 0; i < grassCount; i++) {
-      const g = this.grasses[i];
-      if (!g) continue;
+    // 快照：update 中可能 onWither → removeGrassEntity 改数组
+    const snapshot = this.grasses.slice();
+    for (let i = 0; i < snapshot.length; i++) {
+      const g = snapshot[i];
+      if (!g || g.destroyed) continue;
 
-      // 精准绿色草地检查：一旦脱离草地落入黄色沙滩或海洋带，草无法存活，直接触发枯萎离场
-      if (!isOnGreenLand(g.worldX, g.worldY, mapDef, 255)) {
-        g.wither();
-      }
+      const runLogic = g.isWitheringOut || i % slices === slice;
+      g.update(deltaMS, {
+        view,
+        lodFar,
+        runLogic,
+        logicScale: runLogic && !g.isWitheringOut ? slices : 1,
+      });
 
-      // 树木遮荫与养分竞争检查：草在树附近（树冠遮挡范畴内）无法存活，直接触发枯萎离场
-      if (this.isGrassTooCloseToTrees(g.worldX, g.worldY)) {
-        g.wither();
-      }
+      // 本帧已销毁（枯萎结束）→ 禁止再换层 / 写 transform
+      if (g.destroyed) continue;
 
-      // 统计周围 90px 范围内的同伴草数量
-      let neighbors = 0;
-      for (let j = 0; j < grassCount; j++) {
-        if (i === j) continue;
-        const other = this.grasses[j];
-        if (!other) continue;
-        const dx = other.worldX - g.worldX;
-        const dy = other.worldY - g.worldY;
-        if (dx * dx + dy * dy <= overcrowdDistSq) {
-          neighbors += 1;
-          if (neighbors > GRASS_OVERCROWD_MAX_NEIGHBORS) break;
+      // 近景：屏内进深度排序层，屏外进 far 层
+      if (!lodFar) {
+        const wantSort =
+          g.isWitheringOut || (g.visible && g.inView(view));
+        if (wantSort !== g.sortedForDepth) {
+          this.placeGrassDisplay(g, wantSort);
         }
       }
-
-      // 粑粑肥力庇护判定
-      const fertileDung = this.findFertileDung(g.worldX, g.worldY);
-      if (fertileDung) {
-        // 处于肥力光环内的草受养分滋养，适度延缓自然衰老（衰老速度降低 30%）
-        g.applyFertilizerLongevity(dt);
-        if (neighbors > GRASS_OVERCROWD_MAX_NEIGHBORS) {
-          g.applyOvercrowded(1.2, dt);
-        }
-      } else {
-        // 无肥力庇护且过度拥挤（邻居 > 5），加速其寿命流逝（3.5 倍加速衰亡）
-        if (neighbors > GRASS_OVERCROWD_MAX_NEIGHBORS) {
-          g.applyOvercrowded(3.5, dt);
-        }
-      }
-
-      g.update(deltaMS);
     }
 
     this.tickNaturalAnimalSpawning(dt);
     this.tickNaturalWolfSpawning(dt, creatures);
+    this.tickNaturalPineSpawning(dt, creatures);
+    this.flushGrassPersist();
   }
 
   private naturalAnimalTimer = 20;
+  private naturalPineTimer = 18;
+
+  /** 场上存活狼数量 */
+  private countWolves(creatures?: ReadonlyArray<Spider>): number {
+    if (!creatures) return 0;
+    let n = 0;
+    for (const s of creatures) {
+      if (s.isAlive && !s.destroyed && s.label === 'Wolf') n += 1;
+    }
+    return n;
+  }
+
+  /**
+   * 有狼之后：自然生成松树（狼吃完爱在松树边休息）。
+   * 狼越多略加快长树；全岛松树有上限。
+   */
+  private tickNaturalPineSpawning(
+    dt: number,
+    creatures?: ReadonlyArray<Spider>,
+  ): void {
+    const wolfCount = this.countWolves(creatures);
+    if (wolfCount <= 0) {
+      this.naturalPineTimer = 18;
+      return;
+    }
+
+    const pineCount = this.trees.filter(
+      (t) => t.isAlive && t.treeKind === 'pine',
+    ).length;
+    /** 自然松树上限：基础 6 + 每只狼 +3，最多 24 */
+    const pineCap = Math.min(24, 6 + wolfCount * 3);
+    if (pineCount >= pineCap) {
+      this.naturalPineTimer = 25;
+      return;
+    }
+
+    this.naturalPineTimer -= dt;
+    if (this.naturalPineTimer > 0) return;
+
+    // 狼多时稍快长树
+    this.naturalPineTimer = Math.max(12, 28 - wolfCount * 3) + Math.random() * 10;
+
+    const mapDef = this.hooks.getMapDef();
+    const land = landRectOf(mapDef);
+    if (land.w <= 0 || land.h <= 0) return;
+
+    // 优先在草地区域附近落树，否则绿地随机
+    for (let attempt = 0; attempt < 16; attempt++) {
+      let x: number;
+      let y: number;
+      if (this.grasses.length > 0 && Math.random() < 0.7) {
+        const g =
+          this.grasses[Math.floor(Math.random() * this.grasses.length)]!;
+        const ang = Math.random() * Math.PI * 2;
+        const dist = 80 + Math.random() * 140;
+        x = g.worldX + Math.cos(ang) * dist;
+        y = g.worldY + Math.sin(ang) * dist;
+      } else {
+        x = land.x + 40 + Math.random() * Math.max(1, land.w - 80);
+        y = land.y + 40 + Math.random() * Math.max(1, land.h - 80);
+      }
+
+      if (!isOnGreenLand(x, y, mapDef, 255)) continue;
+      if (this.isTreeTooClose(x, y, 130)) continue;
+
+      const id = allocTreeId('pine');
+      const t: MapTree = { x, y, size: 'sapling', kind: 'pine', id };
+      mapDef.trees.push(t);
+      addRuntimeTreeObstacle({
+        x,
+        y,
+        r: treeSolidR('sapling'),
+        id,
+      });
+      this.mountTree(t);
+      this.hooks.afterWorldChange();
+      this.hooks.persistMapDraft();
+      return;
+    }
+  }
+
+  /** 树与树之间是否过近 */
+  private isTreeTooClose(x: number, y: number, minDist: number): boolean {
+    const min2 = minDist * minDist;
+    for (const t of this.trees) {
+      if (!t.isAlive) continue;
+      const dx = t.worldX - x;
+      const dy = t.worldY - y;
+      if (dx * dx + dy * dy < min2) return true;
+    }
+    return false;
+  }
 
   /**
    * 当全岛草繁水茂（草数量 >= 60 株）时，生态系统会自然孕育诞生牛、马、鸡、猪

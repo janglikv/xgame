@@ -31,31 +31,31 @@ export function grassBodyShapeScale(size: GrassSize): number {
 
 /** 各体型生长到下一阶段的时间（秒），null 表示已是最终期 */
 export const GRASS_GROWTH_TIME_SEC: Record<GrassSize, number | null> = {
-  small: 45,
-  medium: 75,
+  small: 90,
+  medium: 150,
   large: null,
 };
 
 /** 各体型向四周播种的间隔（秒），null 表示不扩散 */
 export const GRASS_SPREAD_TIME_SEC: Record<GrassSize, number | null> = {
-  small: 60,
-  medium: 45,
-  large: 30,
+  small: 90,
+  medium: 70,
+  large: 55,
 };
 
-/** 一次扩散尝试的新草数量（按体型：翻倍为 small:2, medium:4, large:6） */
+/** 一次扩散尝试的新草数量（按体型，控数量） */
 export const GRASS_SPREAD_ATTEMPTS: Record<GrassSize, number> = {
-  small: 2,
-  medium: 4,
-  large: 6,
+  small: 1,
+  medium: 1,
+  large: 2,
 };
 
-/** 新草相对母株的距离（世界像素）：播种距离大幅拉远 (80~220px) */
-export const GRASS_SPREAD_RADIUS_MIN = 80;
-export const GRASS_SPREAD_RADIUS_MAX = 220;
+/** 新草相对母株的距离（世界像素） */
+export const GRASS_SPREAD_RADIUS_MIN = 90;
+export const GRASS_SPREAD_RADIUS_MAX = 240;
 
-/** 草丛之间最小间距（世界像素）：拉大至 48px，严格控制密度避免过密挤作一团 */
-export const GRASS_MIN_SPACING = 48;
+/** 草丛之间最小间距（世界像素）；越小密度越高 */
+export const GRASS_MIN_SPACING = 36;
 
 /** 树木对草的遮荫/养分竞争死区基础半径（按树体型：小树 56 / 中树 90 / 大树 135） */
 export const TREE_GRASS_COMPETITION_RADIUS: Record<string, number> = {
@@ -64,27 +64,35 @@ export const TREE_GRASS_COMPETITION_RADIUS: Record<string, number> = {
   large: 135,
 };
 
-/** 各体型基础自然寿命（秒） */
-export const GRASS_LIFESPAN_BASE_SEC: Record<GrassSize, number> = {
-  small: 75,
-  medium: 120,
-  large: 180,
-};
-
-/** 过密判定检测半径（世界像素） */
-export const GRASS_OVERCROWD_CHECK_RADIUS = 90;
-
-/** 半径内邻居草超过此数量时，判定为过密并加速枯萎 */
-export const GRASS_OVERCROWD_MAX_NEIGHBORS = 5;
-
 /**
  * 判定「绿地」时相对海岸的内缩（世界像素）。
  * 金沙滩约在岸线内侧 ~96px，小于此距离的位置为沙滩/海岸。
  */
 export const GRASS_GREEN_LAND_MARGIN = 96;
 
-/** 场上草丛数量上限，防止无限膨胀拖垮性能 */
-export const GRASS_MAX_COUNT = 1200;
+/** 场上草丛数量上限（Sprite + 屏外剔除后可适当放宽） */
+export const GRASS_MAX_COUNT = 3200;
+
+/** 屏外草不更新摇摆的边距（世界像素，相对镜头可视区） */
+export const GRASS_VIEW_CULL_MARGIN = 120;
+
+/** 空间网格边长（世界像素）；约等于最小间距量级 */
+export const GRASS_GRID_CELL = 64;
+
+/**
+ * 全景 LOD：currentZoom <= minZoom * 该倍率 → 草不合入角色深度排序。
+ * 略大于 1，避免卡在最小缩放边缘来回切换。
+ */
+export const GRASS_FAR_LOD_ZOOM_MUL = 1.4;
+
+/** 生长/扩散逻辑分几片轮转更新（视觉仍可每帧） */
+export const GRASS_LOGIC_SLICES = 8;
+
+/** 地图草稿合并写入间隔（秒） */
+export const GRASS_PERSIST_DEBOUNCE_SEC = 0.75;
+
+/** 牛马重锁定最近大草的间隔（秒） */
+export const GRASS_ANIMAL_RETARGET_SEC = 0.28;
 
 /** 获取草的下一阶段体型 */
 export function nextGrassSize(size: GrassSize): GrassSize | null {
