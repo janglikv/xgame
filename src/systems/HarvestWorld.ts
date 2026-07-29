@@ -1295,42 +1295,60 @@ export class HarvestWorld {
 
 
   /**
-   * 全岛无草时：种一小簇种子草（3～5 株），方便立刻连成片而不是单点散落。
+   * 全岛无草时：固定从左上角区域种一小簇种子草（3～5 株），开启生态循环。
    */
   private spawnInitialSeedGrass(): void {
     const mapDef = this.hooks.getMapDef();
     const land = landRectOf(mapDef);
     if (land.w <= 0 || land.h <= 0) return;
 
-    for (let attempt = 0; attempt < 24; attempt++) {
-      const cx = land.x + 40 + Math.random() * Math.max(1, land.w - 80);
-      const cy = land.y + 40 + Math.random() * Math.max(1, land.h - 80);
-      if (!isOnGreenLand(cx, cy, mapDef, 255)) continue;
-      if (this.isInMudSpot(cx, cy)) continue;
-      if (this.isGrassTooCloseToTrees(cx, cy)) continue;
+    let seedX = 0;
+    let seedY = 0;
+    let found = false;
 
-      if (!mapDef.grasses) mapDef.grasses = [];
-      const cluster = 3 + Math.floor(Math.random() * 3);
-      let planted = 0;
-      for (let i = 0; i < cluster * 3 && planted < cluster; i++) {
-        const ang = Math.random() * Math.PI * 2;
-        const dist = i === 0 ? 0 : 28 + Math.random() * 48;
-        const x = cx + Math.cos(ang) * dist;
-        const y = cy + Math.sin(ang) * dist;
+    // 固定从左上角（避开沙滩海域 margin 280px）开始往内扫描首个合法绿地坐标
+    const startMargin = 280;
+    const step = 32;
+    const searchLimitX = land.x + land.w * 0.45;
+    const searchLimitY = land.y + land.h * 0.45;
+
+    for (let y = land.y + startMargin; y <= searchLimitY; y += step) {
+      for (let x = land.x + startMargin; x <= searchLimitX; x += step) {
         if (!isOnGreenLand(x, y, mapDef, 255)) continue;
+        if (this.isInMudSpot(x, y)) continue;
         if (this.isGrassTooCloseToTrees(x, y)) continue;
-        if (this.isGrassTooClose(x, y, GRASS_MIN_SPACING)) continue;
-        const id = allocGrassId('gs');
-        const g: MapGrass = { x, y, size: 'small', id };
-        mapDef.grasses.push(g);
-        this.mountGrass(g);
-        planted += 1;
+        seedX = x;
+        seedY = y;
+        found = true;
+        break;
       }
-      if (planted > 0) {
-        this.hooks.persistMapDraft();
-        this.hooks.afterWorldChange();
-        return;
-      }
+      if (found) break;
+    }
+
+    if (!found) return;
+
+    const cx = seedX;
+    const cy = seedY;
+    if (!mapDef.grasses) mapDef.grasses = [];
+    const cluster = 3 + Math.floor(Math.random() * 3);
+    let planted = 0;
+    for (let i = 0; i < cluster * 3 && planted < cluster; i++) {
+      const ang = Math.random() * Math.PI * 2;
+      const dist = i === 0 ? 0 : 28 + Math.random() * 48;
+      const x = cx + Math.cos(ang) * dist;
+      const y = cy + Math.sin(ang) * dist;
+      if (!isOnGreenLand(x, y, mapDef, 255)) continue;
+      if (this.isGrassTooCloseToTrees(x, y)) continue;
+      if (this.isGrassTooClose(x, y, GRASS_MIN_SPACING)) continue;
+      const id = allocGrassId('gs');
+      const g: MapGrass = { x, y, size: 'small', id };
+      mapDef.grasses.push(g);
+      this.mountGrass(g);
+      planted += 1;
+    }
+    if (planted > 0) {
+      this.hooks.persistMapDraft();
+      this.hooks.afterWorldChange();
     }
   }
 
