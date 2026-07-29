@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { CameraController } from './controls/CameraController';
 import { MainScene } from './scenes/MainScene';
+import { PropertyPanel } from './ui/PropertyPanel';
 
 function bootstrap(): void {
   const host = document.getElementById('app');
@@ -28,12 +29,14 @@ function bootstrap(): void {
   renderer.domElement.style.height = '100%';
   host.appendChild(renderer.domElement);
 
-  // 俯视一点，保证能看到整块底板
   const camera = new THREE.PerspectiveCamera(55, width / height, 0.1, 1000);
   camera.position.set(8, 10, 12);
   camera.lookAt(0, 0, 0);
 
   const scene = new MainScene();
+  const propertyPanel = new PropertyPanel();
+  propertyPanel.resize(width, height);
+
   const controls = new CameraController(camera, renderer.domElement, {
     moveSpeed: 12,
     lookSpeed: 0.002,
@@ -45,18 +48,52 @@ function bootstrap(): void {
     camera.updateProjectionMatrix();
     renderer.setSize(w, h);
     scene.resize(w, h);
+    propertyPanel.resize(w, h);
   };
 
   window.addEventListener('resize', onResize);
 
   const clock = new THREE.Clock();
+  const lookDir = new THREE.Vector3();
+  let fps = 0;
+  let fpsFrames = 0;
+  let fpsTimer = 0;
 
   const tick = (): void => {
     requestAnimationFrame(tick);
     const delta = clock.getDelta();
+
+    fpsFrames += 1;
+    fpsTimer += delta;
+    if (fpsTimer >= 0.5) {
+      fps = fpsFrames / fpsTimer;
+      fpsFrames = 0;
+      fpsTimer = 0;
+    }
+
     controls.update(delta);
     scene.update(delta);
+
+    if (propertyPanel.isVisible) {
+      camera.getWorldDirection(lookDir);
+      const yawDeg = THREE.MathUtils.radToDeg(
+        Math.atan2(-lookDir.x, -lookDir.z),
+      );
+      const pitchDeg = THREE.MathUtils.radToDeg(
+        Math.asin(THREE.MathUtils.clamp(lookDir.y, -1, 1)),
+      );
+
+      propertyPanel.update({
+        pos: camera.position,
+        yawDeg,
+        pitchDeg,
+        pointerLocked: controls.isPointerLocked,
+        fps,
+      });
+    }
+
     renderer.render(scene, camera);
+    propertyPanel.render(renderer);
   };
 
   tick();
