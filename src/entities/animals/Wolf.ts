@@ -148,12 +148,14 @@ export class Wolf extends WorldCreature {
 
     this.hunger += WOLF_ECO.hungerPerSec * hungerMult * dt;
 
-    // 饿死判定：食物不足或长时间未猎捕到食物，饿死并从生态移除
+    // 饿死判定：食物不足或长时间未猎捕到食物，饿死并倒地变为颠倒尸体
     if (this.hunger >= 1.0) {
       this.prey = null;
       this.restTree = null;
       this.applyDamage(this.maximumHp + 1);
-      if (!this.isAlive) eco.removeCreature(this);
+      if (!this.isAlive && !this.isCorpse) {
+        this.turnIntoCorpse(6.0);
+      }
       return { moved: false, attackHit: null };
     }
 

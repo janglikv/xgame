@@ -174,7 +174,10 @@ export class LevelSimulation {
       // 快照：生态可能中途 removeCreature（吃鸡 / 饿死），避免下标错位
       const tickList = creatures.slice();
       for (const spider of tickList) {
-        if (!spider.isAlive || !creatures.includes(spider)) continue;
+        if (!creatures.includes(spider)) continue;
+        if (!spider.isAlive && !spider.isCorpse) {
+          spider.turnIntoCorpse(6.0);
+        }
         const sFromX = spider.worldX;
         const sFromY = spider.worldY;
         const result = spider.update(

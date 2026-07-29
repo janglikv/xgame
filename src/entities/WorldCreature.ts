@@ -466,10 +466,13 @@ export class WorldCreature extends Container implements WorldActor {
 
   /** 是否为倒地的尸体状态 */
   isCorpse = false;
+  /** 尸体腐化自然消散倒计时（秒） */
+  corpseDecayTimer = 0;
 
   /** 转换为倒地的尸体状态（颠倒倒过来躺在地上，无法移动，隐藏血条） */
-  turnIntoCorpse(): void {
+  turnIntoCorpse(decaySeconds = 6.0): void {
     this.isCorpse = true;
+    this.corpseDecayTimer = decaySeconds;
     this.healthBar.visible = false;
     this.applyFacingToSprite();
   }
@@ -586,6 +589,13 @@ export class WorldCreature extends Container implements WorldActor {
       }
       this.healthBar.visible = false;
       this.syncToWorld();
+
+      if (this.corpseDecayTimer > 0) {
+        this.corpseDecayTimer -= dt;
+        if (this.corpseDecayTimer <= 0 && this.ecology) {
+          this.ecology.removeCreature(this);
+        }
+      }
       return { moved: false, attackHit: null };
     }
 

@@ -163,8 +163,8 @@ export class HorseKing extends WorldCreature {
       // 踩踏近战结算
       if (dist <= HORSE_KING_ECO.stampRange) {
         wolf.applyDamage(HORSE_KING_ECO.wolfDamage);
-        if (!wolf.isAlive) {
-          eco.removeCreature(wolf);
+        if (!wolf.isAlive && !wolf.isCorpse) {
+          wolf.turnIntoCorpse(6.0);
           this.targetWolf = null;
         }
         this.aiState = 'patrol';
