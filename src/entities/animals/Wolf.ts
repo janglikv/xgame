@@ -16,8 +16,8 @@ import {
 
 /** 狼：有限视野觅食；吃完后视野内就近找松树休息 */
 export const WOLF_ECO = {
-  /** 饥饿增长（很慢，长时间休息） */
-  hungerPerSec: 0.003,
+  /** 饥饿基础增长速率（秒） */
+  hungerPerSec: 0.012,
   /** 开始猎食 */
   seekPreyAt: 0.18,
   /**
@@ -102,13 +102,40 @@ export class Wolf extends WorldCreature {
       return super.updateAI(dt, playerX, playerY, playerBodyProfileId);
     }
 
-    this.hunger = Math.min(1, this.hunger + WOLF_ECO.hungerPerSec * dt);
     if (this.retargetCd > 0) {
       this.retargetCd = Math.max(0, this.retargetCd - dt);
     }
 
     const eco = this.ecology;
     if (!eco) {
+      return { moved: false, attackHit: null };
+    }
+
+    // 狼多食物少时的生存竞争机制：
+    // 统计全场狼数量与可捕捉的食草猎物（牛/马/鸡/猪）数量
+    let wolfCount = 0;
+    let preyCount = 0;
+    for (const c of eco.creatures) {
+      if (!c.isAlive || c.destroyed) continue;
+      if (c.kind === 'wolf') wolfCount += 1;
+      else if (WOLF_PREY_KINDS.has(c.kind)) preyCount += 1;
+    }
+
+    // 食物不足（平均每只狼不足 2 只猎物）时，竞争加剧导致饥饿速率大幅提升
+    let hungerMult = 1.0;
+    if (wolfCount > 0 && preyCount < wolfCount * 2) {
+      const deficit = wolfCount * 2 - preyCount;
+      hungerMult = Math.min(3.5, 1.0 + deficit * 0.7);
+    }
+
+    this.hunger += WOLF_ECO.hungerPerSec * hungerMult * dt;
+
+    // 饿死判定：食物不足或长时间未猎捕到食物，饿死并从生态移除
+    if (this.hunger >= 1.0) {
+      this.prey = null;
+      this.restTree = null;
+      this.applyDamage(this.maximumHp + 1);
+      if (!this.isAlive) eco.removeCreature(this);
       return { moved: false, attackHit: null };
     }
 
