@@ -38,13 +38,13 @@ export const WOLF_ECO = {
   forageRadius: 200,
   walkSpeed: 90,
   startHunger: 0.55,
-  /** 捕获猎物所需的「扑咬」次数（需连续 4 次扑咬才能成功捕获/击杀） */
-  pounceBitesToKill: 4,
+  /** 单次「扑咬」攻击力数值 (15 HP) */
+  pounceDamage: 15,
   /** 对玩家反击时的攻击力 */
   counterAttackDamage: 60,
   /** 「扑咬」攻击冷却间隔（秒） */
   attackInterval: 1.5,
-  /** 每次「扑咬」摄入/恢复 25% 饱腹度 (4 次全饱) */
+  /** 每次「扑咬」摄入/恢复 25% 饱腹度 */
   mealFeed: 0.25,
   restArrive: 28,
   restOffsetY: 40,
@@ -312,16 +312,11 @@ export class Wolf extends WorldCreature {
           const d = Math.hypot(dx, dy);
           const inv = d > 1e-3 ? 1 / d : 1;
 
-          // 执行「扑咬」伤害结算：按猎物最大血量的 25% 结算，需连续 4 次「扑咬」方可捕获/击杀
-          const pounceDamage = Math.max(
-            15,
-            Math.ceil(prey.maximumHp / WOLF_ECO.pounceBitesToKill),
-          );
-
           // 猛烈推开与冲击高弹跳 (220px/s 位移, 320px/s 垂直起跳)
           applyRecoilHop(prey.knock, dx * inv, dy * inv, 220, 320);
 
-          const isAlive = prey.applyDamage(pounceDamage);
+          // 扣除「扑咬」固定的 15 点攻击力数值
+          const isAlive = prey.applyDamage(WOLF_ECO.pounceDamage);
           this.hunger = Math.max(0, this.hunger - WOLF_ECO.mealFeed);
           this.attackCd = WOLF_ECO.attackInterval;
 
