@@ -84,9 +84,20 @@ export class DebugBadge extends Container {
     const speedStr = `⚡${scale % 1 === 0 ? scale.toFixed(0) : scale.toFixed(1)}x`;
     this.speedText.text = speedStr;
 
-    // 动态速度高亮颜色 (1x 偏淡, 10x 偏亮金)
+    // 动态速度高亮颜色 (1x 偏淡, 10x 橙, 50x 红, 100x 紫红亮金)
     if (scale > 1.0) {
-      this.speedText.style.fill = scale >= 10.0 ? 0xff3366 : scale >= 5.0 ? 0xff9900 : 0xffe08a;
+      this.speedText.style.fill =
+        scale >= 100.0
+          ? 0xff0055
+          : scale >= 50.0
+            ? 0xff3300
+            : scale >= 20.0
+              ? 0xff6600
+              : scale >= 10.0
+                ? 0xff9900
+                : scale >= 5.0
+                  ? 0xffc700
+                  : 0xffe08a;
     } else {
       this.speedText.style.fill = 0xb0c4de;
     }

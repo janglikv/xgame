@@ -61,16 +61,22 @@ export type HarvestableTreeOptions = {
   treeId?: string;
   /** 是否允许自动生长 / 扩散，默认 true */
   enableGrowth?: boolean;
+  /** 是否允许自然死亡，默认 true */
+  enableNaturalDeath?: boolean;
   /** 是否从透明淡入（树苗默认 true） */
   emerge?: boolean;
   /** 自定义生长倒计时（秒） */
   growthTimeSec?: number;
   /** 自定义播种扩散倒计时（秒） */
   spreadTimeSec?: number;
+  /** 自定义自然衰老倒计时（秒） */
+  decayTimeSec?: number;
   /** 生长进阶完成后的回调 */
   onGrown?: (tree: HarvestableTree) => void;
   /** 到点向四周播种树苗时的回调 */
   onSpread?: (tree: HarvestableTree) => void;
+  /** 自然枯萎死亡时的回调 */
+  onWither?: (tree: HarvestableTree) => void;
   /** 苹果熟透/震落掉到地面的回调 */
   onAppleDrop?: (worldX: number, worldY: number) => void;
 };
@@ -87,6 +93,8 @@ export type TreeUpdateOptions = {
   view?: TreeViewBounds | null;
   /** 森林抱团生长加速 */
   speedup?: number;
+  /** 自然死亡率倍率（树林低、绿地孤立树高） */
+  deathRateMultiplier?: number;
   /** 本帧是否推进扩散 / 结苹果逻辑 */
   runLogic?: boolean;
   /** 逻辑 dt 倍率（= 分片数） */
@@ -126,16 +134,21 @@ export class HarvestableTree extends Container {
   private readonly sprite: Sprite;
   private shakeT = 0;
   private felled = false;
+  private isWithering = false;
+  private witherAnimT = 0;
   private baseTint: number;
 
   private enableGrowth: boolean;
+  private enableNaturalDeath: boolean;
   private growthTimer: number | null = null;
   private growthDuration = 0;
+  private decayTimer: number | null = null;
   private spreadTimer: number | null = null;
   private emergeTimer: number | null = null;
   private emergeDuration = TREE_EMERGE_SEC;
   private onGrown?: (tree: HarvestableTree) => void;
   private onSpread?: (tree: HarvestableTree) => void;
+  private onWither?: (tree: HarvestableTree) => void;
   private onAppleDrop?: (worldX: number, worldY: number) => void;
 
   private appleCount = 0;
@@ -174,11 +187,14 @@ export class HarvestableTree extends Container {
     this.interactR = profile.interactR;
 
     this.enableGrowth = options.enableGrowth ?? true;
+    this.enableNaturalDeath = options.enableNaturalDeath ?? true;
     this.onGrown = options.onGrown;
     this.onSpread = options.onSpread;
+    this.onWither = options.onWither;
     this.onAppleDrop = options.onAppleDrop;
     this.resetGrowthTimer(options.growthTimeSec);
     this.resetSpreadTimer(options.spreadTimeSec);
+    this.resetDecayTimer(options.decayTimeSec);
 
     const wantEmerge = options.emerge ?? size === 'sapling';
     if (wantEmerge) {
@@ -220,11 +236,22 @@ export class HarvestableTree extends Container {
   }
 
   get isAlive(): boolean {
-    return !this.felled && this.hp > 0;
+    return !this.felled && !this.isWithering && this.hp > 0;
+  }
+
+  get isWitheringOut(): boolean {
+    return this.isWithering;
   }
 
   get currentHp(): number {
     return this.hp;
+  }
+
+  wither(): void {
+    if (this.isWithering || !this.isAlive) return;
+    this.isWithering = true;
+    this.witherAnimT = 1.6;
+    this.visible = true;
   }
 
   private initAppleState(): void {
@@ -287,6 +314,20 @@ export class HarvestableTree extends Container {
     }
   }
 
+  private resetDecayTimer(customSec?: number): void {
+    if (!this.enableNaturalDeath) {
+      this.decayTimer = null;
+      return;
+    }
+    // 基础自然寿命：树苗 ~110s，中树 ~180s，大树 ~280s
+    const baseSec =
+      customSec ??
+      (this.size === 'sapling' ? 110 : this.size === 'medium' ? 180 : 280);
+    const jitter = (Math.random() - 0.5) * 0.4 * baseSec;
+    const dur = Math.max(30, baseSec + jitter);
+    this.decayTimer = dur;
+  }
+
   private growthProgress01(): number {
     if (this.growthTimer === null || this.growthDuration <= 0) return 1;
     const done = 1 - this.growthTimer / this.growthDuration;
@@ -346,6 +387,7 @@ export class HarvestableTree extends Container {
 
     this.resetGrowthTimer();
     this.resetSpreadTimer();
+    this.resetDecayTimer();
     this.initAppleState();
     this.refreshSpriteTexture();
     this.visualDirty = true;
@@ -389,6 +431,21 @@ export class HarvestableTree extends Container {
       this.shakeT = Math.max(0, this.shakeT - realDt);
     }
 
+    // 枯萎死亡动画
+    if (this.isWithering) {
+      this.visible = true;
+      this.syncToWorld();
+      this.witherAnimT = Math.max(0, this.witherAnimT - realDt);
+      const u = Math.max(0, this.witherAnimT / 1.6);
+      this.sprite.tint = lerpColor(0x5a4832, this.baseTint, u);
+      this.sprite.alpha = u;
+      if (this.witherAnimT <= 0 && !this.destroyed) {
+        this.felled = true;
+        this.onWither?.(this);
+      }
+      return;
+    }
+
     // 淡入：每帧推进（保证平滑）
     if (this.emergeTimer !== null) {
       this.emergeTimer -= realDt;
@@ -396,6 +453,20 @@ export class HarvestableTree extends Container {
         this.emergeTimer = null;
       }
       this.visualDirty = true;
+    }
+
+    // 自然衰老死亡计时推进
+    if (
+      runLogic &&
+      this.isAlive &&
+      !this.isWithering &&
+      this.decayTimer !== null
+    ) {
+      const mult = opts.deathRateMultiplier ?? 1.0;
+      this.decayTimer -= dt * logicScale * mult;
+      if (this.decayTimer <= 0) {
+        this.wither();
+      }
     }
 
     // 生长计时每帧推进（慢速；平滑放大不依赖分片）

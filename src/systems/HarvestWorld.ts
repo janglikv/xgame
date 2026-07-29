@@ -69,6 +69,13 @@ export type HarvestWorldChangeOpts = {
   redrawLand?: boolean;
 };
 
+export type MudSpot = {
+  x: number;
+  y: number;
+  radius: number;
+  fertility: number; // 0 -> 100 (100 = 恢复为肥沃绿地)
+};
+
 export type HarvestWorldHooks = {
   sortLayer: Container;
   /**
@@ -108,6 +115,7 @@ export class HarvestWorld {
   readonly trees: HarvestableTree[] = [];
   readonly grasses: GrassEntity[] = [];
   readonly pickups: ItemPickup[] = [];
+  readonly mudSpots: MudSpot[] = [];
 
   private readonly grassIndex = new GrassSpatialIndex<GrassEntity>(GRASS_GRID_CELL);
   private readonly treeIndex = new GrassSpatialIndex<HarvestableTree>(TREE_GRID_CELL);
@@ -120,6 +128,19 @@ export class HarvestWorld {
   private treePersistCooldown = 0;
 
   constructor(private readonly hooks: HarvestWorldHooks) {}
+
+  /** 判定坐标 (x, y) 是否位于泥地/休耕地范围内 */
+  isInMudSpot(x: number, y: number): boolean {
+    for (let i = 0; i < this.mudSpots.length; i++) {
+      const m = this.mudSpots[i]!;
+      const dx = x - m.x;
+      const dy = y - m.y;
+      if (dx * dx + dy * dy <= m.radius * m.radius) {
+        return true;
+      }
+    }
+    return false;
+  }
 
   /** 从地图刷可砍树与无碰撞草地 */
   spawnFromMap(mapDef: LevelMapDef): void {
@@ -159,6 +180,9 @@ export class HarvestWorld {
       },
       onSpread: (source) => {
         this.trySpreadTreeFrom(source);
+      },
+      onWither: (witheredTree) => {
+        this.onTreeWithered(witheredTree);
       },
       onAppleDrop: (worldX, worldY) => {
         this.spawnPickup(worldX, worldY, 'apple', 1);
@@ -228,22 +252,6 @@ export class HarvestWorld {
     this.treePersistDirty = false;
     this.treePersistCooldown = TREE_PERSIST_DEBOUNCE_SEC;
     this.hooks.persistMapDraft();
-  }
-
-  /** 刷新抱团加速（空间网格邻域，避免 O(T²)） */
-  private refreshTreeClusterSpeedup(tree: HarvestableTree): void {
-    if (!tree.isAlive) {
-      tree.clusterSpeedup = 1;
-      return;
-    }
-    const neighbors = this.treeIndex.countWithin(
-      tree.worldX,
-      tree.worldY,
-      TREE_CLUSTER_RADIUS,
-      (t) => t.isAlive,
-      tree,
-    );
-    tree.clusterSpeedup = neighbors >= 2 ? TREE_CLUSTER_SPEEDUP : 1;
   }
 
   mountGrass(g: MapGrass): GrassEntity {
@@ -431,6 +439,8 @@ export class HarvestWorld {
 
         // 仅限绿色陆地
         if (!isOnGreenLand(x, y, mapDef, 255)) continue;
+        // 泥地上绝对不能播种发芽树木！
+        if (this.isInMudSpot(x, y)) continue;
         // 树木之间保持最小保护间距
         if (this.isTreeTooClose(x, y, TREE_MIN_SPACING)) continue;
 
@@ -513,12 +523,34 @@ export class HarvestWorld {
     }
   }
 
+  /** 树自然衰老枯萎：耗尽地力生成泥地/休耕地 + 移除实体 + 掉落 1 木头残余 */
+  onTreeWithered(tree: HarvestableTree): void {
+    this.removeTreeEntity(tree);
+    this.mudSpots.push({
+      x: tree.worldX,
+      y: tree.worldY,
+      radius: 130,
+      fertility: 0,
+    });
+    this.spawnPickup(tree.worldX, tree.worldY, 'wood', 1);
+    this.hooks.afterWorldChange({ redrawLand: true });
+    this.markTreePersistDirty();
+  }
+
   spawnPickup(
     x: number,
     y: number,
     itemId: 'wood' | 'apple',
     count: number,
   ): void {
+    // 场上掉落物上限 50 个，超过时将最老的掉落物回收，避免过量积压
+    if (this.pickups.length >= 50) {
+      const oldest = this.pickups.shift();
+      if (oldest) {
+        this.hooks.sortLayer.removeChild(oldest);
+        oldest.destroy({ children: true });
+      }
+    }
     const p = new ItemPickup(x, y, itemId, { count });
     this.hooks.sortLayer.addChild(p);
     this.pickups.push(p);
@@ -638,7 +670,7 @@ export class HarvestWorld {
     for (let i = this.pickups.length - 1; i >= 0; i--) {
       const p = this.pickups[i]!;
       p.update(deltaMS);
-      if (p.isCollected) {
+      if (p.isCollected || p.isExpired) {
         sortLayer.removeChild(p);
         p.destroy({ children: true });
         this.pickups.splice(i, 1);
@@ -696,19 +728,36 @@ export class HarvestWorld {
       this.treePersistCooldown = Math.max(0, this.treePersistCooldown - dt);
     }
 
-    // 场景为空白（全岛无树）时，在绿色陆地上随机孵化 1 棵生命火种树苗
-    if (this.trees.length === 0) {
-      this.spawnInitialSeedTree();
-    } else {
-      this.tickTreeEntities(deltaMS, view);
-    }
+    this.tickTreeEntities(deltaMS, view);
+    this.tickTreeSproutFromLushGrass(dt);
 
-    // 场景为空白（全岛无草）时，在绿色陆地上随机孵化 1 棵生命火种小草
+    // 场景为空白（全岛无草）时，在绿色陆地上随机孵化 1 棵初始种子草（生命火种）
     if (this.grasses.length === 0) {
       this.spawnInitialSeedGrass();
       this.flushGrassPersist();
       this.flushTreePersist();
       return;
+    }
+
+    // 推进泥地/休耕地地力恢复过程（草的根系改良土壤）
+    for (let i = this.mudSpots.length - 1; i >= 0; i--) {
+      const m = this.mudSpots[i]!;
+      const grassCount = this.grassIndex.countWithin(
+        m.x,
+        m.y,
+        m.radius,
+        (g) => !g.isWitheringOut,
+      );
+      if (grassCount > 0) {
+        // 泥地上有草在生根滋养土壤，草越多积累肥力越快
+        m.fertility += dt * (4.0 + grassCount * 3.5);
+      } else {
+        // 无草时极慢自然休耕恢复
+        m.fertility += dt * 0.8;
+      }
+      if (m.fertility >= 100) {
+        this.mudSpots.splice(i, 1); // 肥力满 100，修养完毕，恢复为肥沃绿地
+      }
     }
 
     const slices = Math.max(1, GRASS_LOGIC_SLICES);
@@ -722,10 +771,12 @@ export class HarvestWorld {
       const g = snapshot[i];
       if (!g || g.destroyed) continue;
 
+      const inMud = this.isInMudSpot(g.worldX, g.worldY);
       const runLogic = g.isWitheringOut || i % slices === slice;
       g.update(deltaMS, {
         view,
         lodFar,
+        speedup: inMud ? 0.25 : 1.0, // 泥地上草生长减慢至 25%
         runLogic,
         logicScale: runLogic && !g.isWitheringOut ? slices : 1,
       });
@@ -757,18 +808,39 @@ export class HarvestWorld {
     const snapshot = this.trees.slice();
     for (let i = 0; i < snapshot.length; i++) {
       const tree = snapshot[i];
-      if (!tree || tree.destroyed || !tree.isAlive) continue;
+      if (!tree || tree.destroyed || (!tree.isAlive && !tree.isWitheringOut)) continue;
 
-      const runLogic = i % slices === slice;
-      if (runLogic) {
-        this.refreshTreeClusterSpeedup(tree);
+      const runLogic = i % slices === slice || tree.isWitheringOut;
+      // 计算 120px 范围内的存活同伴树数量 N
+      const neighbors = this.treeIndex.countWithin(
+        tree.worldX,
+        tree.worldY,
+        TREE_CLUSTER_RADIUS,
+        (t) => t.isAlive,
+        tree,
+      );
+
+      // 密度依存自然死亡率（生态自我循环法则）：
+      // 1) N = 0（孤树）：无庇护，死亡率较高 (1.8x)
+      // 2) N = 1~3（黄金小树林）：适度庇护，阳光充足，死亡率极低 (0.2x)，蓬勃生长
+      // 3) N >= 4（过密老林）：严重遮阴与根系竞争，触发自然凋亡与稀疏，死亡率陡增 (3.6x)
+      let deathRateMultiplier = 1.0;
+      if (neighbors === 0) {
+        deathRateMultiplier = 1.8;
+      } else if (neighbors <= 3) {
+        deathRateMultiplier = 0.2;
+      } else {
+        deathRateMultiplier = 3.6;
       }
+
+      tree.clusterSpeedup = neighbors >= 1 && neighbors <= 3 ? TREE_CLUSTER_SPEEDUP : 1;
 
       tree.update(deltaMS, {
         view,
         speedup: tree.clusterSpeedup,
+        deathRateMultiplier,
         runLogic,
-        logicScale: runLogic ? slices : 1,
+        logicScale: runLogic && !tree.isWitheringOut ? slices : 1,
       });
 
       if (tree.destroyed) continue;
@@ -996,23 +1068,52 @@ export class HarvestWorld {
     }
   }
 
-  /** 当场景中完全无树时，随机挑选一处绿地生成 1 棵初始树苗（生命火种） */
-  private spawnInitialSeedTree(): void {
-    const mapDef = this.hooks.getMapDef();
-    const land = landRectOf(mapDef);
-    if (land.w <= 0 || land.h <= 0) return;
+  /** 统计指定坐标指定半径内的活草数量 */
+  countNearbyGrasses(x: number, y: number, radius: number): number {
+    return this.grassIndex.countWithin(x, y, radius, (g) => !g.isWitheringOut);
+  }
 
-    for (let attempt = 0; attempt < 20; attempt++) {
-      const x = land.x + Math.random() * land.w;
-      const y = land.y + Math.random() * land.h;
+  private treeSproutTimer = 10;
+
+  /** 在草丛茂盛区（大草或高密度草丛）孕育发芽新树苗 */
+  private tickTreeSproutFromLushGrass(dt: number): void {
+    if (this.trees.length >= TREE_MAX_COUNT) return;
+    this.treeSproutTimer -= dt;
+    if (this.treeSproutTimer > 0) return;
+
+    this.treeSproutTimer = 18 + Math.random() * 14;
+
+    if (this.grasses.length === 0) return;
+
+    const mapDef = this.hooks.getMapDef();
+    const candidates = this.grasses.filter((g) => !g.isWitheringOut);
+    if (candidates.length === 0) return;
+
+    for (let i = 0; i < 12; i++) {
+      const g = candidates[Math.floor(Math.random() * candidates.length)]!;
+      const nearbyGrassCount = this.countNearbyGrasses(g.worldX, g.worldY, 140);
+      const isLush = g.size === 'large' || nearbyGrassCount >= 3;
+
+      if (!isLush) continue;
+
+      // 距离已有树木至少 80px，不在已有树木正下方发芽
+      if (this.countNearbyTrees(g.worldX, g.worldY, 80) > 0) continue;
+
+      const angle = Math.random() * Math.PI * 2;
+      const dist = 22 + Math.random() * 26;
+      const x = g.worldX + Math.cos(angle) * dist;
+      const y = g.worldY + Math.sin(angle) * dist;
 
       if (!isOnGreenLand(x, y, mapDef, 255)) continue;
+      // 泥地上绝不长树！必须修复变回肥沃绿地后才能发芽
+      if (this.isInMudSpot(x, y)) continue;
       if (this.isTreeTooClose(x, y, TREE_MIN_SPACING)) continue;
 
       const kind = Math.random() < 0.5 ? 'pine' : 'apple';
       const prefix = kind === 'apple' ? 'apsap' : 'sap';
       const id = allocTreeId(prefix);
       const t: MapTree = { x, y, size: 'sapling', kind, id };
+      if (!mapDef.trees) mapDef.trees = [];
       mapDef.trees.push(t);
       addRuntimeTreeObstacle({
         x,

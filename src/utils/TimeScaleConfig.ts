@@ -1,8 +1,8 @@
 /**
- * 全局时间倍率配置（支持 0.1x ~ 20x 时间加速）
+ * 全局时间倍率配置（支持 0.1x ~ 100x 时间加速）
  */
 const STORAGE_KEY = 'xgame_time_scale';
-const PRESETS = [1.0, 2.0, 5.0, 10.0, 20.0];
+const PRESETS = [1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0];
 
 export class TimeScaleConfig {
   private static scale = 1.0;
@@ -16,7 +16,7 @@ export class TimeScaleConfig {
       const stored = localStorage.getItem(STORAGE_KEY);
       if (stored) {
         const val = parseFloat(stored);
-        if (!isNaN(val) && val >= 0.1 && val <= 20.0) {
+        if (!isNaN(val) && val >= 0.1 && val <= 100.0) {
           this.scale = val;
         }
       }
@@ -25,17 +25,17 @@ export class TimeScaleConfig {
     }
   }
 
-  /** 获取当前时间倍率 (0.1 ~ 20.0) */
+  /** 获取当前时间倍率 (0.1 ~ 100.0) */
   static getScale(): number {
     this.init();
     return this.scale;
   }
 
-  /** 设置时间倍率 (最高 20 倍) */
+  /** 设置时间倍率 (最高 100 倍) */
   static setScale(val: number): void {
     this.init();
-    // 最多 20 倍，最少 0.1 倍
-    const clamped = Math.min(20.0, Math.max(0.1, Math.round(val * 10) / 10));
+    // 最多 100 倍，最少 0.1 倍
+    const clamped = Math.min(100.0, Math.max(0.1, Math.round(val * 10) / 10));
     if (this.scale !== clamped) {
       this.scale = clamped;
       try {
@@ -47,7 +47,7 @@ export class TimeScaleConfig {
     }
   }
 
-  /** 循环切换预设倍率 (1x -> 2x -> 5x -> 10x -> 20x -> 1x) */
+  /** 循环切换预设倍率 (1x -> 2x -> 5x -> 10x -> 20x -> 50x -> 100x -> 1x) */
   static toggleNextPreset(): number {
     this.init();
     const current = this.scale;

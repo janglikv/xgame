@@ -10,8 +10,15 @@ const BOB_AMP = 3.5;
 /** 掉落图标显示高度（世界像素） */
 const ICON_DISPLAY_H = 26;
 
+/** 掉落物在地面自然腐烂/消失寿命（秒） */
+const PICKUP_LIFESPAN: Record<ItemId, number> = {
+  apple: 45, // 苹果在地面存活 45 秒后自然腐烂消失
+  wood: 90,  // 木头在地面存活 90 秒后自然风化消失
+};
+
 export type ItemPickupOptions = {
   count?: number;
+  lifespanSec?: number;
 };
 
 /**
@@ -29,6 +36,8 @@ export class ItemPickup extends Container {
   private age = 0;
   private collected = false;
 
+  private readonly maxAge: number;
+
   constructor(
     worldX: number,
     worldY: number,
@@ -43,6 +52,7 @@ export class ItemPickup extends Container {
     this.worldX = worldX;
     this.worldY = worldY;
     this.bobPhase = Math.random() * Math.PI * 2;
+    this.maxAge = options.lifespanSec ?? (PICKUP_LIFESPAN[itemId] ?? 60);
 
     const def = getItemDef(itemId);
     const tex = getItemTexture(itemId);
@@ -105,12 +115,22 @@ export class ItemPickup extends Container {
     return this.collected;
   }
 
+  get isExpired(): boolean {
+    return this.age >= this.maxAge;
+  }
+
   markCollected(): void {
     this.collected = true;
   }
 
   update(deltaMS: number): void {
     this.age += deltaMS / 1000;
+    // 消失前 4 秒透明度逐渐淡出
+    const fadeWindow = 4.0;
+    if (this.age > this.maxAge - fadeWindow) {
+      const left = Math.max(0, this.maxAge - this.age);
+      this.alpha = left / fadeWindow;
+    }
     this.syncToWorld();
   }
 

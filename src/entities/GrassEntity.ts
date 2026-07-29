@@ -54,6 +54,8 @@ export type GrassUpdateOptions = {
   runLogic?: boolean;
   /** 逻辑 dt 倍率（分片数，仅用于扩散） */
   logicScale?: number;
+  /** 土地减速/加速倍率（如泥地休耕下草生长减速） */
+  speedup?: number;
 };
 
 function lerp(a: number, b: number, t: number): number {
@@ -302,7 +304,8 @@ export class GrassEntity extends Container {
    */
   update(deltaMS: number, opts: GrassUpdateOptions = {}): void {
     if (this.destroyed) return;
-    const dt = deltaMS / 1000;
+    const speedup = Math.max(0.1, opts.speedup ?? 1.0);
+    const dt = (deltaMS / 1000) * speedup;
     const lodFar = opts.lodFar ?? false;
     const runLogic = opts.runLogic ?? true;
     const logicScale = opts.logicScale ?? 1;
