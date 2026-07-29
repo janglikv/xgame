@@ -464,11 +464,24 @@ export class WorldCreature extends Container implements WorldActor {
     this.applyFacingToSprite();
   }
 
+  /** 是否为倒地的尸体状态 */
+  isCorpse = false;
+
+  /** 转换为倒地的尸体状态（颠倒倒过来躺在地上，无法移动，隐藏血条） */
+  turnIntoCorpse(): void {
+    this.isCorpse = true;
+    this.healthBar.visible = false;
+    this.applyFacingToSprite();
+  }
+
   private applyFacingToSprite(): void {
     const sprite = this.sprite;
     if (!sprite) return;
     sprite.scale.x = this.baseScale * this.facing;
     sprite.scale.y = this.baseScale;
+    if (this.isCorpse) {
+      sprite.rotation = Math.PI;
+    }
   }
 
   /**
@@ -566,6 +579,16 @@ export class WorldCreature extends Container implements WorldActor {
   ): SpiderUpdateResult {
     const dt = deltaMS / 1000;
     this.ecology = ecology;
+
+    if (this.isCorpse) {
+      if (this.sprite) {
+        this.sprite.rotation = Math.PI;
+      }
+      this.healthBar.visible = false;
+      this.syncToWorld();
+      return { moved: false, attackHit: null };
+    }
+
     this.healthBar.update(deltaMS);
 
     // 木桩 / 固定体：钉死出生点，无姿态反馈

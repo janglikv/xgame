@@ -73,6 +73,9 @@ export class Wolf extends WorldCreature {
   private huntTime = 0;
   /** 扑空/脱靶次数 */
   private dashMisses = 0;
+  /** 进食倒地尸体状态机 */
+  private eatingCorpse: WorldCreature | null = null;
+  private eatingCorpseTimer = 0;
 
   constructor(worldX: number, worldY: number, options: FarmAnimalOptions = {}) {
     const baseOpts = animalOptions(
@@ -152,6 +155,47 @@ export class Wolf extends WorldCreature {
       this.applyDamage(this.maximumHp + 1);
       if (!this.isAlive) eco.removeCreature(this);
       return { moved: false, attackHit: null };
+    }
+
+    // 0) 进食倒地尸体状态：走到倒下尸体旁趴下进食 2.5 秒，吃完恢复饱腹并移除尸体
+    if (this.eatingCorpse) {
+      const corpse = this.eatingCorpse;
+      if (!corpse.destroyed && eco.creatures.includes(corpse)) {
+        const dist = Math.hypot(
+          corpse.worldX - this.worldX,
+          corpse.worldY - this.worldY,
+        );
+        this.faceToward(corpse.worldX, corpse.worldY);
+
+        if (dist > WOLF_ECO.eatRange * 0.6) {
+          const moved = this.moveTowardAvoidingTrees(
+            corpse.worldX,
+            corpse.worldY,
+            WOLF_ECO.walkSpeed,
+            dt,
+            WOLF_ECO.eatRange * 0.4,
+            22,
+          );
+          return { moved, attackHit: null };
+        }
+
+        // 到达尸体旁：开始进食
+        this.eatingCorpseTimer -= dt;
+        this.aiState = 'patrol';
+
+        if (this.eatingCorpseTimer <= 0) {
+          // 进食 2.5 秒结束：恢复饱腹度，尸体被吃完消失，狼准备去树下休息
+          this.hunger = Math.max(0, this.hunger - 0.75);
+          eco.removeCreature(corpse);
+          this.eatingCorpse = null;
+          this.wantRest = true;
+          this.restTree = null;
+          this.retargetCd = WOLF_ECO.retargetCd;
+        }
+        return { moved: false, attackHit: null };
+      } else {
+        this.eatingCorpse = null;
+      }
     }
 
     // 1) 无论饥饿度如何，只要附近/视野内有捕食目标（牛/马/鸡/猪），立刻触发猎捕
@@ -239,7 +283,7 @@ export class Wolf extends WorldCreature {
 
   private huntPrey(
     dt: number,
-    eco: CreatureEcologyContext,
+    _eco: CreatureEcologyContext,
   ): { moved: boolean; attackHit: SpiderAttackHit | null } {
     const prey = this.prey;
     if (!prey || !prey.isAlive || prey.destroyed) {
@@ -315,21 +359,20 @@ export class Wolf extends WorldCreature {
           // 猛烈推开与冲击高弹跳 (220px/s 位移, 320px/s 垂直起跳)
           applyRecoilHop(prey.knock, dx * inv, dy * inv, 220, 320);
 
-          // 扣除「扑咬」固定的 15 点攻击力数值
+          // 扣除「扑咬」固定的 15 点攻击力数值（扑咬成功不恢复饱腹度，只有等猎物死亡后才进食）
           const isAlive = prey.applyDamage(WOLF_ECO.pounceDamage);
-          this.hunger = Math.max(0, this.hunger - WOLF_ECO.mealFeed);
           this.attackCd = WOLF_ECO.attackInterval;
 
           if (!isAlive) {
-            eco.removeCreature(prey);
-            this.wantRest = true;
+            // 猎物死亡：不直接移除，而是转为倒地尸体（颠倒），狼开始在原地进食尸体！
+            prey.turnIntoCorpse();
+            this.eatingCorpse = prey;
+            this.eatingCorpseTimer = 2.5; // 2.5 秒进食尸体过程
             this.prey = null;
-            this.restTree = null;
-            this.retargetCd = WOLF_ECO.retargetCd;
-            this.aiState = 'patrol';
             this.chargeState = 'approach';
             this.huntTime = 0;
             this.dashMisses = 0;
+            this.aiState = 'patrol';
             return { moved: false, attackHit: null };
           }
         } else {
