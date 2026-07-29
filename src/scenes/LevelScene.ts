@@ -3,38 +3,17 @@ import { preloadLevelAssets } from '../assets/preload';
 import type { EntranceContext } from '../entities/CharacterEntrance';
 import type { AmmoHudModel } from '../entities/CharacterResources';
 import type { PlayerCharacterBase } from '../entities/PlayerCharacterBase';
-
-import {
-  applyKnockImpulse,
-  stepKnockArc,
-} from '../entities/knockArc';
-import type {
-  CreatureEcologyContext,
-  WorldCreature,
-} from '../entities/WorldCreature';
+import type { WorldCreature } from '../entities/WorldCreature';
 import { InputManager } from '../input/InputManager';
-import {
-  CharacterRoster,
-} from '../systems/CharacterRoster';
-import {
-  CombatSystem,
-  type CombatWorld,
-} from '../systems/CombatSystem';
+import { CharacterRoster } from '../systems/CharacterRoster';
+import { CombatSystem } from '../systems/CombatSystem';
 import { spawnEnemiesInto } from '../systems/EnemySpawner';
 import { createEnemyAt } from '../systems/enemyFactory';
 import { GodModeController } from '../systems/GodModeController';
 import { HarvestWorld } from '../systems/HarvestWorld';
 import { canSpawnNaturalAnimal } from '../systems/ecologySpawn';
 import { Inventory } from '../systems/Inventory';
-import {
-  GRASS_FAR_LOD_ZOOM_MUL,
-  GRASS_VIEW_CULL_MARGIN,
-} from '../data/grassProfiles';
-import { TREE_VIEW_CULL_MARGIN } from '../data/treeProfiles';
-import {
-  SolidResolver,
-  type SolidContext,
-} from '../systems/SolidResolver';
+import { SolidResolver } from '../systems/SolidResolver';
 import { DebugOverlay } from '../systems/DebugOverlay';
 
 import { HealthBar } from '../ui/HealthBar';
@@ -55,13 +34,11 @@ import { getNightBackground, NightOverlay } from '../world/NightOverlay';
 import { WorldMap } from '../world/WorldMap';
 import { LevelCamera } from './LevelCamera';
 import type { GameScene } from './types';
-
 import { LevelHudLayout } from '../ui/LevelHudLayout';
+import { LevelInputRouter } from './level/LevelInputRouter';
+import { LevelSimulation } from './level/LevelSimulation';
 
-const MOVE_SPEED = 220;
 const PLAYER_MAX_HP = 100;
-/** 击退很强时削弱 WASD 控制（水平速度） */
-const KNOCK_CONTROL_SOFTEN = 220;
 /** 镜头朝指针方向偏移的比例 */
 const CAMERA_POINTER_LEAD = 0.5;
 /** 镜头指针偏移上限（世界像素） */
@@ -76,6 +53,7 @@ export type LevelSceneOptions = {
 
 /**
  * 可玩关卡（默认黑夜）：编排输入、系统与 HUD。
+ * 帧模拟见 LevelSimulation；输入见 LevelInputRouter。
  * 玩法细节见 CharacterRoster / HarvestWorld / GodModeController / CombatSystem。
  *
  * 操作：WASD 移动 · 点击远程 · Esc 暂停 · G 上帝模式
@@ -121,17 +99,15 @@ export class LevelScene extends Container implements GameScene {
   private readonly godHud: GodModeHud;
   private readonly god: GodModeController;
   private readonly camera: LevelCamera;
+  private readonly inputRouter: LevelInputRouter;
+  private readonly simulation: LevelSimulation;
 
   private readonly mapDef: LevelMapDef;
   private spawn: { x: number; y: number };
   private readonly onBack: () => void;
   private readonly onBackground?: (color: number) => void;
 
-
   private paused = false;
-  private pointerScreenX = 0;
-  private pointerScreenY = 0;
-  private pointerSeen = false;
 
   constructor(width: number, height: number, options: LevelSceneOptions) {
     super();
@@ -144,8 +120,6 @@ export class LevelScene extends Container implements GameScene {
     this.eventMode = 'static';
     this.cursor = 'default';
     this.hitArea = new Rectangle(0, 0, width, height);
-    this.on('pointertap', this.onPointerTap);
-    this.on('pointermove', this.onPointerMove);
 
     this.worldRoot = new Container();
     this.worldRoot.label = 'WorldRoot';
@@ -297,6 +271,48 @@ export class LevelScene extends Container implements GameScene {
     });
     this.godHud.setBrush(this.god.brush);
 
+    this.simulation = new LevelSimulation({
+      input: this.input,
+      getPlayer: () => this.player,
+      creatures: this.creatures,
+      mapDef: this.mapDef,
+      solid: this.solid,
+      combat: this.combat,
+      harvest: this.harvest,
+      god: this.god,
+      camera: this.camera,
+      healthBar: this.healthBar,
+      worldMap: this.worldMap,
+      treeBackLayer: this.treeBackLayer,
+      treeFrontLayer: this.treeFrontLayer,
+      getPointer: () => this.inputRouter.pointer,
+      entranceContext: () => this.entranceContext(),
+      syncWorldActors: () => this.syncWorldActors(),
+      sortDepth: () => this.sortDepth(),
+      stepCamera: (dt, snap) => this.stepCamera(dt, snap),
+      syncAmmoHud: (p) => this.syncAmmoHud(p),
+      flushLandRedraw: (dt) => this.flushLandRedraw(dt),
+    });
+
+    this.inputRouter = new LevelInputRouter({
+      input: this.input,
+      camera: this.camera,
+      combat: this.combat,
+      harvest: this.harvest,
+      god: this.god,
+      getPlayer: () => this.player,
+      isPaused: () => this.paused,
+      setPaused: (v) => this.setPaused(v),
+      setGodMode: (on) => this.setGodMode(on),
+      entranceContext: () => this.entranceContext(),
+      syncWorldActors: () => this.syncWorldActors(),
+      applyPlayerSolid: (fromX, fromY) =>
+        this.simulation.applyPlayerSolid(fromX, fromY),
+    });
+
+    this.on('pointertap', this.inputRouter.onPointerTap);
+    this.on('pointermove', this.inputRouter.onPointerMove);
+
     this.roster.mount();
     this.roster.activate(
       'ice-ranger',
@@ -333,7 +349,6 @@ export class LevelScene extends Container implements GameScene {
         ? 'crosshair'
         : 'default';
   }
-
 
   private syncAmmoHud(player: PlayerCharacterBase): void {
     this.applyAmmoHudModel(player.getAmmoHud());
@@ -379,7 +394,9 @@ export class LevelScene extends Container implements GameScene {
   async init(): Promise<void> {
     this.onBackground?.(getNightBackground());
     this.input.bind();
-    window.addEventListener('wheel', this.onWheel, { passive: false });
+    window.addEventListener('wheel', this.inputRouter.onWheel, {
+      passive: false,
+    });
 
     const rosterLoads = [...this.roster.values()].map(
       (entity) => () => entity.load(),
@@ -403,16 +420,17 @@ export class LevelScene extends Container implements GameScene {
     if (!player) {
       return { x: this.spawn.x, y: this.spawn.y };
     }
-    if (!this.pointerSeen) {
+    const pointer = this.inputRouter.pointer;
+    if (!pointer.seen) {
       return { x: player.worldX, y: player.worldY };
     }
 
     const zoom = Math.max(this.camera.currentZoom, 1e-4);
     let offsetX =
-      ((this.pointerScreenX - this.camera.width / 2) / zoom) *
+      ((pointer.screenX - this.camera.width / 2) / zoom) *
       CAMERA_POINTER_LEAD;
     let offsetY =
-      ((this.pointerScreenY - this.camera.height / 2) / zoom) *
+      ((pointer.screenY - this.camera.height / 2) / zoom) *
       CAMERA_POINTER_LEAD;
     const offsetLength = Math.hypot(offsetX, offsetY);
     if (offsetLength > CAMERA_POINTER_LEAD_MAX) {
@@ -440,82 +458,6 @@ export class LevelScene extends Container implements GameScene {
     this.combat.syncProjectiles();
   }
 
-  private combatWorld(): CombatWorld {
-    return {
-      player: this.player,
-      creatures: this.creatures,
-      harvestTrees: this.harvest.trees,
-    };
-  }
-
-  /** 生态树列表缓存：避免每帧 map 分配 */
-  private ecoTreesCache: Array<{
-    worldX: number;
-    worldY: number;
-    kind: 'pine' | 'apple';
-    isAlive: boolean;
-  }> = [];
-  private ecoTreesCacheLen = -1;
-
-  private refreshEcoTreesCache(): void {
-    const trees = this.harvest.trees;
-    if (this.ecoTreesCacheLen !== trees.length) {
-      this.ecoTreesCache = new Array(trees.length);
-      this.ecoTreesCacheLen = trees.length;
-    }
-    for (let i = 0; i < trees.length; i++) {
-      const t = trees[i]!;
-      const slot = this.ecoTreesCache[i];
-      if (slot) {
-        slot.worldX = t.worldX;
-        slot.worldY = t.worldY;
-        slot.kind = t.treeKind;
-        slot.isAlive = t.isAlive;
-      } else {
-        this.ecoTreesCache[i] = {
-          worldX: t.worldX,
-          worldY: t.worldY,
-          kind: t.treeKind,
-          isAlive: t.isAlive,
-        };
-      }
-    }
-  }
-
-  /** 猪 / 牛 / 马等生物的觅食上下文（每帧重建轻量引用） */
-  private buildEcologyContext(): CreatureEcologyContext {
-    this.refreshEcoTreesCache();
-    return {
-      pickups: this.harvest.pickups,
-      grasses: this.harvest.grasses,
-      trees: this.ecoTreesCache,
-      creatures: this.creatures,
-      mapDef: this.mapDef,
-      consumePickup: (p) => {
-        const found = this.harvest.pickups.find((item) => item === p);
-        if (found) this.harvest.consumePickup(found);
-      },
-      consumeGrass: (g) => this.harvest.consumeGrass(g),
-      findNearestLargeGrass: (x, y) => {
-        const hit = this.harvest.findNearestLargeGrass(x, y);
-        if (!hit) return null;
-        return { grass: hit.grass, dist: hit.dist };
-      },
-      removeCreature: (creature) => {
-        this.removeCreatureEntity(creature);
-      },
-    };
-  }
-
-  /** 生态捕食 / 死亡移除（不写回地图草稿） */
-  private removeCreatureEntity(creature: WorldCreature): void {
-    const idx = this.creatures.indexOf(creature);
-    if (idx < 0) return;
-    creature.parent?.removeChild(creature);
-    creature.destroy({ children: true });
-    this.creatures.splice(idx, 1);
-  }
-
   private sortDepth(): void {
     // 只排角色层：草已不在此层，树大部分在前后静态带
     this.sortLayer.sortChildren();
@@ -541,54 +483,17 @@ export class LevelScene extends Container implements GameScene {
     this.worldMap.redrawMudSoil(this.harvest.mudSpots);
   }
 
-  private solidContext(): SolidContext {
-    return {
-      player: this.player,
-      creatures: this.creatures,
-    };
-  }
-
-  private applyPlayerSolid(fromX: number, fromY: number): void {
-    const player = this.player;
-    if (!player) return;
-    this.solid.resolvePlayer(player, fromX, fromY, this.solidContext());
-  }
-
-  private applySpiderSolid(
-    spider: WorldCreature,
-    fromX: number,
-    fromY: number,
-    spiderIndex: number,
-  ): void {
-    if (spider.immovable) return;
-    this.solid.resolveSpider(
-      spider,
-      fromX,
-      fromY,
-      spiderIndex,
-      this.solidContext(),
-    );
-  }
-
-  private readonly onWheel = (e: WheelEvent): void => {
-    if (this.paused) return;
-    e.preventDefault();
-    this.camera.applyWheel(e.deltaY);
-  };
-
   destroy(options?: Parameters<Container['destroy']>[0]): void {
-    this.off('pointertap', this.onPointerTap);
-    this.off('pointermove', this.onPointerMove);
-    window.removeEventListener('wheel', this.onWheel);
+    this.off('pointertap', this.inputRouter.onPointerTap);
+    this.off('pointermove', this.inputRouter.onPointerMove);
+    window.removeEventListener('wheel', this.inputRouter.onWheel);
     this.input.unbind();
     super.destroy(options);
   }
 
   update(deltaMS: number): void {
     const dt = deltaMS / 1000;
-    this.pollModeKeys();
-    this.pollAbilityKeys();
-    this.handleZoomKeys(dt);
+    this.inputRouter.poll(dt);
 
     const player = this.player;
     this.debugOverlay.update({
@@ -606,241 +511,7 @@ export class LevelScene extends Container implements GameScene {
       return;
     }
 
-
-    this.stepPlayerFrame(deltaMS, dt, player);
-  }
-
-  /** Esc / G / Tab */
-  private pollModeKeys(): void {
-    if (this.input.pressed('Escape', this.input.isDown('Escape'))) {
-      this.setPaused(!this.paused);
-    }
-    if (this.input.pressed('KeyG', this.input.isDown('KeyG'))) {
-      this.setGodMode(!this.god.enabled);
-    }
-
-  }
-
-  /** Q 特技 / E 闪现 / R 砍树 */
-  private pollAbilityKeys(): void {
-    if (this.paused || this.god.enabled) {
-      // 仍推进边沿状态，避免退出暂停/上帝后连发
-      this.input.pressed('KeyQ', this.input.isDown('KeyQ'));
-      this.input.pressed('KeyE', this.input.isDown('KeyE'));
-      this.input.pressed('KeyR', this.input.isDown('KeyR'));
-      return;
-    }
-
-    const p = this.player;
-    if (
-      this.input.pressed('KeyQ', this.input.isDown('KeyQ')) &&
-      p &&
-      !p.entranceLocks.attack
-    ) {
-      const aim = this.aimFromPointer(p);
-      if (
-        p.trySpecialAbility(
-          this.combat.rangedServices(),
-          this.entranceContext(),
-          aim ?? undefined,
-        )
-      ) {
-        this.syncWorldActors();
-      }
-    }
-
-    if (
-      this.input.pressed('KeyE', this.input.isDown('KeyE')) &&
-      p &&
-      !p.entranceLocks.move
-    ) {
-      const fromX = p.worldX;
-      const fromY = p.worldY;
-      const aim = this.aimFromPointer(p);
-      if (
-        p.tryMobilityAbility(this.entranceContext(), aim ?? undefined)
-      ) {
-        this.applyPlayerSolid(fromX, fromY);
-        this.syncWorldActors();
-      }
-    }
-
-    if (this.input.pressed('KeyR', this.input.isDown('KeyR')) && p) {
-      this.harvest.tryMelee(p);
-    }
-  }
-
-  private aimFromPointer(player: PlayerCharacterBase) {
-    if (!this.pointerSeen) return null;
-    return this.combat.aimFromScreen(
-      player.worldX,
-      player.worldY,
-      this.pointerScreenX,
-      this.pointerScreenY,
-      {
-        x: this.camera.x,
-        y: this.camera.y,
-        zoom: this.camera.currentZoom,
-        width: this.camera.width,
-        height: this.camera.height,
-      },
-    );
-  }
-
-  /** 移动 / 击退 / 出场 / 战斗 / 收割帧步进 */
-  private stepPlayerFrame(
-    deltaMS: number,
-    dt: number,
-    player: PlayerCharacterBase,
-  ): void {
-    const { x, y } = this.input.getMoveAxis();
-    const fromX = player.worldX;
-    const fromY = player.worldY;
-    const god = this.god.enabled;
-
-    const knockStep = god
-      ? { moved: false, dx: 0, dy: 0, airborne: false, justLanded: false }
-      : stepKnockArc(player.knock, dt);
-    if (knockStep.moved) {
-      player.worldX += knockStep.dx;
-      player.worldY += knockStep.dy;
-    }
-    const knockSpeed = god
-      ? 0
-      : Math.hypot(player.knock.velX, player.knock.velY);
-    const airborne = knockStep.airborne;
-    const locks = player.entranceLocks;
-
-    const moving = x !== 0 || y !== 0;
-    if (moving && (god || !locks.move)) {
-      let control = 1;
-      if (god) {
-        control = 1.6;
-      } else if (airborne) {
-        control = 0.08;
-      } else if (knockSpeed > KNOCK_CONTROL_SOFTEN) {
-        control = Math.max(0.2, 1 - knockSpeed / (KNOCK_CONTROL_SOFTEN * 3));
-      }
-      player.worldX += x * MOVE_SPEED * control * dt;
-      player.worldY += y * MOVE_SPEED * control * dt;
-    }
-
-    if (!god) {
-      this.applyPlayerSolid(fromX, fromY);
-    }
-
-    if (this.pointerSeen) {
-      const z = Math.max(this.camera.currentZoom, 1e-4);
-      const playerSx =
-        this.camera.width / 2 + (player.worldX - this.camera.x) * z;
-      const screenDx = this.pointerScreenX - playerSx;
-      player.setFacingFromMoveX(screenDx);
-    }
-    player.updateEntrance(
-      dt,
-      this.entranceContext(),
-      knockStep.justLanded,
-    );
-
-    this.stepCamera(dt);
-
-    this.syncWorldActors();
-    player.update(
-      deltaMS,
-      moving && !locks.move && !airborne && knockSpeed < 80,
-    );
-    this.healthBar.update(deltaMS);
-    player.tickResources(deltaMS);
-    this.syncAmmoHud(player);
-    this.worldMap.update(deltaMS);
-
-    if (!god) {
-      const ecology = this.buildEcologyContext();
-      // 快照：生态可能中途 removeCreature（吃鸡 / 饿死），避免下标错位
-      const tickList = this.creatures.slice();
-      for (const spider of tickList) {
-        if (!spider.isAlive || !this.creatures.includes(spider)) continue;
-        const sFromX = spider.worldX;
-        const sFromY = spider.worldY;
-        const result = spider.update(
-          deltaMS,
-          player.worldX,
-          player.worldY,
-          player.bodyProfileId,
-          ecology,
-        );
-        const si = this.creatures.indexOf(spider);
-        if (si < 0 || !spider.isAlive) continue;
-        this.applySpiderSolid(spider, sFromX, sFromY, si);
-        if (result.attackHit) {
-          this.applySpiderAttack(result.attackHit);
-        }
-      }
-      for (const spider of this.creatures) {
-        spider.syncToWorld();
-      }
-      this.combat.update(deltaMS, this.combatWorld());
-    } else {
-      for (const spider of this.creatures) {
-        spider.syncToWorld();
-      }
-    }
-
-    this.updateGrassLod();
-    this.harvest.tickTrees(deltaMS, this.creatures, this.grassViewBounds());
-    this.harvest.update(deltaMS, player.worldX, player.worldY);
-    this.sortDepth();
-    // 前后树带节点少，每帧 sort 成本低，保证树与树之间遮挡正确
-    this.treeBackLayer.sortChildren();
-    this.treeFrontLayer.sortChildren();
-    this.flushLandRedraw(dt);
-  }
-
-  /** 全景 zoom → 草退出角色深度排序 */
-  private updateGrassLod(): void {
-    const minZ = this.camera.getMinZoom();
-    const far =
-      this.camera.currentZoom <= minZ * GRASS_FAR_LOD_ZOOM_MUL;
-    this.harvest.setGrassLodFar(far);
-  }
-
-  /** 镜头世界可视区（含边距），供草/树屏外剔除 */
-  private grassViewBounds(): {
-    minX: number;
-    maxX: number;
-    minY: number;
-    maxY: number;
-  } {
-    const z = Math.max(0.05, this.camera.currentZoom);
-    const margin = Math.max(GRASS_VIEW_CULL_MARGIN, TREE_VIEW_CULL_MARGIN);
-    const halfW = this.camera.width / (2 * z) + margin;
-    const halfH = this.camera.height / (2 * z) + margin;
-    return {
-      minX: this.camera.x - halfW,
-      maxX: this.camera.x + halfW,
-      minY: this.camera.y - halfH,
-      maxY: this.camera.y + halfH,
-    };
-  }
-
-  private applySpiderAttack(hit: {
-    damage: number;
-    dirX: number;
-    dirY: number;
-    knockImpulse: number;
-  }): void {
-    const player = this.player;
-    if (!player) return;
-    this.healthBar.applyDelta(-Math.abs(hit.damage));
-    applyKnockImpulse(
-      player.knock,
-      hit.dirX * hit.knockImpulse,
-      hit.dirY * hit.knockImpulse,
-    );
-    player.playBlastKnock(0.45, hit.dirX, 0);
-    this.stepCamera(0, false);
-    this.syncWorldActors();
-    this.sortDepth();
+    this.simulation.step(deltaMS, dt, player);
   }
 
   resize(width: number, height: number): void {
@@ -856,62 +527,6 @@ export class LevelScene extends Container implements GameScene {
     this.pauseMenu.layout(width, height);
     this.godHud.layout(width, height);
   }
-
-  private handleZoomKeys(dt: number): void {
-    // 合成键名：多物理键映射同一动作时只计一次边沿
-    const fitDown =
-      this.input.isDown('KeyF') || this.input.isDown('KeyM');
-    if (this.input.pressed('__fitOverview', fitDown)) {
-      this.camera.fitOverview();
-    }
-
-    const resetDown =
-      this.input.isDown('Digit0') || this.input.isDown('Numpad0');
-    if (this.input.pressed('__resetZoom', resetDown)) {
-      this.camera.resetZoom();
-    }
-
-    const zoomIn =
-      this.input.isDown('Equal') ||
-      this.input.isDown('NumpadAdd');
-    const zoomOut =
-      this.input.isDown('Minus') ||
-      this.input.isDown('NumpadSubtract');
-    this.camera.applyZoomKeyHold(zoomIn, zoomOut, dt);
-  }
-
-  private readonly onPointerMove = (e: {
-    global: { x: number; y: number };
-  }): void => {
-    this.pointerScreenX = e.global.x;
-    this.pointerScreenY = e.global.y;
-    this.pointerSeen = true;
-  };
-
-  private readonly onPointerTap = (e: {
-    global: { x: number; y: number };
-  }): void => {
-    this.pointerScreenX = e.global.x;
-    this.pointerScreenY = e.global.y;
-    this.pointerSeen = true;
-    if (this.paused) return;
-
-    if (this.god.enabled) {
-      this.god.handleClick(e.global.x, e.global.y);
-      return;
-    }
-
-    const player = this.player;
-    if (!player) return;
-    if (player.entranceLocks.attack) return;
-    this.combat.tryRangedAtScreen(player, e.global.x, e.global.y, {
-      x: this.camera.x,
-      y: this.camera.y,
-      zoom: this.camera.currentZoom,
-      width: this.camera.width,
-      height: this.camera.height,
-    });
-  };
 
   private setPaused(value: boolean): void {
     this.paused = value;
