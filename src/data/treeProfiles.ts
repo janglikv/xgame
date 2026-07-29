@@ -110,8 +110,8 @@ export const TREE_SPREAD_RADIUS_MAX = 78;
 /** 树木之间最小保护间距（世界像素），紧凑成林 */
 export const TREE_MIN_SPACING = 38;
 
-/** 场上树木数量上限（提高以允许大片林） */
-export const TREE_MAX_COUNT = 280;
+/** 场上树木数量上限 */
+export const TREE_MAX_COUNT = 140;
 
 /** 森林抱团庇护半径（世界像素） */
 export const TREE_CLUSTER_RADIUS = 120;
