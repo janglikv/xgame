@@ -8,7 +8,7 @@ import {
 } from './data/maps';
 import { LocalSaveStore } from './data/SaveStore';
 import type { SavedScene } from './data/types';
-import type { CharacterId } from './entities/types';
+
 import { BodyEditScene } from './scenes/BodyEditScene';
 import { LevelScene } from './scenes/LevelScene';
 import { MainScene } from './scenes/MainScene';
@@ -60,8 +60,6 @@ async function bootstrap(): Promise<void> {
     mapDef,
     onBack: goMain,
     onBackground: setBackground,
-    getLastCharacter: () => saveStore.getLastCharacter(),
-    setLastCharacter: (id: CharacterId) => saveStore.saveLastCharacter(id),
   });
 
   const goMain = (): void => {

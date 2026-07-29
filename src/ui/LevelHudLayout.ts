@@ -1,14 +1,12 @@
 import type { HealthBar } from './HealthBar';
 import type { SpearAmmoHud } from './SpearAmmoHud';
 import type { BombAmmoHud } from './BombAmmoHud';
-import type { CharacterSwitchHud } from './CharacterSwitchHud';
 import type { InventoryHud } from './InventoryHud';
 
 export type LevelHudLayoutOptions = {
   healthBar: HealthBar;
   spearAmmoHud: SpearAmmoHud;
   bombAmmoHud: BombAmmoHud;
-  characterHud: CharacterSwitchHud;
   inventoryHud: InventoryHud;
 };
 
@@ -45,7 +43,6 @@ export class LevelHudLayout {
       hpX + LevelHudLayout.HUD_BOMB_AMMO_NUDGE_X,
       hpY - LevelHudLayout.HUD_AMMO_GAP + LevelHudLayout.HUD_BOMB_AMMO_NUDGE_Y,
     );
-    this.components.characterHud.position.set(screenW - 20, 20);
     this.components.inventoryHud.position.set(16, screenH - 16);
   }
 }

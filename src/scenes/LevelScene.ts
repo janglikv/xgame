@@ -3,7 +3,7 @@ import { preloadLevelAssets } from '../assets/preload';
 import type { EntranceContext } from '../entities/CharacterEntrance';
 import type { AmmoHudModel } from '../entities/CharacterResources';
 import type { PlayerCharacterBase } from '../entities/PlayerCharacterBase';
-import type { CharacterId } from '../entities/types';
+
 import {
   applyKnockImpulse,
   stepKnockArc,
@@ -36,7 +36,7 @@ import {
   type SolidContext,
 } from '../systems/SolidResolver';
 import { DebugOverlay } from '../systems/DebugOverlay';
-import { CharacterSwitchHud } from '../ui/CharacterSwitchHud';
+
 import { HealthBar } from '../ui/HealthBar';
 import { InventoryHud } from '../ui/InventoryHud';
 import { PauseMenu } from '../ui/PauseMenu';
@@ -72,17 +72,13 @@ export type LevelSceneOptions = {
   mapDef?: LevelMapDef;
   onBack: () => void;
   onBackground?: (color: number) => void;
-  /** 上次操控角色；缺省 bomb-girl */
-  getLastCharacter?: () => CharacterId;
-  /** 切换角色后写入存档 */
-  setLastCharacter?: (id: CharacterId) => void;
 };
 
 /**
  * 可玩关卡（默认黑夜）：编排输入、系统与 HUD。
  * 玩法细节见 CharacterRoster / HarvestWorld / GodModeController / CombatSystem。
  *
- * 操作：WASD 移动 · 点击远程 · Tab 切换 · Esc 暂停 · G 上帝模式
+ * 操作：WASD 移动 · 点击远程 · Esc 暂停 · G 上帝模式
  * · Q 特技 · E 闪现 · R 砍树 · 滚轮/+/-/0/F 缩放
  */
 export class LevelScene extends Container implements GameScene {
@@ -110,7 +106,7 @@ export class LevelScene extends Container implements GameScene {
   private readonly healthBar: HealthBar;
   private readonly spearAmmoHud: SpearAmmoHud;
   private readonly bombAmmoHud: BombAmmoHud;
-  private readonly characterHud: CharacterSwitchHud;
+
   private readonly inventoryHud: InventoryHud;
   private readonly hudLayout: LevelHudLayout;
   /** 场上全部生物（蜘蛛/农场动物/狼等），非仅蜘蛛 */
@@ -130,8 +126,7 @@ export class LevelScene extends Container implements GameScene {
   private spawn: { x: number; y: number };
   private readonly onBack: () => void;
   private readonly onBackground?: (color: number) => void;
-  private readonly getLastCharacter: () => CharacterId;
-  private readonly setLastCharacter?: (id: CharacterId) => void;
+
 
   private paused = false;
   private pointerScreenX = 0;
@@ -145,9 +140,6 @@ export class LevelScene extends Container implements GameScene {
     this.label = `LevelScene:${this.mapDef.id}`;
     this.onBack = options.onBack;
     this.onBackground = options.onBackground;
-    this.getLastCharacter =
-      options.getLastCharacter ?? (() => 'bomb-girl' as CharacterId);
-    this.setLastCharacter = options.setLastCharacter;
 
     this.eventMode = 'static';
     this.cursor = 'default';
@@ -266,16 +258,10 @@ export class LevelScene extends Container implements GameScene {
 
     this.addChild(this.inventoryHud);
 
-    this.characterHud = new CharacterSwitchHud({
-      onSelect: (id) => this.switchCharacter(id),
-    });
-    this.addChild(this.characterHud);
-
     this.hudLayout = new LevelHudLayout({
       healthBar: this.healthBar,
       spearAmmoHud: this.spearAmmoHud,
       bombAmmoHud: this.bombAmmoHud,
-      characterHud: this.characterHud,
       inventoryHud: this.inventoryHud,
     });
 
@@ -313,7 +299,7 @@ export class LevelScene extends Container implements GameScene {
 
     this.roster.mount();
     this.roster.activate(
-      this.getLastCharacter(),
+      'ice-ranger',
       this.sortLayer,
       {
         worldX: this.spawn.x,
@@ -322,20 +308,15 @@ export class LevelScene extends Container implements GameScene {
         persist: false,
       },
       {
-        setLastCharacter: this.setLastCharacter,
         onActivated: (p) => this.onPlayerActivated(p),
       },
     );
-    if (this.roster.player) {
-      this.characterHud.setActive(this.roster.player.characterId);
-    }
 
     this.stepCamera(0, true);
     this.syncWorldActors();
     this.layoutHealthHud();
     this.nightOverlay.layout(width, height);
     this.inventoryHud.layout(width, height);
-    this.characterHud.layout(width, height);
     this.pauseMenu.layout(width, height);
     this.godHud.layout(width, height);
   }
@@ -353,19 +334,6 @@ export class LevelScene extends Container implements GameScene {
         : 'default';
   }
 
-  private switchCharacter(id: CharacterId): void {
-    this.roster.trySwitch(id, this.sortLayer, {
-      paused: this.paused,
-      combat: this.combat,
-      entranceContext: () => this.entranceContext(),
-      characterHud: this.characterHud,
-      camera: this.camera,
-      syncWorldActors: () => this.syncWorldActors(),
-      sortDepth: () => this.sortDepth(),
-      setLastCharacter: this.setLastCharacter,
-      onActivated: (p) => this.onPlayerActivated(p),
-    });
-  }
 
   private syncAmmoHud(player: PlayerCharacterBase): void {
     this.applyAmmoHudModel(player.getAmmoHud());
@@ -417,14 +385,11 @@ export class LevelScene extends Container implements GameScene {
       (entity) => () => entity.load(),
     );
 
-    await Promise.all([
-      preloadLevelAssets({
-        loadMap: () => this.worldMap.load(),
-        loadCharacters: rosterLoads,
-        spiders: this.creatures.length > 0,
-      }),
-      this.characterHud.load(),
-    ]);
+    await preloadLevelAssets({
+      loadMap: () => this.worldMap.load(),
+      loadCharacters: rosterLoads,
+      spiders: this.creatures.length > 0,
+    });
 
     this.stepCamera(0, true);
     await Promise.all(this.creatures.map((s) => s.load()));
@@ -641,7 +606,7 @@ export class LevelScene extends Container implements GameScene {
       return;
     }
 
-    this.roster.tickCooldown(dt, this.characterHud);
+
     this.stepPlayerFrame(deltaMS, dt, player);
   }
 
@@ -653,13 +618,7 @@ export class LevelScene extends Container implements GameScene {
     if (this.input.pressed('KeyG', this.input.isDown('KeyG'))) {
       this.setGodMode(!this.god.enabled);
     }
-    if (
-      this.input.pressed('Tab', this.input.isDown('Tab')) &&
-      !this.paused &&
-      !this.god.enabled
-    ) {
-      this.switchCharacter(this.characterHud.getNextCharacterId());
-    }
+
   }
 
   /** Q 特技 / E 闪现 / R 砍树 */
@@ -893,7 +852,7 @@ export class LevelScene extends Container implements GameScene {
     this.layoutHealthHud();
     this.nightOverlay.layout(width, height);
     this.inventoryHud.layout(width, height);
-    this.characterHud.layout(width, height);
+
     this.pauseMenu.layout(width, height);
     this.godHud.layout(width, height);
   }
