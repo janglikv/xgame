@@ -23,10 +23,12 @@ export type GodBrush =
   | 'wolf'
   | 'bear'
   | 'spawn'
-  | 'erase';
+  | 'erase'
+  | 'clear-scene';
 
 export interface GodModeHudOptions {
   onSelectBrush?: (brush: GodBrush) => void;
+  onClearScene?: () => void;
 }
 
 export interface BrushItem {
@@ -88,6 +90,7 @@ export class GodModeHud extends Container {
   private activeBrush: GodBrush = 'tree-medium';
   private isMainCollapsed = false;
   private onSelectBrush?: (brush: GodBrush) => void;
+  private onClearScene?: () => void;
 
   private readonly groups: CategoryGroup[] = [
     {
@@ -132,6 +135,7 @@ export class GodModeHud extends Container {
       items: [
         { brush: 'spawn', label: '出生点' },
         { brush: 'erase', label: '删除' },
+        { brush: 'clear-scene', label: '清空场景' },
       ],
     },
   ];
@@ -148,6 +152,7 @@ export class GodModeHud extends Container {
     this.visible = false;
     this.eventMode = 'static';
     this.onSelectBrush = options?.onSelectBrush;
+    this.onClearScene = options?.onClearScene;
 
     this.bg = new Graphics();
     this.bg.eventMode = 'static';
@@ -399,6 +404,16 @@ export class GodModeHud extends Container {
             });
             btnContainer.on('pointertap', (e) => {
               e.stopPropagation();
+              if (item.brush === 'clear-scene') {
+                if (
+                  window.confirm(
+                    '确定要清空当前场景中的所有树木、草地与生物吗？',
+                  )
+                ) {
+                  this.onClearScene?.();
+                }
+                return;
+              }
               this.activeBrush = item.brush;
               this.updateButtonStyles();
               this.onSelectBrush?.(item.brush);
@@ -583,6 +598,15 @@ export class GodModeHud extends Container {
         .lineTo(cx - 7, cy + 7)
         .stroke({ width: 2, color: 0xef5350 });
       iconContainer.addChild(g);
+    } else if (brush === 'clear-scene') {
+      const g = new Graphics();
+      // 红色标志性垃圾桶图标
+      g.roundRect(cx - 7, cy - 2, 14, 13, 2).fill({ color: 0xe53935 });
+      g.roundRect(cx - 9, cy - 6, 18, 3, 1).fill({ color: 0xef5350 });
+      g.roundRect(cx - 3, cy - 9, 6, 3, 1).fill({ color: 0xff8a80 });
+      g.rect(cx - 4, cy + 1, 2, 7).fill({ color: 0xffffff, alpha: 0.65 });
+      g.rect(cx + 2, cy + 1, 2, 7).fill({ color: 0xffffff, alpha: 0.65 });
+      iconContainer.addChild(g);
     }
 
     return iconContainer;
@@ -615,6 +639,14 @@ export class GodModeHud extends Container {
         .stroke({ width: 1, color: 0x9b84c7, alpha: 0.7 });
 
       textNode.style.fill = 0xffffff;
+      textNode.style.fontWeight = '600';
+    } else if (widget.brush === 'clear-scene') {
+      bg.roundRect(0, 0, w, h, 8)
+        .fill({ color: isHovered ? 0x4a1820 : 0x2d1016, alpha: 0.88 })
+        .roundRect(0, 0, w, h, 8)
+        .stroke({ width: 1, color: 0xd32f2f, alpha: 0.7 });
+
+      textNode.style.fill = isHovered ? 0xffcdd2 : 0xef9a9a;
       textNode.style.fontWeight = '600';
     } else {
       bg.roundRect(0, 0, w, h, 8)

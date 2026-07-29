@@ -22,6 +22,11 @@ export type GrassEntityOptions = {
   /** 是否允许自动生长 / 扩散，默认 true */
   enableGrowth?: boolean;
   /**
+   * 体型上限（泥地稀草 = small；草地可 null 表示不限）。
+   * 到上限后停止进阶。
+   */
+  maxSize?: GrassSize | null;
+  /**
    * 是否从小透明淡入（避免突然闪现；不明显放大）。
    * 默认：小草 true，中/大草 false。
    */
@@ -36,6 +41,12 @@ export type GrassEntityOptions = {
   onSpread?: (grass: GrassEntity) => void;
   /** 被吃掉离场时的回调 */
   onWither?: (grass: GrassEntity) => void;
+};
+
+const GRASS_SIZE_RANK: Record<GrassSize, number> = {
+  small: 0,
+  medium: 1,
+  large: 2,
 };
 
 /** 镜头可视区（世界坐标） */
@@ -91,6 +102,8 @@ export class GrassEntity extends Container {
   private baseTint: number;
 
   private enableGrowth: boolean;
+  /** 体型上限；null = 不限 */
+  private maxSize: GrassSize | null = null;
   /** 本阶段剩余生长时间（秒） */
   private growthTimer: number | null = null;
   /** 本阶段总时长（秒），用于进度 0→1 */
@@ -132,6 +145,7 @@ export class GrassEntity extends Container {
 
     this.grassId = options.grassId ?? '';
     this.enableGrowth = options.enableGrowth ?? true;
+    this.maxSize = options.maxSize ?? null;
     this.onGrown = options.onGrown;
     this.onSpread = options.onSpread;
     this.onWither = options.onWither;
@@ -160,8 +174,39 @@ export class GrassEntity extends Container {
     this.applyGrowthVisual();
   }
 
+  /** 是否已达体型上限（不能再长大） */
+  get isAtMaxSize(): boolean {
+    if (!this.maxSize) return false;
+    return GRASS_SIZE_RANK[this.size] >= GRASS_SIZE_RANK[this.maxSize];
+  }
+
+  /**
+   * 设置体型上限（泥地稀草 → small；离开泥地 → null）。
+   * 已超过上限的体型不会自动缩小，只阻止继续长大。
+   */
+  setMaxSize(max: GrassSize | null): void {
+    this.maxSize = max;
+    if (this.isAtMaxSize) {
+      this.growthTimer = null;
+      this.growthDuration = 0;
+    } else if (this.enableGrowth && this.growthTimer === null) {
+      this.resetGrowthTimer();
+    }
+  }
+
+  private canGrowTo(next: GrassSize): boolean {
+    if (!this.maxSize) return true;
+    return GRASS_SIZE_RANK[next] <= GRASS_SIZE_RANK[this.maxSize];
+  }
+
   private resetGrowthTimer(customSec?: number): void {
-    if (!this.enableGrowth) {
+    if (!this.enableGrowth || this.isAtMaxSize) {
+      this.growthTimer = null;
+      this.growthDuration = 0;
+      return;
+    }
+    const next = nextGrassSize(this.size);
+    if (next && !this.canGrowTo(next)) {
       this.growthTimer = null;
       this.growthDuration = 0;
       return;
@@ -234,7 +279,7 @@ export class GrassEntity extends Container {
     const from = GRASS_SIZE_PROFILE[this.size];
     let baseScale = from.scale;
     let tint = this.baseTint;
-    if (next && this.growthTimer !== null) {
+    if (next && this.canGrowTo(next) && this.growthTimer !== null) {
       const to = GRASS_SIZE_PROFILE[next];
       // 阶段生长：缓慢放大到下一档（长周期，观感是「一点一点长」）
       const u = this.growthProgress01();
@@ -252,7 +297,11 @@ export class GrassEntity extends Container {
   /** 完成一阶段：体型进阶 + 开始下一阶段生长计时 */
   grow(): boolean {
     const next = nextGrassSize(this.size);
-    if (!next) return false;
+    if (!next || !this.canGrowTo(next)) {
+      this.growthTimer = null;
+      this.growthDuration = 0;
+      return false;
+    }
 
     this.applySize(next);
     this.resetGrowthTimer();

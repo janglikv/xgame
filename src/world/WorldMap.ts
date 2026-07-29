@@ -197,6 +197,8 @@ export class WorldMap extends Container {
   private ocean: OceanLayer | null = null;
   /** 树林黄泥土覆盖层：仅树布局变化时重绘（绿地底只在 build 画一次） */
   private forestSoilGfx: Graphics | null = null;
+  /** 生态轮动泥地覆盖层（密树塌缩后） */
+  private mudSoilGfx: Graphics | null = null;
 
   constructor(
     def?: LevelMapDef,
@@ -236,6 +238,43 @@ export class WorldMap extends Container {
     if (!this.forestSoilGfx || this.forestSoilGfx.destroyed) return;
     this.forestSoilGfx.clear();
     this.drawForestSoilTerrain(this.forestSoilGfx);
+  }
+
+  /**
+   * 重绘生态泥地（密树塌缩）。
+   * fertility 越高越淡，消散前逐渐退回绿地。
+   */
+  redrawMudSoil(
+    spots: ReadonlyArray<{
+      x: number;
+      y: number;
+      radius: number;
+      fertility: number;
+    }>,
+  ): void {
+    if (!this.mudSoilGfx || this.mudSoilGfx.destroyed) return;
+    this.mudSoilGfx.clear();
+    for (let i = 0; i < spots.length; i++) {
+      const m = spots[i]!;
+      const t = Math.min(1, Math.max(0, m.fertility / 100));
+      // 刚塌：深褐；改土中：淡褐
+      const alpha = 0.55 * (1 - t * 0.85);
+      if (alpha < 0.04) continue;
+      this.drawSmoothOrganicPath(
+        this.mudSoilGfx,
+        m.x,
+        m.y,
+        m.radius * 0.95,
+        m.radius * 0.72,
+        0x9000 + i * 41,
+        12,
+      );
+      this.mudSoilGfx.fill({ color: 0x8b6914, alpha });
+      // 中心更深一点
+      this.mudSoilGfx
+        .circle(m.x, m.y + 4, m.radius * 0.35)
+        .fill({ color: 0x6b4f12, alpha: alpha * 0.55 });
+    }
   }
 
   /** 海面动画（波纹滚动 / 泡沫呼吸） */
@@ -308,6 +347,10 @@ export class WorldMap extends Container {
     forestSoil.label = 'ForestSoil';
     this.forestSoilGfx = forestSoil;
 
+    const mudSoil = new Graphics();
+    mudSoil.label = 'MudSoil';
+    this.mudSoilGfx = mudSoil;
+
     // 建立无缝程序化噪点图层 Overlay
     const noiseTex = makeSeamlessNoiseTexture({
       seed: this.seed,
@@ -324,7 +367,8 @@ export class WorldMap extends Container {
     noiseOverlay.alpha = 0.15;
     noiseOverlay.tint = 0x448833;
 
-    landContainer.addChild(landBase, forestSoil, noiseOverlay);
+    // 底 → 林土 → 塌缩泥地 → 噪点
+    landContainer.addChild(landBase, forestSoil, mudSoil, noiseOverlay);
 
     // 建立草地精准有机轮廓 Mask，绝对防止草地噪点渗出至沙滩和海洋
     const landMask = new Graphics();
@@ -464,7 +508,8 @@ export class WorldMap extends Container {
     const rawTrees = (this.def.trees ?? []).filter((t) => t);
     if (rawTrees.length === 0) return;
 
-    const CLUSTER_R = 145;
+    // 中等成片林就铺黄泥土，视觉上更易读成「大片树林」
+    const CLUSTER_R = 160;
     const CLUSTER_SEARCH_R2 = CLUSTER_R * CLUSTER_R;
     const HARD_SOIL_THRESHOLD = 3;
 

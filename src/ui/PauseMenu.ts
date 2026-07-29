@@ -9,6 +9,7 @@ export type PauseMenuOptions = {
   onResume: () => void;
   onBack: () => void;
   onResetData?: () => void;
+  onClearScene?: () => void;
   /** 自定义「返回」文案 */
   backLabel?: string;
 };
@@ -44,6 +45,7 @@ export class PauseMenu extends Container {
   private readonly speedDecBtn: PauseButton;
   private readonly speedMainBtn: PauseButton;
   private readonly speedIncBtn: PauseButton;
+  private readonly clearSceneBtn: PauseButton;
   private readonly backBtn: PauseButton;
   private readonly resetBtn: PauseButton;
 
@@ -132,7 +134,24 @@ export class PauseMenu extends Container {
       this.updateSpeedBtnText();
     });
 
-    // 4. 返回主场景
+    // 4. 清空当前场景
+    this.clearSceneBtn = this.createButton(
+      '清空场景',
+      240,
+      44,
+      0x9e3838,
+      0xbe4a4a,
+      () => {
+        if (
+          window.confirm('确定要清空当前场景中的所有树木、草地与生物吗？')
+        ) {
+          options.onClearScene?.();
+          options.onResume();
+        }
+      },
+    );
+
+    // 5. 返回主场景
     this.backBtn = this.createButton(
       options.backLabel ?? '返回主场景',
       240,
@@ -219,9 +238,9 @@ export class PauseMenu extends Container {
       .fill({ color: 0x000000, alpha: 0.55 });
 
     const panelW = 340;
-    // 动态自适应面板高度：包含标题 + 顶栏 + 5 行按钮组
-    const numRows = 5;
-    const panelH = Math.max(390, 110 + numRows * 52);
+    // 动态自适应面板高度：包含标题 + 顶栏 + 6 行按钮组
+    const numRows = 6;
+    const panelH = Math.max(440, 110 + numRows * 52);
 
     const px = (width - panelW) / 2;
     const py = (height - panelH) / 2;
@@ -273,12 +292,23 @@ export class PauseMenu extends Container {
     this.speedIncBtn.root.position.set(width / 2 + 99, row3Y);
     currentY += this.speedMainBtn.height + 10;
 
-    // 行 4：返回主场景
+    // 行 4：清空场景
+    this.clearSceneBtn.root.pivot.set(
+      this.clearSceneBtn.width / 2,
+      this.clearSceneBtn.height / 2,
+    );
+    this.clearSceneBtn.root.position.set(
+      width / 2,
+      currentY + this.clearSceneBtn.height / 2,
+    );
+    currentY += this.clearSceneBtn.height + 10;
+
+    // 行 5：返回主场景
     this.backBtn.root.pivot.set(this.backBtn.width / 2, this.backBtn.height / 2);
     this.backBtn.root.position.set(width / 2, currentY + this.backBtn.height / 2);
     currentY += this.backBtn.height + 10;
 
-    // 行 5：重置数据
+    // 行 6：重置数据
     this.resetBtn.root.pivot.set(this.resetBtn.width / 2, this.resetBtn.height / 2);
     this.resetBtn.root.position.set(width / 2, currentY + this.resetBtn.height / 2);
   }

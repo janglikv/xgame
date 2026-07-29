@@ -14,8 +14,6 @@ import {
   TREE_MIN_SPACING,
   TREE_MAX_COUNT,
   TREE_SPREAD_ATTEMPTS,
-  TREE_SPREAD_RADIUS_MAX,
-  TREE_SPREAD_RADIUS_MIN,
   TREE_CLUSTER_RADIUS,
   TREE_CLUSTER_SPEEDUP,
   TREE_GRID_CELL,
@@ -63,7 +61,7 @@ import { GrassSpatialIndex } from './GrassSpatialIndex';
 /** 世界变更标志：控制昂贵的陆地泥土重绘 */
 export type HarvestWorldChangeOpts = {
   /**
-   * 是否需要重绘树林黄泥土（仅树布局/体型变时）。
+   * 是否需要重绘树林黄泥土 / 泥地（树布局或泥地变化时）。
    * 草的生长/枯萎不需要，默认 false。
    */
   redrawLand?: boolean;
@@ -73,8 +71,59 @@ export type MudSpot = {
   x: number;
   y: number;
   radius: number;
-  fertility: number; // 0 -> 100 (100 = 恢复为肥沃绿地)
+  /** 0→100：稀草改土进度，满则泥地→草地 */
+  fertility: number;
 };
+
+/**
+ * 极简生态轮动：
+ *   泥地 → 稀草 → 草地 → 密树 → 泥地
+ *
+ * 设计原则：先让「大片」成型，再塌缩轮动。
+ * 塌缩阈值要高、泥斑要小；单株枯萎不造泥。
+ */
+/** 局部统计半径（草密/树密判定） */
+const ECO_R = 160;
+/** 泥地上草数量上限（稀） */
+const MUD_GRASS_CAP = 6;
+/** 泥地草间距 */
+const MUD_GRASS_SPACING = 62;
+/** 泥地内稀草达到此数后快速改土 */
+const MUD_CLEAR_GRASS = 3;
+/** 泥地改土速度：有草 / 无草（点/秒，满 100） */
+const MUD_FERTILITY_WITH_GRASS = 10;
+const MUD_FERTILITY_BARE = 1.2;
+/** 局部草数 ≥ 此值才可发芽成树（需成片草地） */
+const MEADOW_GRASS_FOR_TREE = 10;
+/** 局部树数 ≥ 此值才塌泥（够「大片林」后再轮动） */
+const FOREST_TREE_COLLAPSE = 16;
+/** 单次塌缩基础泥斑半径 */
+const COLLAPSE_MUD_RADIUS = 110;
+/** 两泥斑中心距 ≤ r1+r2+此值 → 合并成一片 */
+const MUD_MERGE_GAP = 55;
+/** 单片泥地半径上限（再大就盖满岛） */
+const MUD_RADIUS_MAX = 260;
+/** 单片泥地半径下限 */
+const MUD_RADIUS_MIN = 90;
+/** 塌缩点距已有泥斑 ≤ 此值时，优先并入该泥斑而非另开新斑 */
+const MUD_ATTRACT_R = 220;
+/** 泥地内树死亡率倍率（地力废了，逼林缘外迁） */
+const MUD_TREE_DEATH_MULT = 4.5;
+/** 泥地内树生长/播种减速 */
+const MUD_TREE_GROW_MULT = 0.25;
+/**
+ * 抱团成林（硬规则）：
+ * - 全岛只要有 ≥1 棵活树，新苗只能落在「主林」林缘，禁止开阔地开新核
+ * - 仅全岛 0 棵树时，才允许茂密草地冒 1 个种核
+ * - 扩张锚点按邻居数加权，孤树几乎不会成为扩散中心
+ */
+/** 林缘落点：贴锚点，连成团而不是跳点 */
+const FOREST_EDGE_DIST_MIN = 44;
+const FOREST_EDGE_DIST_MAX = 86;
+/** 落点必须落在某棵活树此半径内（同簇） */
+const FOREST_CLUSTER_JOIN_R = 100;
+/** 选主林时统计邻居的半径 */
+const FOREST_MAIN_NEIGHBOR_R = 140;
 
 export type HarvestWorldHooks = {
   sortLayer: Container;
@@ -144,12 +193,13 @@ export class HarvestWorld {
 
   /** 从地图刷可砍树与无碰撞草地 */
   spawnFromMap(mapDef: LevelMapDef): void {
-    for (const t of normalizeTrees(mapDef)) {
-      this.mountTree(t);
-    }
+    // 先草后树：树 mount 时会清掉遮荫内草，与运行时诞生规则一致
     for (const g of normalizeGrasses(mapDef)) {
       if (this.grasses.length >= GRASS_MAX_COUNT) break;
       this.mountGrass(g);
+    }
+    for (const t of normalizeTrees(mapDef)) {
+      this.mountTree(t);
     }
   }
 
@@ -175,6 +225,8 @@ export class HarvestWorld {
           r: treeSolidR(grownTree.size),
           id: grownTree.treeId,
         });
+        // 长大后遮荫扩大：再清一圈草
+        this.killGrassNearTree(grownTree);
         this.hooks.afterWorldChange({ redrawLand: true });
         this.markTreePersistDirty();
       },
@@ -190,9 +242,35 @@ export class HarvestWorld {
     });
     this.trees.push(tree);
     this.treeIndex.insert(tree);
+    // 树诞生：周围草枯死（遮荫/养分竞争）
+    this.killGrassNearTree(tree);
     // 默认按深度分带；本帧 tick 再按可视区校正
     this.placeTreeDisplay(tree, true);
     return tree;
+  }
+
+  /**
+   * 树体型对应遮荫半径内的草枯萎死亡。
+   * 诞生 / 长大时调用；草走 wither 动画，由 onWither 卸实体与草稿。
+   */
+  private killGrassNearTree(tree: HarvestableTree): void {
+    if (!tree || tree.destroyed || !tree.isAlive) return;
+    const radius = TREE_GRASS_COMPETITION_RADIUS[tree.size] ?? 48;
+    const r2 = radius * radius;
+    // 先收集再 wither，避免遍历中改索引桶
+    const victims: GrassEntity[] = [];
+    this.grassIndex.forEachWithin(
+      tree.worldX,
+      tree.worldY,
+      radius,
+      (g, dist2) => {
+        if (!g || g.destroyed || g.isWitheringOut) return;
+        if (dist2 <= r2) victims.push(g);
+      },
+    );
+    for (const g of victims) {
+      g.wither();
+    }
   }
 
   private get treeBack(): Container {
@@ -257,9 +335,11 @@ export class HarvestWorld {
   mountGrass(g: MapGrass): GrassEntity {
     const id = grassIdOf(g);
     const size = grassSizeOf(g);
+    const onMud = this.isInMudSpot(g.x, g.y);
     const grass = new GrassEntity(g.x, g.y, {
-      size,
+      size: onMud ? 'small' : size,
       grassId: id,
+      maxSize: onMud ? 'small' : null,
       onGrown: (grownGrass) => {
         const mapDef = this.hooks.getMapDef();
         const found = (mapDef.grasses ?? []).find(
@@ -356,34 +436,58 @@ export class HarvestWorld {
   }
 
   /**
-   * 母株向四面八方尝试播种小草。
-   * 仅绿地上、保持间距，并写入地图草稿。
+   * 母株播种：优先贴着母株成片扩张（近距），少量中距填洞，极少远距拓殖空地。
+   * 泥地：稀草（宽间距 + 数量上限）。
    */
   private trySpreadFrom(source: GrassEntity): void {
     if (this.grasses.length >= GRASS_MAX_COUNT) return;
 
     const mapDef = this.hooks.getMapDef();
-    const targetQuota = GRASS_SPREAD_ATTEMPTS[source.size] ?? 1;
+    const sourceInMud = this.isInMudSpot(source.worldX, source.worldY);
+    const targetQuota = sourceInMud
+      ? 1
+      : (GRASS_SPREAD_ATTEMPTS[source.size] ?? 1);
     let spawned = 0;
 
     for (let q = 0; q < targetQuota; q++) {
       if (this.grasses.length >= GRASS_MAX_COUNT) break;
 
-      // 为每个播种名额最多采样 8 次，确保在 80~220px 的远距离内找到符合 48px 密度限制的落点
-      for (let attempt = 0; attempt < 8; attempt++) {
+      for (let attempt = 0; attempt < 10; attempt++) {
         const angle = Math.random() * Math.PI * 2;
-        const dist =
-          GRASS_SPREAD_RADIUS_MIN +
-          Math.random() * (GRASS_SPREAD_RADIUS_MAX - GRASS_SPREAD_RADIUS_MIN);
+        // 近 70% / 中 22% / 远 8% —— 先连片，再拓荒
+        const roll = Math.random();
+        let dist: number;
+        if (sourceInMud) {
+          dist = 50 + Math.random() * 40;
+        } else if (roll < 0.7) {
+          dist =
+            GRASS_SPREAD_RADIUS_MIN +
+            Math.random() *
+              (GRASS_SPREAD_RADIUS_MAX - GRASS_SPREAD_RADIUS_MIN);
+        } else if (roll < 0.92) {
+          dist = GRASS_SPREAD_RADIUS_MAX + Math.random() * 50;
+        } else {
+          dist = 140 + Math.random() * 80;
+        }
         const x = source.worldX + Math.cos(angle) * dist;
         const y = source.worldY + Math.sin(angle) * dist;
 
-        // 仅限真正的绿色草地（严格排除黄色沙滩与海岸）
         if (!isOnGreenLand(x, y, mapDef, 255)) continue;
-        // 树木遮荫/养分竞争拦截：树附近不能长草
         if (this.isGrassTooCloseToTrees(x, y)) continue;
-        // 严格检查 48px 最小密度间距
-        if (this.isGrassTooClose(x, y, GRASS_MIN_SPACING)) continue;
+
+        const mud = this.findMudSpot(x, y);
+        if (mud) {
+          const mudGrass = this.grassIndex.countWithin(
+            mud.x,
+            mud.y,
+            mud.radius,
+            (g) => !g.isWitheringOut,
+          );
+          if (mudGrass >= MUD_GRASS_CAP) continue;
+          if (this.isGrassTooClose(x, y, MUD_GRASS_SPACING)) continue;
+        } else if (this.isGrassTooClose(x, y, GRASS_MIN_SPACING)) {
+          continue;
+        }
 
         if (!mapDef.grasses) mapDef.grasses = [];
         const id = allocGrassId('gs');
@@ -391,7 +495,7 @@ export class HarvestWorld {
         mapDef.grasses.push(g);
         this.mountGrass(g);
         spawned += 1;
-        break; // 成功放置 1 株后进入下一个名额
+        break;
       }
     }
 
@@ -399,6 +503,17 @@ export class HarvestWorld {
       this.hooks.afterWorldChange();
       this.markGrassPersistDirty();
     }
+  }
+
+  /** 坐标所在泥地；无则 null */
+  findMudSpot(x: number, y: number): MudSpot | null {
+    for (let i = 0; i < this.mudSpots.length; i++) {
+      const m = this.mudSpots[i]!;
+      const dx = x - m.x;
+      const dy = y - m.y;
+      if (dx * dx + dy * dy <= m.radius * m.radius) return m;
+    }
+    return null;
   }
 
   /**
@@ -409,67 +524,147 @@ export class HarvestWorld {
   }
 
   /**
-   * 母树向四周尝试播种新树苗。
-   * 抱团机制：优先在母树/树丛周边 (45~135px) 紧凑吸附落点，天然形成林区。
+   * 母树播种：只在母树紧邻林缘落苗（强制同簇扩张）。
    */
   private trySpreadTreeFrom(source: HarvestableTree): void {
     if (this.trees.length >= TREE_MAX_COUNT) return;
+    if (!source.isAlive) return;
 
     const mapDef = this.hooks.getMapDef();
-    const targetQuota = TREE_SPREAD_ATTEMPTS[source.size] ?? 1;
+    // 孤树播种略少；成簇后加速外扩
+    const neighbors = this.countNearbyTrees(
+      source.worldX,
+      source.worldY,
+      FOREST_MAIN_NEIGHBOR_R,
+    );
+    const baseQuota = TREE_SPREAD_ATTEMPTS[source.size] ?? 1;
+    const targetQuota =
+      neighbors >= 2 ? baseQuota + 1 : neighbors === 0 ? 1 : baseQuota;
     let spawned = 0;
 
     for (let q = 0; q < targetQuota; q++) {
       if (this.trees.length >= TREE_MAX_COUNT) break;
 
-      // 寻找落点：优先以母树或现有集群为中心抱团聚落
-      for (let attempt = 0; attempt < 12; attempt++) {
-        // 80% 概率紧贴母树周边，20% 概率随机向外伸展
-        const anchor =
-          Math.random() < 0.8 || this.trees.length <= 1
-            ? source
-            : this.trees[Math.floor(Math.random() * this.trees.length)]!;
-
+      // 多试几次找「仍贴母树、但局部邻居较少」的林缘空位
+      let best: { x: number; y: number; score: number } | null = null;
+      for (let attempt = 0; attempt < 22; attempt++) {
         const angle = Math.random() * Math.PI * 2;
         const dist =
-          TREE_SPREAD_RADIUS_MIN +
-          Math.random() * (TREE_SPREAD_RADIUS_MAX - TREE_SPREAD_RADIUS_MIN);
-        const x = anchor.worldX + Math.cos(angle) * dist;
-        const y = anchor.worldY + Math.sin(angle) * dist;
-
-        // 仅限绿色陆地
-        if (!isOnGreenLand(x, y, mapDef, 255)) continue;
-        // 泥地上绝对不能播种发芽树木！
-        if (this.isInMudSpot(x, y)) continue;
-        // 树木之间保持最小保护间距
-        if (this.isTreeTooClose(x, y, TREE_MIN_SPACING)) continue;
-
-        const prefix = source.treeKind === 'apple' ? 'apsap' : 'sap';
-        const id = allocTreeId(prefix);
-        const t: MapTree = {
-          x,
-          y,
-          size: 'sapling',
-          kind: source.treeKind,
-          id,
-        };
-        mapDef.trees.push(t);
-        addRuntimeTreeObstacle({
-          x,
-          y,
-          r: treeSolidR('sapling'),
-          id,
-        });
-        this.mountTree(t);
-        spawned += 1;
-        break;
+          FOREST_EDGE_DIST_MIN +
+          Math.random() * (FOREST_EDGE_DIST_MAX - FOREST_EDGE_DIST_MIN);
+        const x = source.worldX + Math.cos(angle) * dist;
+        const y = source.worldY + Math.sin(angle) * dist;
+        if (!this.canPlantTreeAt(x, y, mapDef)) continue;
+        if (this.countNearbyTrees(x, y, FOREST_CLUSTER_JOIN_R) < 1) continue;
+        // 偏好：贴母树且该方向不那么挤 → 向外缘扩张
+        const localN = this.countNearbyTrees(x, y, FOREST_CLUSTER_JOIN_R);
+        const score = 10 - localN + Math.random() * 0.5;
+        if (!best || score > best.score) best = { x, y, score };
       }
+      if (!best) break;
+      this.plantSapling(best.x, best.y, source.treeKind, mapDef);
+      spawned += 1;
     }
 
     if (spawned > 0) {
       this.hooks.afterWorldChange({ redrawLand: true });
       this.markTreePersistDirty();
     }
+  }
+
+  /** 落点是否可种树（绿地、非泥、间距、未达塌缩密度） */
+  private canPlantTreeAt(
+    x: number,
+    y: number,
+    mapDef: LevelMapDef,
+  ): boolean {
+    if (!isOnGreenLand(x, y, mapDef, 255)) return false;
+    if (this.isInMudSpot(x, y)) return false;
+    if (this.isTreeTooClose(x, y, TREE_MIN_SPACING)) return false;
+    if (this.countNearbyTrees(x, y, ECO_R) >= FOREST_TREE_COLLAPSE) {
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * 选「主林」扩张锚点：邻居越多权重越高，孤树几乎轮不到。
+   * 这样全岛增长都集中在最大那一团，而不是满图散点扩。
+   */
+  private pickMainForestAnchor(): HarvestableTree | null {
+    const alive = this.trees.filter((t) => t.isAlive && !t.destroyed);
+    if (alive.length === 0) return null;
+    if (alive.length === 1) return alive[0]!;
+
+    // 抽样评估，树多时避免 O(n²) 过重
+    const samples =
+      alive.length <= 24
+        ? alive
+        : Array.from({ length: 24 }, () => {
+            return alive[Math.floor(Math.random() * alive.length)]!;
+          });
+
+    let best: HarvestableTree | null = null;
+    let bestWeight = 0;
+    for (const t of samples) {
+      const n = this.countNearbyTrees(
+        t.worldX,
+        t.worldY,
+        FOREST_MAIN_NEIGHBOR_R,
+      );
+      // (n+1)^2：主林远高于孤树；加一点噪声避免永远同一棵
+      const w = (n + 1) * (n + 1) * (0.85 + Math.random() * 0.3);
+      if (w > bestWeight) {
+        bestWeight = w;
+        best = t;
+      }
+    }
+    return best;
+  }
+
+  /**
+   * 在主林林缘尝试落一棵苗。成功返回 true。
+   */
+  private tryPlantOnForestEdge(
+    anchor: HarvestableTree,
+    mapDef: LevelMapDef,
+    kind?: NonNullable<MapTree['kind']>,
+  ): boolean {
+    const treeKind = kind ?? anchor.treeKind;
+    for (let attempt = 0; attempt < 16; attempt++) {
+      const ang = Math.random() * Math.PI * 2;
+      const dist =
+        FOREST_EDGE_DIST_MIN +
+        Math.random() * (FOREST_EDGE_DIST_MAX - FOREST_EDGE_DIST_MIN);
+      const x = anchor.worldX + Math.cos(ang) * dist;
+      const y = anchor.worldY + Math.sin(ang) * dist;
+      if (!this.canPlantTreeAt(x, y, mapDef)) continue;
+      if (this.countNearbyTrees(x, y, FOREST_CLUSTER_JOIN_R) < 1) continue;
+      this.plantSapling(x, y, treeKind, mapDef);
+      return true;
+    }
+    return false;
+  }
+
+  /** 写入地图 + solid + mount 一棵树苗 */
+  private plantSapling(
+    x: number,
+    y: number,
+    kind: MapTree['kind'] extends infer K ? NonNullable<K> : 'pine',
+    mapDef: LevelMapDef,
+  ): HarvestableTree {
+    const prefix = kind === 'apple' ? 'apsap' : 'sap';
+    const id = allocTreeId(prefix);
+    const t: MapTree = { x, y, size: 'sapling', kind, id };
+    if (!mapDef.trees) mapDef.trees = [];
+    mapDef.trees.push(t);
+    addRuntimeTreeObstacle({
+      x,
+      y,
+      r: treeSolidR('sapling'),
+      id,
+    });
+    return this.mountTree(t);
   }
 
   /** 与已有草丛是否过近（网格邻域） */
@@ -481,9 +676,9 @@ export class HarvestWorld {
   isGrassTooCloseToTrees(x: number, y: number): boolean {
     // 最大竞争半径（large）；再按体型精确判定
     let blocked = false;
-    this.treeIndex.forEachWithin(x, y, 135, (tree, dist2) => {
+    this.treeIndex.forEachWithin(x, y, 72, (tree, dist2) => {
       if (!tree.isAlive) return;
-      const radius = TREE_GRASS_COMPETITION_RADIUS[tree.size] ?? 72;
+      const radius = TREE_GRASS_COMPETITION_RADIUS[tree.size] ?? 48;
       if (dist2 <= radius * radius) {
         blocked = true;
         return true;
@@ -523,18 +718,220 @@ export class HarvestWorld {
     }
   }
 
-  /** 树自然衰老枯萎：耗尽地力生成泥地/休耕地 + 移除实体 + 掉落 1 木头残余 */
+  /**
+   * 单株枯萎：只让出空地给草/绿地连片，不造泥。
+   * 密林塌泥只由 tickForestCollapse 触发，避免满图碎泥斑。
+   */
   onTreeWithered(tree: HarvestableTree): void {
     this.removeTreeEntity(tree);
-    this.mudSpots.push({
-      x: tree.worldX,
-      y: tree.worldY,
-      radius: 130,
-      fertility: 0,
-    });
     this.spawnPickup(tree.worldX, tree.worldY, 'wood', 1);
     this.hooks.afterWorldChange({ redrawLand: true });
     this.markTreePersistDirty();
+  }
+
+  /**
+   * 新增/扩张泥地：能并就并，优先并入附近最大泥斑，趋近「一大片」。
+   */
+  private addMudSpot(x: number, y: number, radius: number): void {
+    const rNew = Math.max(MUD_RADIUS_MIN, Math.min(MUD_RADIUS_MAX, radius));
+
+    // 1) 吸引半径内已有泥斑 → 并入最大的那块（哪怕还没重叠）
+    let attractIdx = -1;
+    let attractScore = -1;
+    for (let i = 0; i < this.mudSpots.length; i++) {
+      const m = this.mudSpots[i]!;
+      const d = Math.hypot(m.x - x, m.y - y);
+      if (d > MUD_ATTRACT_R + m.radius * 0.35) continue;
+      // 越大、越近越优先
+      const score = m.radius * 2.2 - d * 0.35;
+      if (score > attractScore) {
+        attractScore = score;
+        attractIdx = i;
+      }
+    }
+
+    if (attractIdx >= 0) {
+      this.mergeMudInto(this.mudSpots[attractIdx]!, x, y, rNew);
+    } else {
+      this.mudSpots.push({ x, y, radius: rNew, fertility: 0 });
+    }
+
+    // 2) 全局合并：邻近泥斑合成一片，直到稳定
+    this.consolidateMudSpots();
+  }
+
+  /** 把 (x,y,r) 并入目标泥斑：质心加权 + 半径包住两圆 */
+  private mergeMudInto(
+    target: MudSpot,
+    x: number,
+    y: number,
+    radius: number,
+  ): void {
+    const w1 = target.radius * target.radius;
+    const w2 = radius * radius;
+    const w = w1 + w2;
+    const nx = (target.x * w1 + x * w2) / w;
+    const ny = (target.y * w1 + y * w2) / w;
+    // 包络两圆的近似外接半径
+    const d1 = Math.hypot(target.x - nx, target.y - ny);
+    const d2 = Math.hypot(x - nx, y - ny);
+    const cover = Math.max(d1 + target.radius, d2 + radius);
+    // 略膨胀一点，让合并后更连成「一大片」
+    const grown = cover * 1.06 + MUD_MERGE_GAP * 0.15;
+    target.x = nx;
+    target.y = ny;
+    target.radius = Math.min(
+      MUD_RADIUS_MAX,
+      Math.max(target.radius, radius, grown),
+    );
+    // 合并后地力取更「废」的一侧，避免大斑被快速改土消掉
+    target.fertility = Math.min(target.fertility, 12);
+  }
+
+  /**
+   * 邻近泥斑反复合并，直到只剩互不挨着的几大片（通常 1～2 片）。
+   */
+  private consolidateMudSpots(): void {
+    let guard = 0;
+    while (guard++ < 32) {
+      let merged = false;
+      outer: for (let i = 0; i < this.mudSpots.length; i++) {
+        const a = this.mudSpots[i]!;
+        for (let j = i + 1; j < this.mudSpots.length; j++) {
+          const b = this.mudSpots[j]!;
+          const d = Math.hypot(a.x - b.x, a.y - b.y);
+          // 重叠、相切、或仅隔一条缝 → 合成
+          if (d <= a.radius + b.radius + MUD_MERGE_GAP) {
+            // 总是并入更大的，保持主斑稳定
+            if (a.radius >= b.radius) {
+              this.mergeMudInto(a, b.x, b.y, b.radius);
+              this.mudSpots.splice(j, 1);
+            } else {
+              this.mergeMudInto(b, a.x, a.y, a.radius);
+              this.mudSpots.splice(i, 1);
+            }
+            merged = true;
+            break outer;
+          }
+        }
+      }
+      if (!merged) break;
+    }
+  }
+
+  /**
+   * 密树 → 泥地：清林心；泥斑尽量并入/贴向已有大泥地。
+   */
+  private collapseForestToMud(cx: number, cy: number): void {
+    // 若附近已有大泥，塌缩中心略向其靠拢，方便连成一片
+    let mudCx = cx;
+    let mudCy = cy;
+    let r = COLLAPSE_MUD_RADIUS;
+    const nearMud = this.findNearestMud(cx, cy, MUD_ATTRACT_R);
+    if (nearMud) {
+      const d = Math.hypot(nearMud.x - cx, nearMud.y - cy);
+      // 向大泥靠 35%～55%，半径略加大以便搭上
+      const pull = 0.35 + Math.min(0.2, nearMud.radius / 800);
+      mudCx = cx + (nearMud.x - cx) * pull;
+      mudCy = cy + (nearMud.y - cy) * pull;
+      r = Math.min(
+        MUD_RADIUS_MAX * 0.75,
+        COLLAPSE_MUD_RADIUS + nearMud.radius * 0.18 + Math.max(0, 40 - d * 0.1),
+      );
+    }
+
+    const clearR = Math.max(r, COLLAPSE_MUD_RADIUS) * 1.12;
+    const clearR2 = clearR * clearR;
+    const r2 = r * r;
+
+    const treeSnap = this.trees.slice();
+    for (const t of treeSnap) {
+      if (!t || t.destroyed) continue;
+      const dx = t.worldX - mudCx;
+      const dy = t.worldY - mudCy;
+      if (dx * dx + dy * dy > clearR2) continue;
+      if (t.isAlive) {
+        this.spawnPickup(t.worldX, t.worldY, 'wood', 1);
+      }
+      this.removeTreeEntity(t);
+    }
+
+    // 泥斑内草清掉，留 1～2 株稀草火种
+    const grassSnap = this.grasses.slice();
+    let kept = 0;
+    for (const g of grassSnap) {
+      if (!g || g.destroyed || g.isWitheringOut) continue;
+      const dx = g.worldX - mudCx;
+      const dy = g.worldY - mudCy;
+      if (dx * dx + dy * dy > r2) continue;
+      if (kept < 2 && g.size === 'small') {
+        g.setMaxSize('small');
+        kept += 1;
+        continue;
+      }
+      this.forceRemoveGrass(g);
+    }
+
+    this.addMudSpot(mudCx, mudCy, r);
+
+    // 火种落在合并后的主泥斑上
+    const host = this.findNearestMud(mudCx, mudCy, MUD_RADIUS_MAX) ?? {
+      x: mudCx,
+      y: mudCy,
+      radius: r,
+      fertility: 0,
+    };
+    while (kept < 2) {
+      this.spawnSparseGrassOnMud(host.x, host.y, host.radius * 0.7);
+      kept += 1;
+    }
+
+    this.hooks.afterWorldChange({ redrawLand: true });
+    this.markTreePersistDirty();
+    this.markGrassPersistDirty();
+  }
+
+  /** 最近泥斑（中心距 ≤ maxDist） */
+  private findNearestMud(x: number, y: number, maxDist: number): MudSpot | null {
+    let best: MudSpot | null = null;
+    let bestD = maxDist;
+    for (const m of this.mudSpots) {
+      const d = Math.hypot(m.x - x, m.y - y);
+      if (d < bestD) {
+        bestD = d;
+        best = m;
+      }
+    }
+    return best;
+  }
+
+  private forceRemoveGrass(grass: GrassEntity): void {
+    const mapDef = this.hooks.getMapDef();
+    if (grass.grassId && mapDef.grasses) {
+      mapDef.grasses = mapDef.grasses.filter(
+        (item) => grassIdOf(item) !== grass.grassId,
+      );
+    }
+    this.removeGrassEntity(grass);
+  }
+
+  /** 泥地上种一株稀草火种 */
+  private spawnSparseGrassOnMud(cx: number, cy: number, radius: number): void {
+    const mapDef = this.hooks.getMapDef();
+    for (let attempt = 0; attempt < 12; attempt++) {
+      const ang = Math.random() * Math.PI * 2;
+      const dist = Math.random() * radius * 0.55;
+      const x = cx + Math.cos(ang) * dist;
+      const y = cy + Math.sin(ang) * dist;
+      if (!isOnGreenLand(x, y, mapDef, 255)) continue;
+      if (this.isGrassTooClose(x, y, MUD_GRASS_SPACING)) continue;
+      if (!mapDef.grasses) mapDef.grasses = [];
+      const id = allocGrassId('gs');
+      const g: MapGrass = { x, y, size: 'small', id };
+      mapDef.grasses.push(g);
+      this.mountGrass(g);
+      return;
+    }
   }
 
   spawnPickup(
@@ -616,11 +1013,21 @@ export class HarvestWorld {
   /** 从列表移除实体（上帝模式擦除等，不触发掉落） */
   removeTreeEntity(tree: HarvestableTree): void {
     const idx = this.trees.indexOf(tree);
-    if (idx < 0) return;
+    if (idx < 0) {
+      // 可能已从列表摘掉，仍尽量清 solid / 草稿
+    } else {
+      this.trees.splice(idx, 1);
+    }
     this.treeIndex.remove(tree);
-    tree.parent?.removeChild(tree);
-    tree.destroy({ children: true });
-    this.trees.splice(idx, 1);
+    if (tree.treeId) {
+      removeRuntimeTreeObstacleById(tree.treeId);
+      const mapDef = this.hooks.getMapDef();
+      mapDef.trees = mapDef.trees.filter((t) => treeIdOf(t) !== tree.treeId);
+    }
+    if (!tree.destroyed) {
+      tree.parent?.removeChild(tree);
+      tree.destroy({ children: true });
+    }
   }
 
   /** 移除草地实体 */
@@ -634,6 +1041,44 @@ export class HarvestWorld {
     // destroy 会从 parent 卸下；勿在 destroy 后再 addChild/换层
     grass.destroy({ children: true });
   }
+
+  /** 清空场景中的所有树木、草地、掉落物和泥斑 */
+  clearAll(): void {
+    while (this.trees.length > 0) {
+      const t = this.trees.pop()!;
+      if (t.treeId) {
+        removeRuntimeTreeObstacleById(t.treeId);
+      }
+      if (!t.destroyed) {
+        t.parent?.removeChild(t);
+        t.destroy({ children: true });
+      }
+    }
+    this.treeIndex.clear();
+
+    while (this.grasses.length > 0) {
+      const g = this.grasses.pop()!;
+      if (!g.destroyed) {
+        g.parent?.removeChild(g);
+        g.destroy({ children: true });
+      }
+    }
+    this.grassIndex.clear();
+
+    for (const p of this.pickups) {
+      if (!p.destroyed) {
+        p.parent?.removeChild(p);
+        p.destroy({ children: true });
+      }
+    }
+    this.pickups.length = 0;
+    this.mudSpots.length = 0;
+
+    const mapDef = this.hooks.getMapDef();
+    mapDef.trees = [];
+    mapDef.grasses = [];
+  }
+
 
   /**
    * 牛马啃草：体型缩小一级（大→中→小），小草不消失。
@@ -729,9 +1174,10 @@ export class HarvestWorld {
     }
 
     this.tickTreeEntities(deltaMS, view);
+    this.tickForestCollapse(dt);
     this.tickTreeSproutFromLushGrass(dt);
 
-    // 场景为空白（全岛无草）时，在绿色陆地上随机孵化 1 棵初始种子草（生命火种）
+    // 全岛无草：种子火种，保证循环能启动
     if (this.grasses.length === 0) {
       this.spawnInitialSeedGrass();
       this.flushGrassPersist();
@@ -739,7 +1185,17 @@ export class HarvestWorld {
       return;
     }
 
-    // 推进泥地/休耕地地力恢复过程（草的根系改良土壤）
+    // 泥地：先合并趋近大片，再改土
+    if (this.mudSpots.length > 1) {
+      const before = this.mudSpots.length;
+      this.consolidateMudSpots();
+      if (this.mudSpots.length !== before) {
+        this.hooks.afterWorldChange({ redrawLand: true });
+      }
+    }
+
+    // 泥地 → 稀草改土 → 草地（大斑改土更慢，整片更持久）
+    let mudChanged = false;
     for (let i = this.mudSpots.length - 1; i >= 0; i--) {
       const m = this.mudSpots[i]!;
       const grassCount = this.grassIndex.countWithin(
@@ -748,15 +1204,29 @@ export class HarvestWorld {
         m.radius,
         (g) => !g.isWitheringOut,
       );
-      if (grassCount > 0) {
-        // 泥地上有草在生根滋养土壤，草越多积累肥力越快
-        m.fertility += dt * (4.0 + grassCount * 3.5);
+      // 半径越大，改土越慢（一大片不会瞬间变绿）
+      const sizeSlow = 90 / Math.max(90, m.radius * 0.85);
+      if (grassCount >= MUD_CLEAR_GRASS) {
+        m.fertility +=
+          dt * (MUD_FERTILITY_WITH_GRASS + grassCount * 2) * sizeSlow;
+      } else if (grassCount > 0) {
+        m.fertility += dt * MUD_FERTILITY_WITH_GRASS * 0.45 * sizeSlow;
       } else {
-        // 无草时极慢自然休耕恢复
-        m.fertility += dt * 0.8;
+        m.fertility += dt * MUD_FERTILITY_BARE * sizeSlow;
       }
       if (m.fertility >= 100) {
-        this.mudSpots.splice(i, 1); // 肥力满 100，修养完毕，恢复为肥沃绿地
+        this.mudSpots.splice(i, 1);
+        mudChanged = true;
+      }
+    }
+    if (mudChanged) {
+      this.hooks.afterWorldChange({ redrawLand: true });
+      this.mudVisualTimer = 1.2;
+    } else if (this.mudSpots.length > 0) {
+      this.mudVisualTimer -= dt;
+      if (this.mudVisualTimer <= 0) {
+        this.mudVisualTimer = 1.2;
+        this.hooks.afterWorldChange({ redrawLand: true });
       }
     }
 
@@ -771,12 +1241,16 @@ export class HarvestWorld {
       const g = snapshot[i];
       if (!g || g.destroyed) continue;
 
+      // 泥地 = 稀草（只 small）；离开泥地 = 草地（可长大）
       const inMud = this.isInMudSpot(g.worldX, g.worldY);
+      g.setMaxSize(inMud ? 'small' : null);
+
       const runLogic = g.isWitheringOut || i % slices === slice;
       g.update(deltaMS, {
         view,
         lodFar,
-        speedup: inMud ? 0.25 : 1.0, // 泥地上草生长减慢至 25%
+        // 泥地稀草长得慢；草地正常
+        speedup: inMud ? 0.45 : 1.0,
         runLogic,
         logicScale: runLogic && !g.isWitheringOut ? slices : 1,
       });
@@ -795,6 +1269,47 @@ export class HarvestWorld {
     this.flushTreePersist();
   }
 
+  /** 密树塌缩检测冷却（秒）——故意偏慢，给大片林时间成型 */
+  private forestCollapseTimer = 12;
+  /** 泥地地表刷新冷却（秒） */
+  private mudVisualTimer = 1.2;
+
+  /**
+   * 密树 → 泥地：优先塌「靠已有泥地」的密林，便于泥斑连成一大片。
+   */
+  private tickForestCollapse(dt: number): void {
+    this.forestCollapseTimer -= dt;
+    if (this.forestCollapseTimer > 0) return;
+    this.forestCollapseTimer = 8 + Math.random() * 6;
+
+    if (this.trees.length < FOREST_TREE_COLLAPSE) return;
+
+    const samples = Math.min(14, this.trees.length);
+    let best: HarvestableTree | null = null;
+    let bestScore = -1;
+    for (let s = 0; s < samples; s++) {
+      const t = this.trees[Math.floor(Math.random() * this.trees.length)]!;
+      if (!t || t.destroyed || !t.isAlive) continue;
+      const n = this.countNearbyTrees(t.worldX, t.worldY, ECO_R);
+      if (n < FOREST_TREE_COLLAPSE) continue;
+      // 密度分 + 靠近已有泥地加分（趋近并片）
+      let score = n * 3;
+      const mud = this.findNearestMud(t.worldX, t.worldY, MUD_ATTRACT_R);
+      if (mud) {
+        const d = Math.hypot(mud.x - t.worldX, mud.y - t.worldY);
+        score += 12 + mud.radius * 0.08 - d * 0.04;
+      }
+      if (score > bestScore) {
+        bestScore = score;
+        best = t;
+      }
+    }
+    if (best) {
+      this.collapseForestToMud(best.worldX, best.worldY);
+      this.forestCollapseTimer = 18 + Math.random() * 12;
+    }
+  }
+
   /** 树：逻辑分片 + 屏外剔除 + Y 分带（减少 sortLayer 节点） */
   private tickTreeEntities(
     deltaMS: number,
@@ -811,7 +1326,7 @@ export class HarvestWorld {
       if (!tree || tree.destroyed || (!tree.isAlive && !tree.isWitheringOut)) continue;
 
       const runLogic = i % slices === slice || tree.isWitheringOut;
-      // 计算 120px 范围内的存活同伴树数量 N
+      // 同伴数：抱团略加速生长；过密由 tickForestCollapse 整片塌成泥地
       const neighbors = this.treeIndex.countWithin(
         tree.worldX,
         tree.worldY,
@@ -820,24 +1335,37 @@ export class HarvestWorld {
         tree,
       );
 
-      // 密度依存自然死亡率（生态自我循环法则）：
-      // 1) N = 0（孤树）：无庇护，死亡率较高 (1.8x)
-      // 2) N = 1~3（黄金小树林）：适度庇护，阳光充足，死亡率极低 (0.2x)，蓬勃生长
-      // 3) N >= 4（过密老林）：严重遮阴与根系竞争，触发自然凋亡与稀疏，死亡率陡增 (3.6x)
-      let deathRateMultiplier = 1.0;
+      tree.clusterSpeedup =
+        neighbors >= 1 && neighbors < FOREST_TREE_COLLAPSE
+          ? TREE_CLUSTER_SPEEDUP
+          : 1;
+
+      // 孤树快死、成团稳健 —— 散点会被自然清掉，主林留下来
+      let deathRateMultiplier = 0.5;
       if (neighbors === 0) {
-        deathRateMultiplier = 1.8;
-      } else if (neighbors <= 3) {
-        deathRateMultiplier = 0.2;
-      } else {
-        deathRateMultiplier = 3.6;
+        deathRateMultiplier = 2.2;
+      } else if (neighbors === 1) {
+        deathRateMultiplier = 1.1;
+      } else if (neighbors <= 8) {
+        deathRateMultiplier = 0.28;
+      } else if (neighbors >= FOREST_TREE_COLLAPSE - 2) {
+        deathRateMultiplier = 0.65;
       }
 
-      tree.clusterSpeedup = neighbors >= 1 && neighbors <= 3 ? TREE_CLUSTER_SPEEDUP : 1;
+      // 抱团生长/播种加速更强
+      let growBoost =
+        neighbors >= 2 ? TREE_CLUSTER_SPEEDUP * 1.15 : tree.clusterSpeedup;
+
+      // 泥地：树加速死亡 + 几乎不长不播 → 林被迫往外缘迁，生态轮动起来
+      const onMud = this.isInMudSpot(tree.worldX, tree.worldY);
+      if (onMud) {
+        deathRateMultiplier *= MUD_TREE_DEATH_MULT;
+        growBoost *= MUD_TREE_GROW_MULT;
+      }
 
       tree.update(deltaMS, {
         view,
-        speedup: tree.clusterSpeedup,
+        speedup: growBoost,
         deathRateMultiplier,
         runLogic,
         logicScale: runLogic && !tree.isWitheringOut ? slices : 1,
@@ -898,45 +1426,32 @@ export class HarvestWorld {
     const land = landRectOf(mapDef);
     if (land.w <= 0 || land.h <= 0) return;
 
-    // 优先向场上已有树木周边（50px ~ 130px）抱团聚落，更容易形成森林
+    // 有树：只扩主林；无树：才允许开一个松树种核
+    const anchor = this.pickMainForestAnchor();
+    if (anchor) {
+      if (this.tryPlantOnForestEdge(anchor, mapDef, 'pine')) {
+        this.hooks.afterWorldChange({ redrawLand: true });
+        this.markTreePersistDirty();
+      }
+      return;
+    }
+
     for (let attempt = 0; attempt < 16; attempt++) {
       let x: number;
       let y: number;
-
-      if (this.trees.length > 0 && Math.random() < 0.75) {
-        const anchor =
-          this.trees[Math.floor(Math.random() * this.trees.length)]!;
-        const ang = Math.random() * Math.PI * 2;
-        const dist =
-          TREE_SPREAD_RADIUS_MIN +
-          Math.random() * (TREE_SPREAD_RADIUS_MAX - TREE_SPREAD_RADIUS_MIN);
-        x = anchor.worldX + Math.cos(ang) * dist;
-        y = anchor.worldY + Math.sin(ang) * dist;
-      } else if (this.grasses.length > 0 && Math.random() < 0.7) {
+      if (this.grasses.length > 0) {
         const g =
           this.grasses[Math.floor(Math.random() * this.grasses.length)]!;
         const ang = Math.random() * Math.PI * 2;
-        const dist = 60 + Math.random() * 100;
+        const dist = 16 + Math.random() * 32;
         x = g.worldX + Math.cos(ang) * dist;
         y = g.worldY + Math.sin(ang) * dist;
       } else {
         x = land.x + 40 + Math.random() * Math.max(1, land.w - 80);
         y = land.y + 40 + Math.random() * Math.max(1, land.h - 80);
       }
-
-      if (!isOnGreenLand(x, y, mapDef, 255)) continue;
-      if (this.isTreeTooClose(x, y, TREE_MIN_SPACING)) continue;
-
-      const id = allocTreeId('pine');
-      const t: MapTree = { x, y, size: 'sapling', kind: 'pine', id };
-      mapDef.trees.push(t);
-      addRuntimeTreeObstacle({
-        x,
-        y,
-        r: treeSolidR('sapling'),
-        id,
-      });
-      this.mountTree(t);
+      if (!this.canPlantTreeAt(x, y, mapDef)) continue;
+      this.plantSapling(x, y, 'pine', mapDef);
       this.hooks.afterWorldChange({ redrawLand: true });
       this.markTreePersistDirty();
       return;
@@ -1043,28 +1558,43 @@ export class HarvestWorld {
     }
   }
 
-  /** 当场景中完全无草时，随机挑选一处绿地生成 1 棵初始种子草（生命火种） */
+  /**
+   * 全岛无草时：种一小簇种子草（3～5 株），方便立刻连成片而不是单点散落。
+   */
   private spawnInitialSeedGrass(): void {
     const mapDef = this.hooks.getMapDef();
     const land = landRectOf(mapDef);
     if (land.w <= 0 || land.h <= 0) return;
 
-    for (let attempt = 0; attempt < 20; attempt++) {
-      const x = land.x + Math.random() * land.w;
-      const y = land.y + Math.random() * land.h;
-
-      // 必须在绿地上且远离树木
-      if (!isOnGreenLand(x, y, mapDef, 255)) continue;
-      if (this.isGrassTooCloseToTrees(x, y)) continue;
+    for (let attempt = 0; attempt < 24; attempt++) {
+      const cx = land.x + 40 + Math.random() * Math.max(1, land.w - 80);
+      const cy = land.y + 40 + Math.random() * Math.max(1, land.h - 80);
+      if (!isOnGreenLand(cx, cy, mapDef, 255)) continue;
+      if (this.isInMudSpot(cx, cy)) continue;
+      if (this.isGrassTooCloseToTrees(cx, cy)) continue;
 
       if (!mapDef.grasses) mapDef.grasses = [];
-      const id = allocGrassId('gs');
-      const g: MapGrass = { x, y, size: 'small', id };
-      mapDef.grasses.push(g);
-      this.mountGrass(g);
-      this.hooks.persistMapDraft();
-      this.hooks.afterWorldChange();
-      break;
+      const cluster = 3 + Math.floor(Math.random() * 3);
+      let planted = 0;
+      for (let i = 0; i < cluster * 3 && planted < cluster; i++) {
+        const ang = Math.random() * Math.PI * 2;
+        const dist = i === 0 ? 0 : 28 + Math.random() * 48;
+        const x = cx + Math.cos(ang) * dist;
+        const y = cy + Math.sin(ang) * dist;
+        if (!isOnGreenLand(x, y, mapDef, 255)) continue;
+        if (this.isGrassTooCloseToTrees(x, y)) continue;
+        if (this.isGrassTooClose(x, y, GRASS_MIN_SPACING)) continue;
+        const id = allocGrassId('gs');
+        const g: MapGrass = { x, y, size: 'small', id };
+        mapDef.grasses.push(g);
+        this.mountGrass(g);
+        planted += 1;
+      }
+      if (planted > 0) {
+        this.hooks.persistMapDraft();
+        this.hooks.afterWorldChange();
+        return;
+      }
     }
   }
 
@@ -1075,56 +1605,65 @@ export class HarvestWorld {
 
   private treeSproutTimer = 10;
 
-  /** 在草丛茂盛区（大草或高密度草丛）孕育发芽新树苗 */
+  /**
+   * 草地 → 树（强制抱团，禁止满图散点）：
+   * - 有活树：只在主林林缘长苗（可连种 2 棵）
+   * - 无树：茂密草地只开 1 个种核，之后全部贴林长
+   */
   private tickTreeSproutFromLushGrass(dt: number): void {
     if (this.trees.length >= TREE_MAX_COUNT) return;
     this.treeSproutTimer -= dt;
     if (this.treeSproutTimer > 0) return;
 
-    this.treeSproutTimer = 18 + Math.random() * 14;
-
+    this.treeSproutTimer = 7 + Math.random() * 5;
     if (this.grasses.length === 0) return;
 
     const mapDef = this.hooks.getMapDef();
-    const candidates = this.grasses.filter((g) => !g.isWitheringOut);
-    if (candidates.length === 0) return;
+    const anchor = this.pickMainForestAnchor();
+    let planted = 0;
 
-    for (let i = 0; i < 12; i++) {
-      const g = candidates[Math.floor(Math.random() * candidates.length)]!;
-      const nearbyGrassCount = this.countNearbyGrasses(g.worldX, g.worldY, 140);
-      const isLush = g.size === 'large' || nearbyGrassCount >= 3;
+    if (anchor) {
+      // 主林扩张：一次最多 2 株，全贴主林缘
+      const maxPlant = 2;
+      for (let i = 0; i < maxPlant; i++) {
+        if (this.trees.length >= TREE_MAX_COUNT) break;
+        if (this.tryPlantOnForestEdge(anchor, mapDef)) planted += 1;
+      }
+    } else {
+      // 唯一种核：全岛 0 树时才允许
+      const candidates = this.grasses.filter((g) => !g.isWitheringOut);
+      if (candidates.length === 0) return;
 
-      if (!isLush) continue;
+      for (let i = 0; i < 24; i++) {
+        const g =
+          candidates[Math.floor(Math.random() * candidates.length)]!;
+        if (this.isInMudSpot(g.worldX, g.worldY)) continue;
+        const nearbyGrass = this.countNearbyGrasses(
+          g.worldX,
+          g.worldY,
+          ECO_R,
+        );
+        const isMeadow =
+          nearbyGrass >= MEADOW_GRASS_FOR_TREE ||
+          (g.size === 'large' && nearbyGrass >= 5);
+        if (!isMeadow) continue;
 
-      // 距离已有树木至少 80px，不在已有树木正下方发芽
-      if (this.countNearbyTrees(g.worldX, g.worldY, 80) > 0) continue;
+        const ang = Math.random() * Math.PI * 2;
+        const dist = 10 + Math.random() * 22;
+        const x = g.worldX + Math.cos(ang) * dist;
+        const y = g.worldY + Math.sin(ang) * dist;
+        if (!this.canPlantTreeAt(x, y, mapDef)) continue;
 
-      const angle = Math.random() * Math.PI * 2;
-      const dist = 22 + Math.random() * 26;
-      const x = g.worldX + Math.cos(angle) * dist;
-      const y = g.worldY + Math.sin(angle) * dist;
+        const kind = Math.random() < 0.5 ? 'pine' : 'apple';
+        this.plantSapling(x, y, kind, mapDef);
+        planted = 1;
+        break;
+      }
+    }
 
-      if (!isOnGreenLand(x, y, mapDef, 255)) continue;
-      // 泥地上绝不长树！必须修复变回肥沃绿地后才能发芽
-      if (this.isInMudSpot(x, y)) continue;
-      if (this.isTreeTooClose(x, y, TREE_MIN_SPACING)) continue;
-
-      const kind = Math.random() < 0.5 ? 'pine' : 'apple';
-      const prefix = kind === 'apple' ? 'apsap' : 'sap';
-      const id = allocTreeId(prefix);
-      const t: MapTree = { x, y, size: 'sapling', kind, id };
-      if (!mapDef.trees) mapDef.trees = [];
-      mapDef.trees.push(t);
-      addRuntimeTreeObstacle({
-        x,
-        y,
-        r: treeSolidR('sapling'),
-        id,
-      });
-      this.mountTree(t);
+    if (planted > 0) {
       this.markTreePersistDirty();
       this.hooks.afterWorldChange({ redrawLand: true });
-      break;
     }
   }
 }

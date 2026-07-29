@@ -322,4 +322,32 @@ export class GodModeController {
       this.deps.persistMapDraft();
     }
   }
+
+  /** 一键清空场景：树木、草地、生物、敌人与掉落物 */
+  clearScene(): void {
+    const mapDef = this.deps.getMapDef();
+    mapDef.trees = [];
+    mapDef.grasses = [];
+    mapDef.enemies = [];
+
+    // 清空收获与自然世界实体
+    this.deps.harvest.clearAll();
+
+    // 清空生物/敌人实体
+    const spiders = this.deps.spiders;
+    for (const s of spiders) {
+      if (!s.destroyed) {
+        s.parent?.removeChild(s);
+        s.destroy({ children: true });
+      }
+    }
+    spiders.length = 0;
+
+    // 同步 Actor、排序、渲染并写回草稿
+    this.deps.syncWorldActors();
+    this.deps.sortDepth();
+    this.deps.afterWorldChange?.();
+    this.deps.persistMapDraft();
+  }
 }
+

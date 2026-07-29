@@ -295,11 +295,13 @@ export class LevelScene extends Container implements GameScene {
     this.pauseMenu = new PauseMenu({
       onResume: () => this.setPaused(false),
       onBack: () => this.onBack(),
+      onClearScene: () => this.clearScene(),
     });
     this.addChild(this.pauseMenu);
 
     this.godHud = new GodModeHud({
       onSelectBrush: (brush) => this.god.setBrush(brush),
+      onClearScene: () => this.clearScene(),
     });
     this.addChild(this.godHud);
 
@@ -584,6 +586,7 @@ export class LevelScene extends Container implements GameScene {
     this.landRedrawPending = false;
     this.landRedrawCooldown = LevelScene.LAND_SOIL_REDRAW_INTERVAL_SEC;
     this.worldMap.redrawForestSoil();
+    this.worldMap.redrawMudSoil(this.harvest.mudSpots);
   }
 
   private solidContext(): SolidContext {
@@ -998,5 +1001,11 @@ export class LevelScene extends Container implements GameScene {
       hpLeft + HUD_BOMB_AMMO_NUDGE_X,
       ammoY + HUD_BOMB_AMMO_NUDGE_Y,
     );
+  }
+
+  private clearScene(): void {
+    this.god.clearScene();
+    this.worldMap.redrawForestSoil();
+    this.worldMap.redrawMudSoil([]);
   }
 }

@@ -46,22 +46,28 @@ export const GRASS_SPREAD_TIME_SEC: Record<GrassSize, number | null> = {
 /** 一次扩散尝试的新草数量（按体型，控数量） */
 export const GRASS_SPREAD_ATTEMPTS: Record<GrassSize, number> = {
   small: 1,
-  medium: 1,
-  large: 2,
+  medium: 2,
+  large: 3,
 };
 
-/** 新草相对母株的距离（世界像素） */
-export const GRASS_SPREAD_RADIUS_MIN = 90;
-export const GRASS_SPREAD_RADIUS_MAX = 240;
+/**
+ * 新草相对母株距离（世界像素）。
+ * 以近距为主，便于连成片草地；远距仅作稀有拓殖（见 trySpreadFrom）。
+ */
+export const GRASS_SPREAD_RADIUS_MIN = 38;
+export const GRASS_SPREAD_RADIUS_MAX = 95;
 
-/** 草丛之间最小间距（世界像素）；越小密度越高 */
-export const GRASS_MIN_SPACING = 36;
+/** 草丛之间最小间距（世界像素）；越小密度越高、越连片 */
+export const GRASS_MIN_SPACING = 30;
 
-/** 树木对草的遮荫/养分竞争死区基础半径（按树体型：小树 56 / 中树 90 / 大树 135） */
+/**
+ * 树木对草的遮荫死区（世界像素）。
+ * 只清树干附近，避免大片「瑞士奶酪」把草地/绿地打碎。
+ */
 export const TREE_GRASS_COMPETITION_RADIUS: Record<string, number> = {
-  sapling: 56,
-  medium: 90,
-  large: 135,
+  sapling: 32,
+  medium: 48,
+  large: 68,
 };
 
 /**
