@@ -21,30 +21,28 @@ export const WOLF_ECO = {
   hungerPerSec: 0.012,
   /** 开始猎食 */
   seekPreyAt: 0.18,
-  /**
-   * 视野半径：发现猎物 / 发现歇脚松树（无透视，只认范围内的）
-   */
-  visionRange: 300,
-  /**
-   * 已锁定目标的追击记忆半径：略大于视野，贴边不立刻丢；
-   * 超出则彻底丢失，需重新进入视野才能锁定。
-   */
-  chaseMemory: 380,
-  eatRange: 54,
-  /** 扑杀追击移速（翻倍至 336px/s 极速扑杀） */
-  huntSpeed: 336,
-  /** 觅食巡游移速（视野内无猎物时） */
+  visionRange: 320,
+  chaseMemory: 400,
+  eatRange: 58,
+  /** 常规逼近移速 */
+  huntSpeed: 220,
+  /** 猛冲触发感知距离 */
+  chargeRange: 160,
+  /** 猛冲极速 (540px/s) */
+  dashSpeed: 540,
+  /** 蓄力时间（秒） */
+  windupDuration: 0.25,
+  /** 猛冲持续时间（秒） */
+  dashDuration: 0.35,
   forageSpeed: 108,
-  /** 觅食巡游半径 */
   forageRadius: 200,
   walkSpeed: 90,
   startHunger: 0.55,
-  /** 单次咬伤伤害量 */
-  biteDamage: 30,
-  /** 咬伤攻击间隔（秒） */
-  attackInterval: 1.2,
-  /** 咬一口恢复的饱腹度 */
-  mealFeed: 0.25,
+  /** 单次扑杀大量伤害（翻倍至 60 HP） */
+  biteDamage: 60,
+  /** 扑杀攻击间隔（秒） */
+  attackInterval: 1.5,
+  mealFeed: 0.35,
   restArrive: 28,
   restOffsetY: 40,
   retargetCd: 1.2,
@@ -65,6 +63,9 @@ export class Wolf extends WorldCreature {
   private retargetCd = 0;
   /** 刚吃完，优先在视野内找树歇 */
   private wantRest = false;
+  /** 猛冲扑杀状态机：approach(逼近) -> windup(蓄力) -> dash(猛冲) */
+  private chargeState: 'approach' | 'windup' | 'dash' = 'approach';
+  private chargeTimer = 0;
 
   constructor(worldX: number, worldY: number, options: FarmAnimalOptions = {}) {
     const baseOpts = animalOptions(
@@ -236,12 +237,14 @@ export class Wolf extends WorldCreature {
     const prey = this.prey;
     if (!prey || !prey.isAlive || prey.destroyed) {
       this.prey = null;
+      this.chargeState = 'approach';
       return { moved: false, attackHit: null };
     }
 
     // 追击中超出记忆距离 → 丢失
     if (!this.inVision(prey.worldX, prey.worldY, WOLF_ECO.chaseMemory)) {
       this.prey = null;
+      this.chargeState = 'approach';
       this.retargetCd = WOLF_ECO.retargetCd;
       return this.forageRoam(dt);
     }
@@ -250,31 +253,75 @@ export class Wolf extends WorldCreature {
       prey.worldX - this.worldX,
       prey.worldY - this.worldY,
     );
-    if (dist <= WOLF_ECO.eatRange) {
-      if (this.attackCd <= 0) {
-        // 给予猎物受击起跳与推开受创反馈
-        const dx = prey.worldX - this.worldX;
-        const dy = prey.worldY - this.worldY;
-        const d = Math.hypot(dx, dy);
-        const inv = d > 1e-3 ? 1 / d : 1;
-        applyRecoilHop(prey.knock, dx * inv, dy * inv, 130, 260);
 
-        // 咬伤猎物：扣除固定数值伤害 (30 HP)，显示猎物血条
-        const isAlive = prey.applyDamage(WOLF_ECO.biteDamage);
-        this.hunger = Math.max(0, this.hunger - WOLF_ECO.mealFeed);
-        this.attackCd = WOLF_ECO.attackInterval;
-
-        // 若猎物被咬死：移除猎物，狼准备寻树休息
-        if (!isAlive) {
-          eco.removeCreature(prey);
-          this.wantRest = true;
-          this.prey = null;
-          this.restTree = null;
-          this.retargetCd = WOLF_ECO.retargetCd;
-          this.aiState = 'patrol';
-          return { moved: false, attackHit: null };
-        }
+    // 阶段 1：蓄力准备 (windup)
+    if (this.chargeState === 'windup') {
+      this.chargeTimer -= dt;
+      this.faceToward(prey.worldX, prey.worldY);
+      this.aiState = 'attack';
+      if (this.chargeTimer <= 0) {
+        this.chargeState = 'dash';
+        this.chargeTimer = WOLF_ECO.dashDuration;
       }
+      return { moved: false, attackHit: null };
+    }
+
+    // 阶段 2：猛冲扑杀 (dash)
+    if (this.chargeState === 'dash') {
+      this.chargeTimer -= dt;
+      this.aiState = 'chase';
+
+      const moved = this.moveTowardAvoidingTrees(
+        prey.worldX,
+        prey.worldY,
+        WOLF_ECO.dashSpeed,
+        dt,
+        WOLF_ECO.eatRange * 0.4,
+        22,
+      );
+
+      // 扑杀命中结算
+      if (dist <= WOLF_ECO.eatRange || this.chargeTimer <= 0) {
+        if (dist <= WOLF_ECO.eatRange + 25) {
+          const dx = prey.worldX - this.worldX;
+          const dy = prey.worldY - this.worldY;
+          const d = Math.hypot(dx, dy);
+          const inv = d > 1e-3 ? 1 / d : 1;
+
+          // 猛烈推开与冲击高弹跳 (220px/s 位移, 320px/s 垂直起跳)
+          applyRecoilHop(prey.knock, dx * inv, dy * inv, 220, 320);
+
+          // 造成 60 点大量伤害（翻倍）
+          const isAlive = prey.applyDamage(WOLF_ECO.biteDamage);
+          this.hunger = Math.max(0, this.hunger - WOLF_ECO.mealFeed);
+          this.attackCd = WOLF_ECO.attackInterval;
+
+          if (!isAlive) {
+            eco.removeCreature(prey);
+            this.wantRest = true;
+            this.prey = null;
+            this.restTree = null;
+            this.retargetCd = WOLF_ECO.retargetCd;
+            this.aiState = 'patrol';
+            this.chargeState = 'approach';
+            return { moved: false, attackHit: null };
+          }
+        }
+        this.chargeState = 'approach';
+      }
+      return { moved, attackHit: null };
+    }
+
+    // 阶段 3：索敌逼近 (approach) -> 满足触发距离且攻击冷却完毕时切蓄力
+    if (
+      dist <= WOLF_ECO.chargeRange &&
+      this.attackCd <= 0 &&
+      this.chargeState === 'approach'
+    ) {
+      this.chargeState = 'windup';
+      this.chargeTimer = WOLF_ECO.windupDuration;
+      this.faceToward(prey.worldX, prey.worldY);
+      return { moved: false, attackHit: null };
     }
 
     this.aiState = 'chase';
