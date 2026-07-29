@@ -62,21 +62,23 @@ export class Wolf extends WorldCreature {
   private wantRest = false;
 
   constructor(worldX: number, worldY: number, options: FarmAnimalOptions = {}) {
-    super(
-      worldX,
-      worldY,
-      animalOptions(
-        { ...options, maxHp: options.maxHp ?? WOLF_ECO.maxHp },
-        ANIMAL_SCALE.wolf,
-        'wolf',
-        {
-          textureUrl: '/assets/wolf/wolf.png',
-          label: 'Wolf',
-          spriteLabel: 'WolfSprite',
-        },
-        ANIMAL_WALK_BOB.medium,
-      ),
+    const baseOpts = animalOptions(
+      { ...options, maxHp: options.maxHp ?? WOLF_ECO.maxHp },
+      ANIMAL_SCALE.wolf,
+      'wolf',
+      {
+        textureUrl: '/assets/wolf/wolf.png',
+        label: 'Wolf',
+        spriteLabel: 'WolfSprite',
+      },
+      ANIMAL_WALK_BOB.medium,
     );
+
+    super(worldX, worldY, {
+      ...baseOpts,
+      canAttack: true,
+      aggroOnDetect: false,
+    });
   }
 
   get hunger01(): number {
