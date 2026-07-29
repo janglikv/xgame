@@ -17,31 +17,34 @@ import {
 
 /** 狼：有限视野觅食；吃完后视野内就近找松树休息 */
 export const WOLF_ECO = {
-  /** 饥饿基础增长速率（秒） */
-  hungerPerSec: 0.012,
+  /** 饥饿基础增长速率（秒，基础寿命延长至 160 秒） */
+  hungerPerSec: 0.006,
   /** 开始猎食 */
-  seekPreyAt: 0.18,
-  /** 触发饥饿「暴走状态」门槛 (65% 饥饿度) */
-  berserkHungerAt: 0.65,
-  visionRange: 320,
-  chaseMemory: 400,
+  seekPreyAt: 0.15,
+  /** 触发饥饿「暴走状态」门槛 (55% 饥饿度) */
+  berserkHungerAt: 0.55,
+  /** 基础搜寻视野 (500px) / 饥饿嗅觉扩展视野 (680px) */
+  visionRange: 500,
+  hungryVisionRange: 680,
+  chaseMemory: 550,
+  hungryChaseMemory: 750,
   eatRange: 58,
-  /** 常规逼近移速 */
-  huntSpeed: 220,
+  /** 常规逼近移速（提升至 290px/s，远高于猎物 185px/s 逃跑速度） */
+  huntSpeed: 290,
   /** 猛冲「扑咬」触发感知距离 */
-  chargeRange: 160,
-  /** 猛冲「扑咬」极速 (540px/s) / 暴走极速 (640px/s) */
-  dashSpeed: 540,
-  berserkDashSpeed: 640,
+  chargeRange: 165,
+  /** 猛冲「扑咬」极速 (560px/s) / 暴走极速 (680px/s) */
+  dashSpeed: 560,
+  berserkDashSpeed: 680,
   /** 「扑咬」前摇蓄力时间（秒） */
-  windupDuration: 0.25,
-  berserkWindupDuration: 0.12,
+  windupDuration: 0.22,
+  berserkWindupDuration: 0.1,
   /** 「扑咬」猛冲持续时间（秒） */
   dashDuration: 0.35,
-  forageSpeed: 108,
-  forageRadius: 200,
+  forageSpeed: 120,
+  forageRadius: 240,
   walkSpeed: 90,
-  startHunger: 0.55,
+  startHunger: 0.45,
   /** 常规「扑咬」攻击力 (15 HP) */
   pounceDamage: 15,
   /** 饥饿暴走「扑咬」攻击力（翻倍至 30 HP） */
@@ -50,13 +53,14 @@ export const WOLF_ECO = {
   counterAttackDamage: 60,
   /** 常规「扑咬」攻击冷却间隔 (1.5s) */
   attackInterval: 1.5,
-  /** 暴走「扑咬」攻击冷却间隔（翻倍缩短至 0.75s） */
+  /** 暴走「扑咬」攻击冷却间隔（0.75s） */
   berserkAttackInterval: 0.75,
-  /** 每次「扑咬」摄入/恢复 25% 饱腹度 */
-  mealFeed: 0.25,
+  /** 吃完一具倒地尸体恢复 85% 饱腹度 */
+  mealFeed: 0.85,
   restArrive: 28,
   restOffsetY: 40,
-  retargetCd: 1.2,
+  /** 重索敌调整冷却（从 5.0s 缩短至 0.6s，绝不发呆） */
+  retargetCd: 0.6,
   maxHp: 120,
 } as const;
 
@@ -114,9 +118,24 @@ export class Wolf extends WorldCreature {
     return this.hunger >= WOLF_ECO.berserkHungerAt;
   }
 
+  /** 获取当前视野半径（饥饿时凭借嗅觉大幅扩大） */
+  private getVisionRange(baseRange?: number): number {
+    if (baseRange) return baseRange;
+    return this.hunger >= 0.4
+      ? WOLF_ECO.hungryVisionRange
+      : WOLF_ECO.visionRange;
+  }
+
+  /** 获取当前追击记忆半径 */
+  private getChaseMemory(): number {
+    return this.hunger >= 0.4
+      ? WOLF_ECO.hungryChaseMemory
+      : WOLF_ECO.chaseMemory;
+  }
+
   /** 点是否在给定半径内（默认视野） */
   private inVision(tx: number, ty: number, range?: number): boolean {
-    const r = range ?? WOLF_ECO.visionRange;
+    const r = range ?? this.getVisionRange();
     const dx = tx - this.worldX;
     const dy = ty - this.worldY;
     return dx * dx + dy * dy <= r * r;
@@ -157,11 +176,11 @@ export class Wolf extends WorldCreature {
       else if (WOLF_PREY_KINDS.has(c.kind)) preyCount += 1;
     }
 
-    // 食物不足（平均每只狼不足 2 只猎物）时，竞争加剧导致饥饿速率大幅提升
+    // 食物不足（平均每只狼不足 2 只猎物）时，适度提升饥饿消耗（最高 1.8 倍，避免急剧死）
     let hungerMult = 1.0;
     if (wolfCount > 0 && preyCount < wolfCount * 2) {
       const deficit = wolfCount * 2 - preyCount;
-      hungerMult = Math.min(3.5, 1.0 + deficit * 0.7);
+      hungerMult = Math.min(1.8, 1.0 + deficit * 0.3);
     }
 
     this.hunger += WOLF_ECO.hungerPerSec * hungerMult * dt;
@@ -204,8 +223,8 @@ export class Wolf extends WorldCreature {
         this.aiState = 'patrol';
 
         if (this.eatingCorpseTimer <= 0) {
-          // 进食 2.5 秒结束：恢复饱腹度，尸体被吃完消失，狼准备去树下休息
-          this.hunger = Math.max(0, this.hunger - 0.75);
+          // 进食 2.5 秒结束：恢复 85% 饱腹度，尸体被吃完消失，狼准备去树下休息
+          this.hunger = Math.max(0, this.hunger - WOLF_ECO.mealFeed);
           eco.removeCreature(corpse);
           this.eatingCorpse = null;
           this.wantRest = true;
@@ -265,10 +284,11 @@ export class Wolf extends WorldCreature {
 
   /**
    * 刷新猎物：
-   * - 新锁定：必须在 visionRange 内
-   * - 已锁定：chaseMemory 内可继续追，超出则丢失
+   * - 新锁定：支持饥饿嗅觉扩展视野 (680px)
+   * - 智商权重：距离更近、体型更小(Chicken/Pig)的猎物优先
    */
   private refreshPrey(eco: CreatureEcologyContext): void {
+    const memoryRange = this.getChaseMemory();
     if (this.prey) {
       if (
         this.prey.isAlive &&
@@ -277,7 +297,7 @@ export class Wolf extends WorldCreature {
         this.inVision(
           this.prey.worldX,
           this.prey.worldY,
-          WOLF_ECO.chaseMemory,
+          memoryRange,
         )
       ) {
         return;
@@ -288,13 +308,25 @@ export class Wolf extends WorldCreature {
     if (this.retargetCd > 0) return;
 
     let best: WorldCreature | null = null;
-    let bestD: number = WOLF_ECO.visionRange;
+    let bestScore = Infinity;
+    const currentVision = this.getVisionRange();
+
     for (const c of eco.creatures) {
       if (c === this || !c.isAlive || c.destroyed) continue;
       if (!WOLF_PREY_KINDS.has(c.kind)) continue;
+      if (!this.inVision(c.worldX, c.worldY, currentVision)) continue;
+
       const d = Math.hypot(c.worldX - this.worldX, c.worldY - this.worldY);
-      if (d < bestD) {
-        bestD = d;
+      // 智商挑选：易捕获的小体型猎物优先 (Chicken: 1.5, Pig: 1.3, Cow: 1.0, Horse: 0.85)
+      let weight = 1.0;
+      if (c.kind === 'chicken') weight = 1.5;
+      else if (c.kind === 'pig') weight = 1.3;
+      else if (c.kind === 'cow') weight = 1.0;
+      else if (c.kind === 'horse') weight = 0.85;
+
+      const score = d / weight;
+      if (score < bestScore) {
+        bestScore = score;
         best = c;
       }
     }
@@ -315,7 +347,8 @@ export class Wolf extends WorldCreature {
     }
 
     // 追击中超出记忆距离 → 丢失
-    if (!this.inVision(prey.worldX, prey.worldY, WOLF_ECO.chaseMemory)) {
+    const memoryRange = this.getChaseMemory();
+    if (!this.inVision(prey.worldX, prey.worldY, memoryRange)) {
       this.prey = null;
       this.chargeState = 'approach';
       this.retargetCd = WOLF_ECO.retargetCd;
@@ -326,11 +359,11 @@ export class Wolf extends WorldCreature {
 
     this.huntTime += dt;
 
-    // 禁止死追机制 1：单次捕猎追击超时 (>= 3.5 秒) 狼体力耗尽，强制放弃死追
-    if (this.huntTime >= 3.5) {
+    // 防止死追机制 1：追击超时 (>= 5.5 秒) 换目标，短暂调整 0.6s
+    if (this.huntTime >= 5.5) {
       this.prey = null;
       this.chargeState = 'approach';
-      this.retargetCd = 5.0; // 进入 5 秒沉息/休息，不再死追
+      this.retargetCd = WOLF_ECO.retargetCd; // 0.6 秒警觉调整，绝不呆立发呆 5 秒
       this.huntTime = 0;
       this.dashMisses = 0;
       return this.forageRoam(dt, true);
@@ -407,12 +440,12 @@ export class Wolf extends WorldCreature {
             return { moved: false, attackHit: null };
           }
         } else {
-          // 禁止死追机制 2：猛冲扑空 2 次，放弃死追
+          // 防止死追机制 2：猛冲扑空 2 次，换目标调整 0.6 秒
           this.dashMisses += 1;
           if (this.dashMisses >= 2) {
             this.prey = null;
             this.chargeState = 'approach';
-            this.retargetCd = 5.0;
+            this.retargetCd = WOLF_ECO.retargetCd; // 0.6 秒调整，绝不呆立发呆
             this.huntTime = 0;
             this.dashMisses = 0;
             return this.forageRoam(dt, true);
