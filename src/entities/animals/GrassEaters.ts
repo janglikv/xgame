@@ -190,12 +190,30 @@ export abstract class GrassEater extends WorldCreature {
     return nearest;
   }
 
+  private panicCd = 0;
+
+  override applyDamage(amount: number): boolean {
+    const alive = super.applyDamage(amount);
+    this.clearEating();
+    this.grassTarget = null;
+    this.panicCd = 4.0;
+    return alive;
+  }
+
   protected override updateAI(
     dt: number,
     playerX: number,
     playerY: number,
     playerBodyProfileId: BodyProfileId | null = null,
   ): { moved: boolean; attackHit: SpiderAttackHit | null } {
+    if (this.panicCd > 0) {
+      this.panicCd = Math.max(0, this.panicCd - dt);
+      this.clearEating();
+      this.grassTarget = null;
+      const moved = this.updatePatrol(dt);
+      return { moved, attackHit: null };
+    }
+
     if (this.locked) {
       this.grassTarget = null;
       this.clearEating();
