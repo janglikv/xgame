@@ -11,6 +11,8 @@ import {
   type FarmAnimalOptions,
 } from './animalCommon';
 
+import { Graphics } from 'pixi.js';
+
 export const HORSE_KING_ECO = {
   visionRange: 420,
   chaseMemory: 500,
@@ -24,10 +26,12 @@ export const HORSE_KING_ECO = {
 /**
  * 马王 Boss (Horse King)：
  * 当全岛累计诞生马匹达到 99 匹后降临。
- * 具备双重强力仇恨：优先撕咬/践踏野狼，同时对附近的玩家进行冲锋踩踏！
+ * 脚底拥有绚丽的绿色魔法阵光环，具备双重强力仇恨：优先践踏野狼，同时攻击玩家！
  */
 export class HorseKing extends WorldCreature {
   private targetWolf: WorldCreature | null = null;
+  private readonly auraGfx: Graphics;
+  private auraTime = 0;
 
   constructor(worldX: number, worldY: number, options: FarmAnimalOptions = {}) {
     const baseOpts = animalOptions(
@@ -50,12 +54,64 @@ export class HorseKing extends WorldCreature {
       canAttack: true,
       aggroOnDetect: true,
     });
+
+    this.auraGfx = new Graphics();
+    this.addChildAt(this.auraGfx, 0);
   }
 
   override async load(): Promise<void> {
     await super.load();
     if (this.sprite) {
       this.sprite.tint = 0xffd700;
+    }
+  }
+
+  /** 绘制脚底震撼的绿色魔法阵光环（含旋转符文与呼吸脉动） */
+  private drawGreenMagicAura(dt: number): void {
+    this.auraTime += dt;
+    const g = this.auraGfx;
+    g.clear();
+
+    const t = this.auraTime;
+    const rx = 54;
+    const ry = 24;
+    const pulse = 1.0 + Math.sin(t * 3.5) * 0.08;
+    const alphaPulse = 0.7 + Math.sin(t * 4.0) * 0.2;
+
+    // 1) 外圈绿色发光填充与外环 (0x00ff66 / 0x39ff14)
+    g.ellipse(0, -6, rx * pulse, ry * pulse)
+      .fill({ color: 0x00ff66, alpha: 0.16 })
+      .stroke({ width: 3, color: 0x39ff14, alpha: alphaPulse });
+
+    // 2) 内圈魔法阵同心环 (0x70ff8b)
+    g.ellipse(0, -6, rx * 0.68 * pulse, ry * 0.68 * pulse).stroke({
+      width: 1.5,
+      color: 0x70ff8b,
+      alpha: alphaPulse * 0.85,
+    });
+
+    // 3) 动态旋转符文/法阵射线 (6条对称线)
+    const rays = 6;
+    const rot = t * 1.2;
+    for (let i = 0; i < rays; i++) {
+      const ang = rot + (i * Math.PI) / (rays / 2);
+      const x1 = Math.cos(ang) * rx * 0.22;
+      const y1 = Math.sin(ang) * ry * 0.22 - 6;
+      const x2 = Math.cos(ang) * rx * 0.82;
+      const y2 = Math.sin(ang) * ry * 0.82 - 6;
+
+      g.moveTo(x1, y1)
+        .lineTo(x2, y2)
+        .stroke({ width: 1.5, color: 0x00ff88, alpha: 0.45 });
+    }
+
+    // 4) 环绕发光粒子
+    const dots = 4;
+    for (let i = 0; i < dots; i++) {
+      const dang = -rot * 1.5 + (i * Math.PI * 2) / dots;
+      const dx = Math.cos(dang) * rx * 0.48;
+      const dy = Math.sin(dang) * ry * 0.48 - 6;
+      g.circle(dx, dy, 2.5).fill({ color: 0x88ffbb, alpha: 0.85 });
     }
   }
 
@@ -71,6 +127,7 @@ export class HorseKing extends WorldCreature {
     playerY: number,
     playerBodyProfileId: BodyProfileId | null = null,
   ): { moved: boolean; attackHit: SpiderAttackHit | null } {
+    this.drawGreenMagicAura(dt);
     if (this.locked) {
       this.targetWolf = null;
     }
