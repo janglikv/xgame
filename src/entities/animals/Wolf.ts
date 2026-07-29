@@ -66,6 +66,10 @@ export class Wolf extends WorldCreature {
   /** 猛冲扑杀状态机：approach(逼近) -> windup(蓄力) -> dash(猛冲) */
   private chargeState: 'approach' | 'windup' | 'dash' = 'approach';
   private chargeTimer = 0;
+  /** 单次捕猎累计时长（禁止死追，超过上限自动放弃） */
+  private huntTime = 0;
+  /** 扑空/脱靶次数 */
+  private dashMisses = 0;
 
   constructor(worldX: number, worldY: number, options: FarmAnimalOptions = {}) {
     const baseOpts = animalOptions(
@@ -238,6 +242,8 @@ export class Wolf extends WorldCreature {
     if (!prey || !prey.isAlive || prey.destroyed) {
       this.prey = null;
       this.chargeState = 'approach';
+      this.huntTime = 0;
+      this.dashMisses = 0;
       return { moved: false, attackHit: null };
     }
 
@@ -246,7 +252,21 @@ export class Wolf extends WorldCreature {
       this.prey = null;
       this.chargeState = 'approach';
       this.retargetCd = WOLF_ECO.retargetCd;
+      this.huntTime = 0;
+      this.dashMisses = 0;
       return this.forageRoam(dt);
+    }
+
+    this.huntTime += dt;
+
+    // 禁止死追机制 1：单次捕猎追击超时 (>= 3.5 秒) 狼体力耗尽，强制放弃死追
+    if (this.huntTime >= 3.5) {
+      this.prey = null;
+      this.chargeState = 'approach';
+      this.retargetCd = 5.0; // 进入 5 秒沉息/休息，不再死追
+      this.huntTime = 0;
+      this.dashMisses = 0;
+      return this.forageRoam(dt, true);
     }
 
     const dist = Math.hypot(
@@ -283,6 +303,7 @@ export class Wolf extends WorldCreature {
       // 扑杀命中结算
       if (dist <= WOLF_ECO.eatRange || this.chargeTimer <= 0) {
         if (dist <= WOLF_ECO.eatRange + 25) {
+          this.dashMisses = 0;
           const dx = prey.worldX - this.worldX;
           const dy = prey.worldY - this.worldY;
           const d = Math.hypot(dx, dy);
@@ -304,7 +325,20 @@ export class Wolf extends WorldCreature {
             this.retargetCd = WOLF_ECO.retargetCd;
             this.aiState = 'patrol';
             this.chargeState = 'approach';
+            this.huntTime = 0;
+            this.dashMisses = 0;
             return { moved: false, attackHit: null };
+          }
+        } else {
+          // 禁止死追机制 2：猛冲扑空 2 次，放弃死追
+          this.dashMisses += 1;
+          if (this.dashMisses >= 2) {
+            this.prey = null;
+            this.chargeState = 'approach';
+            this.retargetCd = 5.0;
+            this.huntTime = 0;
+            this.dashMisses = 0;
+            return this.forageRoam(dt, true);
           }
         }
         this.chargeState = 'approach';
