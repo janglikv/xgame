@@ -64,10 +64,17 @@ export class HorseKing extends WorldCreature {
     if (this.sprite) {
       this.sprite.tint = 0xffd700;
     }
+    // 确保光环处于最底层（在马王 Sprite 与血条下方）
+    if (this.auraGfx && this.children.includes(this.auraGfx)) {
+      this.setChildIndex(this.auraGfx, 0);
+    }
   }
 
   /** 绘制脚底震撼的绿色魔法阵光环（含旋转符文与呼吸脉动） */
   private drawGreenMagicAura(dt: number): void {
+    if (this.children[0] !== this.auraGfx) {
+      this.setChildIndex(this.auraGfx, 0);
+    }
     this.auraTime += dt;
     const g = this.auraGfx;
     g.clear();
