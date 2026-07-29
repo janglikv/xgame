@@ -15,6 +15,8 @@ export type BodyProfileId =
   | 'wooden-dummy'
   /** 可砍树模板（中树基准）；小/大树仅乘缩放 */
   | 'tree'
+  /** 苹果树碰撞模板（中树基准）；小/大树仅乘缩放 */
+  | 'apple-tree'
   | 'grass';
 
 /** 圆形：圆心 = 脚底 + (ox, oy) */
@@ -84,7 +86,7 @@ export const BODY_PROFILES: Record<BodyProfileId, BodyProfile> = {
   "wooden-dummy": {
     id: "wooden-dummy",
     label: "木桩",
-    solid: [{ type: 'circle', ox: 0.82, oy: -9.38, r: 18 }],
+    solid: [{ type: 'circle', ox: 0.47, oy: -11.86, r: 11.21 }],
     hurt: [
       { type: 'rect', ox: 0, oy: -40.45, w: 21.31, h: 73.35 },
       { type: 'rect', ox: 0.8, oy: -44.47, w: 50.49, h: 8.51 },
@@ -93,7 +95,13 @@ export const BODY_PROFILES: Record<BodyProfileId, BodyProfile> = {
   "tree": {
     id: "tree",
     label: "树",
-    solid: [{ type: 'circle', ox: -0.47, oy: -1.92, r: 11.05 }],
+    solid: [{ type: 'circle', ox: -0.16, oy: -8.54, r: 11.05 }],
+    hurt: [{ type: 'circle', ox: 0, oy: -18, r: 22 }],
+  },
+  "apple-tree": {
+    id: "apple-tree",
+    label: "苹果树",
+    solid: [{ type: 'circle', ox: -0.31, oy: -10.92, r: 11.05 }],
     hurt: [{ type: 'circle', ox: 0, oy: -18, r: 22 }],
   },
   "grass": {
@@ -103,6 +111,7 @@ export const BODY_PROFILES: Record<BodyProfileId, BodyProfile> = {
     hurt: [],
   },
 };
+
 
 /** 运行时覆盖（编辑器本局，不写盘） */
 const overrides = new Map<BodyProfileId, BodyProfile>();
@@ -114,11 +123,15 @@ export const BODY_PROFILE_IDS: readonly BodyProfileId[] = [
   'flame-flower',
   'wooden-dummy',
   'tree',
+  'apple-tree',
   'grass',
 ];
 
-/** 可砍树统一碰撞模板 id */
+/** 松树碰撞模板 id */
 export const TREE_BODY_PROFILE_ID: BodyProfileId = 'tree';
+
+/** 苹果树碰撞模板 id */
+export const APPLE_TREE_BODY_PROFILE_ID: BodyProfileId = 'apple-tree';
 
 /** 按比例缩放形状（树体型用） */
 export function scaleBodyShape(s: BodyShape, scale: number): BodyShape {

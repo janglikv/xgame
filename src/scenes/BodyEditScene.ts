@@ -26,6 +26,7 @@ import {
 } from '../utils/outlineTexture';
 import { drawPineLocal } from '../world/PineTree';
 import { drawGrassLocal } from '../world/GrassPatch';
+import { drawAppleTreeLocal } from '../world/AppleTree';
 import type { GameScene } from './types';
 
 const BG = 0x121820;
@@ -46,6 +47,12 @@ type SubjectDef =
   | {
       id: BodyProfileId;
       kind: 'pine';
+      pineScale: number;
+      tint: number;
+    }
+  | {
+      id: BodyProfileId;
+      kind: 'apple';
       pineScale: number;
       tint: number;
     }
@@ -100,12 +107,31 @@ const SUBJECTS: ReadonlyArray<SubjectDef> = [
     tint: TREE_SIZE_PROFILE.medium.tint,
   },
   {
+    id: 'apple-tree',
+    kind: 'apple',
+    pineScale: TREE_SIZE_PROFILE.medium.scale,
+    tint: TREE_SIZE_PROFILE.medium.tint,
+  },
+  {
     id: 'grass',
     kind: 'grass',
     grassScale: GRASS_SIZE_PROFILE.medium.scale,
     tint: GRASS_SIZE_PROFILE.medium.tint,
   },
 ];
+
+/**
+ * 编译时检查：SUBJECTS 必须覆盖所有 BodyProfileId，缺一报错。
+ * 若新增了 BodyProfileId 但忘记在此加 SubjectDef，tsc 会提示
+ * "Type 'false' is not assignable to type 'true'" 并指出缺失的 ID。
+ */
+type _SubjectIds = (typeof SUBJECTS)[number]['id'];
+/**
+ * 编译时检查：SUBJECTS 必须覆盖所有 BodyProfileId，否则此行报错。
+ * 若新增了 BodyProfileId 但忘记在 SUBJECTS 加条目，tsc 会在此行提示缺少哪个 key。
+ * 运行时此表达式等价于 `({});`，无任何副作用。
+ */
+({}) as Record<_SubjectIds, unknown> satisfies Record<BodyProfileId, unknown>;
 
 type Subject = {
   id: BodyProfileId;
@@ -328,6 +354,13 @@ export class BodyEditScene extends Container implements GameScene {
         pine.scale.set(def.pineScale);
         pine.tint = def.tint;
         root.addChild(pine);
+      } else if (def.kind === 'apple') {
+        const apple = new Graphics();
+        apple.label = 'BodyEditApple';
+        drawAppleTreeLocal(apple, 0, 2, 0, 0);
+        apple.scale.set(def.pineScale);
+        apple.tint = def.tint;
+        root.addChild(apple);
       } else if (def.kind === 'grass') {
         const grass = new Graphics();
         grass.label = 'BodyEditGrass';

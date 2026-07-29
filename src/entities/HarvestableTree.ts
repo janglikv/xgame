@@ -1,5 +1,6 @@
 import { Container, Sprite } from 'pixi.js';
 import {
+  APPLE_TREE_BODY_PROFILE_ID,
   TREE_BODY_PROFILE_ID,
   type BodyProfileId,
 } from '../data/bodyProfiles';
@@ -175,7 +176,8 @@ export class HarvestableTree extends Container {
         : 'medium';
     this.size = size;
     this.treeKind = options.kind === 'apple' ? 'apple' : 'pine';
-    this.bodyProfileId = TREE_BODY_PROFILE_ID;
+    this.bodyProfileId =
+      this.treeKind === 'apple' ? APPLE_TREE_BODY_PROFILE_ID : TREE_BODY_PROFILE_ID;
     this.bodyShapeScale = treeBodyShapeScale(size);
     const profile = TREE_SIZE_PROFILE[size];
 
