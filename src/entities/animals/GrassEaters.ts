@@ -210,7 +210,16 @@ export abstract class GrassEater extends WorldCreature {
       this.panicCd = Math.max(0, this.panicCd - dt);
       this.clearEating();
       this.grassTarget = null;
-      const moved = this.updatePatrol(dt);
+      this.patrolPause = 0;
+      // 受受受惊模式：移速大幅提升至 185px/s 高速狂奔，强行终止觅食
+      const moved = this.updateSearchRoam(dt, {
+        radius: 380,
+        speed: 185,
+        pauseMin: 0,
+        pauseMax: 0.05,
+        preferFar: 0.85,
+        leisurely: false,
+      });
       return { moved, attackHit: null };
     }
 
