@@ -9,6 +9,7 @@ export class Chicken extends RoamingAnimal {
       animalOptions(
         options,
         ANIMAL_SCALE.chicken,
+        'chicken',
         {
           textureUrl: '/assets/chicken/chicken.png',
           label: 'Chicken',

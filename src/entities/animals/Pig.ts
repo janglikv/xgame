@@ -1,10 +1,10 @@
 import { Container, Text } from 'pixi.js';
 import {
-  Spider,
+  WorldCreature,
   type CreatureEcologyContext,
   type EcologyTree,
   type SpiderAttackHit,
-} from '../Spider';
+} from '../WorldCreature';
 import type { BodyProfileId } from '../../data/bodyProfiles';
 import {
   ANIMAL_ROAM,
@@ -21,7 +21,7 @@ import {
  * 猪：找到苹果树就去树下站着睡觉（Zzz 气泡）；
  * 饿了吃地上苹果，吃完继续睡；极饿没吃的才追鸡。
  */
-export class Pig extends Spider {
+export class Pig extends WorldCreature {
   /** 0 饱 → 1 极饿 */
   private hunger: number = PIG_ECO.startHunger;
   /** 锁定的地上苹果 */
@@ -51,6 +51,7 @@ export class Pig extends Spider {
       animalOptions(
         options,
         ANIMAL_SCALE.pig,
+        'pig',
         {
           textureUrl: '/assets/pig/pig.png',
           label: 'Pig',
@@ -394,7 +395,7 @@ export class Pig extends Spider {
       if (d >= senseRange) continue;
       let crowd = 0;
       for (const c of eco.creatures) {
-        if (c === this || !c.isAlive || c.label !== 'Pig') continue;
+        if (c === this || !c.isAlive || c.kind !== 'pig') continue;
         if (Math.hypot(c.worldX - p.worldX, c.worldY - p.worldY) < 90) {
           crowd += 1;
         }
@@ -411,11 +412,11 @@ export class Pig extends Spider {
   private findNearestChicken(
     eco: CreatureEcologyContext,
     senseRange: number,
-  ): Spider | null {
-    let best: Spider | null = null;
+  ): WorldCreature | null {
+    let best: WorldCreature | null = null;
     let bestD = senseRange;
     for (const c of eco.creatures) {
-      if (c === this || !c.isAlive || c.label !== 'Chicken') continue;
+      if (c === this || !c.isAlive || c.kind !== 'chicken') continue;
       const d = Math.hypot(c.worldX - this.worldX, c.worldY - this.worldY);
       if (d < bestD) {
         bestD = d;
@@ -427,7 +428,7 @@ export class Pig extends Spider {
 
   private seekChicken(
     dt: number,
-    chicken: Spider,
+    chicken: WorldCreature,
     eco: CreatureEcologyContext,
     speed: number,
   ): { moved: boolean; attackHit: SpiderAttackHit | null } {

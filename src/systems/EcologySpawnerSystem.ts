@@ -1,12 +1,12 @@
-import type { Spider } from '../entities/Spider';
+import type { WorldCreature } from '../entities/WorldCreature';
 import type { GrassEntity } from '../entities/GrassEntity';
 import type { EnemyKind, LevelMapDef } from '../data/maps';
 import { isOnGreenLand, landRectOf } from '../data/maps';
 import {
   NATURAL_SPAWN,
   countAliveFarmHerbivores,
-  countAliveWithLabel,
-  isFarmHerbivoreLabel,
+  countAliveWithKind,
+  isFarmHerbivoreKind,
 } from './ecologySpawn';
 
 /** 种松所需的树摘要（避免依赖 HarvestableTree） */
@@ -48,7 +48,7 @@ export class EcologySpawnerSystem {
   public update(
     dt: number,
     grasses: ReadonlyArray<GrassEntity>,
-    creatures?: ReadonlyArray<Spider>,
+    creatures?: ReadonlyArray<WorldCreature>,
     trees?: ReadonlyArray<EcologyTreeRef>,
   ): void {
     this.tickNaturalAnimalSpawning(dt, grasses);
@@ -100,7 +100,7 @@ export class EcologySpawnerSystem {
   /** 食草动物积累后自然引狼 */
   private tickNaturalWolfSpawning(
     dt: number,
-    creatures?: ReadonlyArray<Spider>,
+    creatures?: ReadonlyArray<WorldCreature>,
   ): void {
     if (!this.hooks.onSpawnNaturalAnimal || !creatures) return;
 
@@ -114,7 +114,7 @@ export class EcologySpawnerSystem {
       this.naturalWolfTimer = 35 + Math.random() * 15;
 
       const herbivores = creatures.filter(
-        (s) => s.isAlive && !s.destroyed && isFarmHerbivoreLabel(s.label),
+        (s) => s.isAlive && !s.destroyed && isFarmHerbivoreKind(s.kind),
       );
       if (herbivores.length === 0) return;
 
@@ -138,12 +138,12 @@ export class EcologySpawnerSystem {
    */
   private tickNaturalPineSpawning(
     dt: number,
-    creatures?: ReadonlyArray<Spider>,
+    creatures?: ReadonlyArray<WorldCreature>,
     trees?: ReadonlyArray<EcologyTreeRef>,
     grasses?: ReadonlyArray<GrassEntity>,
   ): void {
     const wolfCount = creatures
-      ? countAliveWithLabel(creatures, 'Wolf')
+      ? countAliveWithKind(creatures, 'wolf')
       : 0;
     if (wolfCount <= 0) {
       this.naturalPineTimer = 18;

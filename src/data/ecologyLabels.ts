@@ -1,14 +1,7 @@
-/** 可被狼猎杀 / 计入食草自然种群的农场动物 display label */
-export const FARM_HERBIVORE_LABELS = [
-  'Chicken',
-  'Pig',
-  'Cow',
-  'Horse',
-] as const;
-
-export type FarmHerbivoreLabel = (typeof FARM_HERBIVORE_LABELS)[number];
-
-/** 自然孕育种群上限与触发阈值 */
+/**
+ * 自然孕育种群上限与触发阈值。
+ * 食草/猎物物种集合见 entities/creatureKinds（FARM_HERBIVORE_KINDS）。
+ */
 export const NATURAL_SPAWN = {
   /** 全场狼上限 */
   maxWolves: 3,
@@ -19,3 +12,13 @@ export const NATURAL_SPAWN = {
   /** 食草动物达到后才引狼 */
   herbivoresForWolf: 8,
 } as const;
+
+/** @deprecated 显示用 label；逻辑请用 creatureKinds.FARM_HERBIVORE_KINDS */
+export const FARM_HERBIVORE_LABELS = [
+  'Chicken',
+  'Pig',
+  'Cow',
+  'Horse',
+] as const;
+
+export type FarmHerbivoreLabel = (typeof FARM_HERBIVORE_LABELS)[number];

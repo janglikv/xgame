@@ -1,5 +1,5 @@
 import type { Container } from 'pixi.js';
-import type { Spider } from '../entities/Spider';
+import type { WorldCreature } from '../entities/WorldCreature';
 import type { LevelMapDef } from '../data/maps';
 import { createEnemyAt, DEFAULT_SPIDER_SCALE } from './enemyFactory';
 
@@ -8,7 +8,7 @@ export function spawnEnemiesInto(
   mapDef: LevelMapDef,
   spawn: { x: number; y: number },
   sortLayer: Container,
-  out: Spider[],
+  out: WorldCreature[],
   options?: { spiderScale?: number },
 ): void {
   const scale = options?.spiderScale ?? DEFAULT_SPIDER_SCALE;

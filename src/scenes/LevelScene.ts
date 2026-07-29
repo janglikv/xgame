@@ -10,8 +10,8 @@ import {
 } from '../entities/knockArc';
 import type {
   CreatureEcologyContext,
-  Spider,
-} from '../entities/Spider';
+  WorldCreature,
+} from '../entities/WorldCreature';
 import { InputManager } from '../input/InputManager';
 import {
   CharacterRoster,
@@ -114,7 +114,7 @@ export class LevelScene extends Container implements GameScene {
   private readonly inventoryHud: InventoryHud;
   private readonly hudLayout: LevelHudLayout;
   /** 场上全部生物（蜘蛛/农场动物/狼等），非仅蜘蛛 */
-  private readonly creatures: Spider[] = [];
+  private readonly creatures: WorldCreature[] = [];
   private readonly harvest: HarvestWorld;
   private readonly inventory: Inventory;
   private readonly input = new InputManager();
@@ -543,7 +543,7 @@ export class LevelScene extends Container implements GameScene {
   }
 
   /** 生态捕食 / 死亡移除（不写回地图草稿） */
-  private removeCreatureEntity(creature: Spider): void {
+  private removeCreatureEntity(creature: WorldCreature): void {
     const idx = this.creatures.indexOf(creature);
     if (idx < 0) return;
     creature.parent?.removeChild(creature);
@@ -590,7 +590,7 @@ export class LevelScene extends Container implements GameScene {
   }
 
   private applySpiderSolid(
-    spider: Spider,
+    spider: WorldCreature,
     fromX: number,
     fromY: number,
     spiderIndex: number,

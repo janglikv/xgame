@@ -1,5 +1,5 @@
 import type { LevelMapDef } from '../data/maps';
-import type { Spider } from './Spider';
+import type { WorldCreature } from './WorldCreature';
 
 /** 生态可食草丛（牛马等）；结构与 GrassEntity 对齐，避免生物基类依赖草实体类 */
 export type EcologyGrass = {
@@ -34,7 +34,7 @@ export type CreatureEcologyContext = {
   /** 场上可砍树（猪认苹果树） */
   trees: ReadonlyArray<EcologyTree>;
   /** 场上其它生物（含自己，调用方过滤） */
-  creatures: ReadonlyArray<Spider>;
+  creatures: ReadonlyArray<WorldCreature>;
   /** 地图定义（用于动物避开海岸与海面） */
   mapDef?: LevelMapDef;
   /** 吃掉地上的苹果等 */
@@ -59,5 +59,5 @@ export type CreatureEcologyContext = {
     y: number,
   ) => { grass: EcologyGrass; dist: number } | null;
   /** 移除死亡生物（猪吃鸡 / 饿死等） */
-  removeCreature: (creature: Spider) => void;
+  removeCreature: (creature: WorldCreature) => void;
 };

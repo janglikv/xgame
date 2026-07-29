@@ -1,9 +1,10 @@
 import {
-  Spider,
+  WorldCreature,
   type CreatureEcologyContext,
   type SpiderAttackHit,
   type WalkBobConfig,
-} from '../Spider';
+} from '../WorldCreature';
+import type { CreatureKind } from '../creatureKinds';
 import type { BodyProfileId } from '../../data/bodyProfiles';
 import { GRASS_ANIMAL_RETARGET_SEC } from '../../data/grassProfiles';
 import { isOnGreenLand, landRectOf } from '../../data/maps';
@@ -52,7 +53,7 @@ export const HORSE_ECO: HerbivoreEco = {
  * 食草基类：只找最近的大草吃；饱了走慢、饿了走快；没草会饿死。
  * 吃草时停下停顿并切换低头吃草贴图，结束后恢复站立贴图。
  */
-export abstract class GrassEater extends Spider {
+export abstract class GrassEater extends WorldCreature {
   private hunger: number;
   private readonly ecoCfg: HerbivoreEco;
   private readonly idleTextureUrl: string;
@@ -72,6 +73,7 @@ export abstract class GrassEater extends Spider {
     worldY: number,
     options: FarmAnimalOptions,
     scale: number,
+    kind: CreatureKind,
     appearance: {
       textureUrl: string;
       /** 低头吃草贴图 */
@@ -88,6 +90,7 @@ export abstract class GrassEater extends Spider {
       animalOptions(
         options,
         scale,
+        kind,
         {
           textureUrl: appearance.textureUrl,
           label: appearance.label,
@@ -308,6 +311,7 @@ export class Cow extends GrassEater {
       worldY,
       options,
       ANIMAL_SCALE.cow,
+      'cow',
       {
         textureUrl: '/assets/cow/cow.png',
         eatTextureUrl: '/assets/cow/cow-eat.png',
@@ -327,6 +331,7 @@ export class Horse extends GrassEater {
       worldY,
       options,
       ANIMAL_SCALE.horse,
+      'horse',
       {
         textureUrl: '/assets/horse/horse.png',
         eatTextureUrl: '/assets/horse/horse-eat.png',

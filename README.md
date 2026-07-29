@@ -22,7 +22,10 @@ src/
 │   └── maps/               # LEVEL_1/2、walkMask、网格模板、编辑导出
 ├── entities/               # 角色 / 怪物 / 投射物 / 弹药（玩法实体）
 │   ├── animals/            # 农场与野生动物（鸡猪牛马狼熊，按物种拆分）
-│   └── CreatureEcology.ts  # 生态上下文类型（与 Spider 解耦）
+│   ├── WorldCreature.ts    # 世界生物基类（移动/血量/AI 状态机）
+│   ├── creatureKinds.ts    # 物种 kind 枚举与食草/猎物集合
+│   ├── Spider.ts           # 蜘蛛（WorldCreature 默认敌对实现）
+│   └── CreatureEcology.ts  # 生态上下文类型
 ├── systems/                # 跨实体规则：战斗、碰撞、收割、泥地、自然刷怪
 │   ├── HarvestWorld.ts     # 草/树/掉落编排
 │   ├── MudSpotField.ts     # 泥斑几何与合并

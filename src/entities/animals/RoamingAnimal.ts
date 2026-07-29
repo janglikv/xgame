@@ -1,14 +1,14 @@
 import {
-  Spider,
+  WorldCreature,
   type SpiderAttackHit,
-} from '../Spider';
+} from '../WorldCreature';
 import type { BodyProfileId } from '../../data/bodyProfiles';
 import { ANIMAL_ROAM } from './animalCommon';
 
 /**
  * 只会走的动物：不守出生点，日常到处踱步。
  */
-export abstract class RoamingAnimal extends Spider {
+export abstract class RoamingAnimal extends WorldCreature {
   protected override updateAI(
     dt: number,
     playerX: number,

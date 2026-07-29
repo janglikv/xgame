@@ -2,7 +2,7 @@ import type { Container } from 'pixi.js';
 import type { PlayerCharacterBase } from '../entities/PlayerCharacterBase';
 import type { HarvestableTree } from '../entities/HarvestableTree';
 import type { GrassEntity } from '../entities/GrassEntity';
-import type { Spider } from '../entities/Spider';
+import type { WorldCreature } from '../entities/WorldCreature';
 import {
   addRuntimeTreeObstacle,
   allocGrassId,
@@ -44,7 +44,7 @@ export type GodModeDeps = {
   setSpawn: (x: number, y: number) => void;
   getPlayer: () => PlayerCharacterBase | null;
   sortLayer: Container;
-  creatures: Spider[];
+  creatures: WorldCreature[];
   harvest: HarvestWorld;
   camera: LevelCamera;
   hud: GodModeHud;
@@ -253,7 +253,7 @@ export class GodModeController {
       }
     }
 
-    let bestEnemy: Spider | null = null;
+    let bestEnemy: WorldCreature | null = null;
     let bestEnemyD = PICK_R;
     let bestEnemyI = -1;
     for (let i = 0; i < creatures.length; i++) {

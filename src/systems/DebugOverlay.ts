@@ -2,7 +2,7 @@ import { Container, Graphics, Text } from 'pixi.js';
 import type { BombProjectile } from '../entities/BombProjectile';
 import type { PlayerCharacterBase } from '../entities/PlayerCharacterBase';
 import type { SpearProjectile } from '../entities/SpearProjectile';
-import type { Spider } from '../entities/Spider';
+import type { WorldCreature } from '../entities/WorldCreature';
 import { SPEAR_BODY_R, SPEAR_HIT_R } from '../entities/SpearProjectile';
 import {
   getBodyProfile,
@@ -21,7 +21,7 @@ const LABEL_STYLE = {
 
 export type DebugRenderWorld = {
   player: PlayerCharacterBase | null;
-  creatures: Spider[];
+  creatures: WorldCreature[];
   bombs: ReadonlyArray<BombProjectile>;
   spears: ReadonlyArray<SpearProjectile>;
 };

@@ -1,11 +1,11 @@
 import {
-  Spider,
+  WorldCreature,
   type CreatureEcologyContext,
   type EcologyTree,
   type SpiderAttackHit,
-} from '../Spider';
+} from '../WorldCreature';
 import type { BodyProfileId } from '../../data/bodyProfiles';
-import { FARM_HERBIVORE_LABELS } from '../../data/ecologyLabels';
+import { WOLF_PREY_KINDS } from '../creatureKinds';
 import {
   ANIMAL_SCALE,
   ANIMAL_WALK_BOB,
@@ -46,16 +46,16 @@ export const WOLF_ECO = {
   maxHp: 120,
 } as const;
 
-/** 可被狼吃的农场动物 label（与 ecologySpawn 食草列表一致） */
-export const WOLF_PREY_LABELS = new Set<string>(FARM_HERBIVORE_LABELS);
+/** @deprecated 使用 WOLF_PREY_KINDS；保留 label 集合仅兼容旧调试 */
+export const WOLF_PREY_LABELS = new Set(['Chicken', 'Pig', 'Cow', 'Horse']);
 
 /**
  * 狼：视野内觅食猎杀；成功后在视野内就近找松树休息。
  * 无「全图透视」。
  */
-export class Wolf extends Spider {
+export class Wolf extends WorldCreature {
   private hunger: number = WOLF_ECO.startHunger;
-  private prey: Spider | null = null;
+  private prey: WorldCreature | null = null;
   private restTree: EcologyTree | null = null;
   private retargetCd = 0;
   /** 刚吃完，优先在视野内找树歇 */
@@ -68,6 +68,7 @@ export class Wolf extends Spider {
       animalOptions(
         { ...options, maxHp: options.maxHp ?? WOLF_ECO.maxHp },
         ANIMAL_SCALE.wolf,
+        'wolf',
         {
           textureUrl: '/assets/wolf/wolf.png',
           label: 'Wolf',
@@ -180,11 +181,11 @@ export class Wolf extends Spider {
     }
     if (this.retargetCd > 0) return;
 
-    let best: Spider | null = null;
+    let best: WorldCreature | null = null;
     let bestD: number = WOLF_ECO.visionRange;
     for (const c of eco.creatures) {
       if (c === this || !c.isAlive || c.destroyed) continue;
-      if (!WOLF_PREY_LABELS.has(c.label ?? '')) continue;
+      if (!WOLF_PREY_KINDS.has(c.kind)) continue;
       const d = Math.hypot(c.worldX - this.worldX, c.worldY - this.worldY);
       if (d < bestD) {
         bestD = d;

@@ -1,7 +1,11 @@
-import type { SpiderOptions, WalkBobConfig } from '../Spider';
+import type { CreatureKind } from '../creatureKinds';
+import type {
+  WalkBobConfig,
+  WorldCreatureOptions,
+} from '../WorldCreature';
 import { getRuntimeTreeObstacles } from '../../data/maps';
 
-export type FarmAnimalOptions = Pick<SpiderOptions, 'scale' | 'maxHp'>;
+export type FarmAnimalOptions = Pick<WorldCreatureOptions, 'scale' | 'maxHp'>;
 
 /** 相对贴图默认缩放：鸡小、猪/牛中、马/熊大 */
 export const ANIMAL_SCALE = {
@@ -143,16 +147,18 @@ export function clearOfTreeSolids(
 export function animalOptions(
   options: FarmAnimalOptions,
   defaultScale: number,
+  kind: CreatureKind,
   appearance: {
     textureUrl: string;
     label: string;
     spriteLabel: string;
   },
   walkBob: WalkBobConfig,
-): SpiderOptions {
+): WorldCreatureOptions {
   return {
     scale: options.scale ?? defaultScale,
     maxHp: options.maxHp,
+    kind,
     canAttack: false,
     aggroOnDetect: false,
     leashRange: ANIMAL_LEASH_RANGE,

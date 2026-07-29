@@ -19,7 +19,7 @@ import {
   type SpearProjectileOptions,
 } from '../entities/SpearProjectile';
 import type { RadialSpearFormationOptions } from '../entities/CharacterRanged';
-import type { Spider } from '../entities/Spider';
+import type { WorldCreature } from '../entities/WorldCreature';
 import {
   HARVEST_BOMB_DAMAGE,
   HARVEST_SPEAR_DAMAGE,
@@ -59,7 +59,7 @@ export type CombatCameraView = {
 export type CombatWorld = {
   player: PlayerCharacterBase | null;
   /** 可变数组：死亡生物会从中 splice */
-  creatures: Spider[];
+  creatures: WorldCreature[];
   /** 可砍树；摧毁时 splice 并回调 onHarvestTreeDestroyed */
   harvestTrees: HarvestableTree[];
 };

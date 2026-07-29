@@ -30,7 +30,7 @@ import {
   GrassEntity,
   type GrassViewBounds,
 } from '../entities/GrassEntity';
-import type { Spider } from '../entities/Spider';
+import type { WorldCreature } from '../entities/WorldCreature';
 import {
   ItemPickup,
   PICKUP_RADIUS,
@@ -1058,7 +1058,7 @@ export class HarvestWorld {
    */
   tickTrees(
     deltaMS: number,
-    creatures?: ReadonlyArray<Spider>,
+    creatures?: ReadonlyArray<WorldCreature>,
     view?: GrassViewBounds | TreeViewBounds | null,
   ): void {
     const dt = deltaMS / 1000;

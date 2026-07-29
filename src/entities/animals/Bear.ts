@@ -14,6 +14,7 @@ export class Bear extends RoamingAnimal {
       animalOptions(
         options,
         ANIMAL_SCALE.bear,
+        'bear',
         {
           textureUrl: '/assets/bear/bear.png',
           label: 'Bear',

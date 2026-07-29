@@ -1,48 +1,41 @@
 import type { EnemyKind } from '../data/maps';
+import { NATURAL_SPAWN } from '../data/ecologyLabels';
 import {
-  FARM_HERBIVORE_LABELS,
-  NATURAL_SPAWN,
-  type FarmHerbivoreLabel,
-} from '../data/ecologyLabels';
+  isFarmHerbivoreKind,
+  type CreatureKind,
+} from '../entities/creatureKinds';
 
+export { NATURAL_SPAWN } from '../data/ecologyLabels';
 export {
-  FARM_HERBIVORE_LABELS,
-  NATURAL_SPAWN,
-  type FarmHerbivoreLabel,
-} from '../data/ecologyLabels';
+  FARM_HERBIVORE_KINDS,
+  isFarmHerbivoreKind,
+  type FarmHerbivoreKind,
+} from '../entities/creatureKinds';
 
-export type CreatureLabelRef = {
+/** 用于种群统计的生物引用（需要 kind） */
+export type CreatureKindRef = {
   isAlive: boolean;
   destroyed: boolean;
-  label?: string | null;
+  kind: CreatureKind | string;
 };
 
-export function isFarmHerbivoreLabel(
-  label: string | null | undefined,
-): label is FarmHerbivoreLabel {
-  return (
-    !!label &&
-    (FARM_HERBIVORE_LABELS as readonly string[]).includes(label)
-  );
-}
-
-export function countAliveWithLabel(
-  creatures: ReadonlyArray<CreatureLabelRef>,
-  label: string,
+export function countAliveWithKind(
+  creatures: ReadonlyArray<CreatureKindRef>,
+  kind: CreatureKind | string,
 ): number {
   let n = 0;
   for (const s of creatures) {
-    if (s.isAlive && !s.destroyed && s.label === label) n += 1;
+    if (s.isAlive && !s.destroyed && s.kind === kind) n += 1;
   }
   return n;
 }
 
 export function countAliveFarmHerbivores(
-  creatures: ReadonlyArray<CreatureLabelRef>,
+  creatures: ReadonlyArray<CreatureKindRef>,
 ): number {
   let n = 0;
   for (const s of creatures) {
-    if (s.isAlive && !s.destroyed && isFarmHerbivoreLabel(s.label)) n += 1;
+    if (s.isAlive && !s.destroyed && isFarmHerbivoreKind(s.kind)) n += 1;
   }
   return n;
 }
@@ -53,20 +46,39 @@ export function countAliveFarmHerbivores(
  */
 export function canSpawnNaturalAnimal(
   kind: EnemyKind,
-  creatures: ReadonlyArray<CreatureLabelRef>,
+  creatures: ReadonlyArray<CreatureKindRef>,
 ): boolean {
   if (kind === 'wolf') {
-    return countAliveWithLabel(creatures, 'Wolf') < NATURAL_SPAWN.maxWolves;
+    return countAliveWithKind(creatures, 'wolf') < NATURAL_SPAWN.maxWolves;
   }
-  if (
-    kind === 'chicken' ||
-    kind === 'pig' ||
-    kind === 'cow' ||
-    kind === 'horse'
-  ) {
+  if (isFarmHerbivoreKind(kind)) {
     return (
       countAliveFarmHerbivores(creatures) < NATURAL_SPAWN.maxFarmHerbivores
     );
   }
   return true;
+}
+
+/** @deprecated 使用 countAliveWithKind */
+export const countAliveWithLabel = (
+  creatures: ReadonlyArray<CreatureKindRef & { label?: string | null }>,
+  label: string,
+): number => {
+  const kindMap: Record<string, string> = {
+    Wolf: 'wolf',
+    Chicken: 'chicken',
+    Pig: 'pig',
+    Cow: 'cow',
+    Horse: 'horse',
+  };
+  const kind = kindMap[label] ?? label.toLowerCase();
+  return countAliveWithKind(creatures, kind);
+};
+
+/** @deprecated 使用 isFarmHerbivoreKind */
+export function isFarmHerbivoreLabel(
+  label: string | null | undefined,
+): boolean {
+  if (!label) return false;
+  return ['Chicken', 'Pig', 'Cow', 'Horse'].includes(label);
 }

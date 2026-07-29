@@ -1,6 +1,7 @@
 import { Bear, Chicken, Cow, Horse, Pig, Wolf } from '../entities/FarmAnimals';
 import { FlameFlower } from '../entities/FlameFlower';
 import { Spider } from '../entities/Spider';
+import type { WorldCreature } from '../entities/WorldCreature';
 import { WoodenDummy } from '../entities/WoodenDummy';
 import type { EnemyKind } from '../data/maps';
 import { WorldMap } from '../world/WorldMap';
@@ -13,7 +14,7 @@ export function createEnemyAt(
   x: number,
   y: number,
   options?: { spiderScale?: number },
-): Spider {
+): WorldCreature {
   const solid = WorldMap.resolveSolid(x, y, x, y, 16);
 
   if (kind === 'flame-flower') {
