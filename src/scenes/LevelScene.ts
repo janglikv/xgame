@@ -57,17 +57,9 @@ import { WorldMap } from '../world/WorldMap';
 import { LevelCamera } from './LevelCamera';
 import type { GameScene } from './types';
 
+import { LevelHudLayout } from '../ui/LevelHudLayout';
+
 const MOVE_SPEED = 220;
-/** 玩家 HUD 血条尺寸 / 底边边距（屏幕像素） */
-const HUD_HP_WIDTH = 240;
-const HUD_HP_HEIGHT = 14;
-const HUD_HP_MARGIN_BOTTOM = 28;
-/** 弹药数量相对血条上沿再上移（屏幕像素） */
-const HUD_AMMO_GAP = 22;
-/** 炸药 HUD 相对血条左缘再左移（屏幕像素） */
-const HUD_BOMB_AMMO_NUDGE_X = -6;
-/** 炸药 HUD 相对弹药基线再下移（屏幕像素） */
-const HUD_BOMB_AMMO_NUDGE_Y = 8;
 const PLAYER_MAX_HP = 100;
 /** 击退很强时削弱 WASD 控制（水平速度） */
 const KNOCK_CONTROL_SOFTEN = 220;
@@ -121,6 +113,7 @@ export class LevelScene extends Container implements GameScene {
   private readonly bombAmmoHud: BombAmmoHud;
   private readonly characterHud: CharacterSwitchHud;
   private readonly inventoryHud: InventoryHud;
+  private readonly hudLayout: LevelHudLayout;
   private readonly spiders: Spider[] = [];
   private readonly harvest: HarvestWorld;
   private readonly inventory: Inventory;
@@ -258,8 +251,8 @@ export class LevelScene extends Container implements GameScene {
 
     this.healthBar = new HealthBar({
       maxHp: PLAYER_MAX_HP,
-      width: HUD_HP_WIDTH,
-      height: HUD_HP_HEIGHT,
+      width: LevelHudLayout.HUD_HP_WIDTH,
+      height: LevelHudLayout.HUD_HP_HEIGHT,
     });
     this.healthBar.setHealth(PLAYER_MAX_HP);
     this.addChild(this.healthBar);
@@ -278,6 +271,14 @@ export class LevelScene extends Container implements GameScene {
       onSelect: (id) => this.switchCharacter(id),
     });
     this.addChild(this.characterHud);
+
+    this.hudLayout = new LevelHudLayout({
+      healthBar: this.healthBar,
+      spearAmmoHud: this.spearAmmoHud,
+      bombAmmoHud: this.bombAmmoHud,
+      characterHud: this.characterHud,
+      inventoryHud: this.inventoryHud,
+    });
 
     this.pauseMenu = new PauseMenu({
       onResume: () => this.setPaused(false),
@@ -978,16 +979,10 @@ export class LevelScene extends Container implements GameScene {
   }
 
   private layoutHealthHud(): void {
-    const cx = this.camera.width / 2;
-    const hpY = this.camera.height - HUD_HP_MARGIN_BOTTOM;
-    this.healthBar.position.set(cx, hpY);
-    const hpLeft = cx - HUD_HP_WIDTH / 2;
-    const ammoY = hpY - HUD_HP_HEIGHT / 2 - HUD_AMMO_GAP;
-    this.spearAmmoHud.position.set(hpLeft, ammoY);
-    this.bombAmmoHud.position.set(
-      hpLeft + HUD_BOMB_AMMO_NUDGE_X,
-      ammoY + HUD_BOMB_AMMO_NUDGE_Y,
-    );
+    const width = this.camera.width;
+    const height = this.camera.height;
+    if (width <= 0 || height <= 0) return;
+    this.hudLayout.updateLayout(width, height);
   }
 
   private clearScene(): void {

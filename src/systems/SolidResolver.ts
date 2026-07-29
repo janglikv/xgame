@@ -84,8 +84,12 @@ export class SolidResolver {
     const toCx = body.worldX + primary.ox;
     const toCy = body.worldY + primary.oy;
 
-    const hard = this.collectHardBodyObstacles(ctx, options);
-    const trees = getRuntimeTreeObstacles();
+    // 粗筛半径：实体碰撞半径 + 运动最大距离
+    const searchRadius = 150 + r;
+    const hard = this.collectHardBodyObstacles(fromCx, fromCy, searchRadius, ctx, options);
+    const rawTrees = getRuntimeTreeObstacles();
+    const trees = this.filterTreesNear(fromCx, fromCy, searchRadius, rawTrees);
+
     // 树 solid + 实体 solid 一并滑动
     const all: ReadonlyArray<CircleObstacle> =
       hard.length === 0
@@ -121,29 +125,60 @@ export class SolidResolver {
     body.worldY = cy - primary.oy;
   }
 
+  private filterTreesNear(
+    cx: number,
+    cy: number,
+    radius: number,
+    trees: ReadonlyArray<CircleObstacle>,
+  ): CircleObstacle[] {
+    const r2 = radius * radius;
+    const out: CircleObstacle[] = [];
+    for (let i = 0; i < trees.length; i++) {
+      const t = trees[i]!;
+      const dx = t.x - cx;
+      const dy = t.y - cy;
+      if (dx * dx + dy * dy <= r2) {
+        out.push(t);
+      }
+    }
+    return out;
+  }
+
   private collectHardBodyObstacles(
+    cx: number,
+    cy: number,
+    radius: number,
     ctx: SolidContext,
     options: { includePlayer: boolean; spiderSkipIndex: number },
   ): CircleObstacle[] {
     const out: CircleObstacle[] = [];
+    const r2 = radius * radius;
 
     if (options.includePlayer && ctx.player) {
-      out.push(
-        ...solidCirclesAtFeet(
-          ctx.player.worldX,
-          ctx.player.worldY,
-          ctx.player.bodyProfileId,
-        ),
-      );
+      const dx = ctx.player.worldX - cx;
+      const dy = ctx.player.worldY - cy;
+      if (dx * dx + dy * dy <= r2) {
+        out.push(
+          ...solidCirclesAtFeet(
+            ctx.player.worldX,
+            ctx.player.worldY,
+            ctx.player.bodyProfileId,
+          ),
+        );
+      }
     }
 
     for (let i = 0; i < ctx.spiders.length; i++) {
       if (i === options.spiderSkipIndex) continue;
       const s = ctx.spiders[i]!;
       if (!s.isAlive) continue;
-      out.push(
-        ...solidCirclesAtFeet(s.worldX, s.worldY, s.bodyProfileId),
-      );
+      const dx = s.worldX - cx;
+      const dy = s.worldY - cy;
+      if (dx * dx + dy * dy <= r2) {
+        out.push(
+          ...solidCirclesAtFeet(s.worldX, s.worldY, s.bodyProfileId),
+        );
+      }
     }
 
     return out;
