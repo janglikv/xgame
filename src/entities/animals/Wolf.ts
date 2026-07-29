@@ -21,6 +21,8 @@ export const WOLF_ECO = {
   hungerPerSec: 0.012,
   /** 开始猎食 */
   seekPreyAt: 0.18,
+  /** 触发饥饿「暴走状态」门槛 (65% 饥饿度) */
+  berserkHungerAt: 0.65,
   visionRange: 320,
   chaseMemory: 400,
   eatRange: 58,
@@ -28,22 +30,28 @@ export const WOLF_ECO = {
   huntSpeed: 220,
   /** 猛冲「扑咬」触发感知距离 */
   chargeRange: 160,
-  /** 猛冲「扑咬」极速 (540px/s) */
+  /** 猛冲「扑咬」极速 (540px/s) / 暴走极速 (640px/s) */
   dashSpeed: 540,
+  berserkDashSpeed: 640,
   /** 「扑咬」前摇蓄力时间（秒） */
   windupDuration: 0.25,
+  berserkWindupDuration: 0.12,
   /** 「扑咬」猛冲持续时间（秒） */
   dashDuration: 0.35,
   forageSpeed: 108,
   forageRadius: 200,
   walkSpeed: 90,
   startHunger: 0.55,
-  /** 单次「扑咬」攻击力数值 (15 HP) */
+  /** 常规「扑咬」攻击力 (15 HP) */
   pounceDamage: 15,
+  /** 饥饿暴走「扑咬」攻击力（翻倍至 30 HP） */
+  berserkPounceDamage: 30,
   /** 对玩家反击时的攻击力 */
   counterAttackDamage: 60,
-  /** 「扑咬」攻击冷却间隔（秒） */
+  /** 常规「扑咬」攻击冷却间隔 (1.5s) */
   attackInterval: 1.5,
+  /** 暴走「扑咬」攻击冷却间隔（翻倍缩短至 0.75s） */
+  berserkAttackInterval: 0.75,
   /** 每次「扑咬」摄入/恢复 25% 饱腹度 */
   mealFeed: 0.25,
   restArrive: 28,
@@ -101,6 +109,11 @@ export class Wolf extends WorldCreature {
     return this.hunger;
   }
 
+  /** 极度饥饿（>= 65% 饥饿度）触发暴走状态：伤害翻倍(30HP)、攻击频率翻倍(0.75s) */
+  get isBerserk(): boolean {
+    return this.hunger >= WOLF_ECO.berserkHungerAt;
+  }
+
   /** 点是否在给定半径内（默认视野） */
   private inVision(tx: number, ty: number, range?: number): boolean {
     const r = range ?? WOLF_ECO.visionRange;
@@ -115,6 +128,11 @@ export class Wolf extends WorldCreature {
     playerY: number,
     playerBodyProfileId: BodyProfileId | null = null,
   ): { moved: boolean; attackHit: SpiderAttackHit | null } {
+    // 暴走视觉反馈：暴走状态下狼身呈绯红发光 (0xff4444)
+    if (this.sprite && !this.isCorpse) {
+      this.sprite.tint = this.isBerserk ? 0xff4444 : 0xffffff;
+    }
+
     if (this.locked) {
       this.prey = null;
       return super.updateAI(dt, playerX, playerY, playerBodyProfileId);
@@ -340,10 +358,14 @@ export class Wolf extends WorldCreature {
       this.chargeTimer -= dt;
       this.aiState = 'chase';
 
+      const currentDashSpeed = this.isBerserk
+        ? WOLF_ECO.berserkDashSpeed
+        : WOLF_ECO.dashSpeed;
+
       const moved = this.moveTowardAvoidingTrees(
         prey.worldX,
         prey.worldY,
-        WOLF_ECO.dashSpeed,
+        currentDashSpeed,
         dt,
         WOLF_ECO.eatRange * 0.4,
         22,
@@ -361,9 +383,16 @@ export class Wolf extends WorldCreature {
           // 猛烈推开与冲击高弹跳 (220px/s 位移, 320px/s 垂直起跳)
           applyRecoilHop(prey.knock, dx * inv, dy * inv, 220, 320);
 
-          // 扣除「扑咬」固定的 15 点攻击力数值（扑咬成功不恢复饱腹度，只有等猎物死亡后才进食）
-          const isAlive = prey.applyDamage(WOLF_ECO.pounceDamage);
-          this.attackCd = WOLF_ECO.attackInterval;
+          // 暴走状态下「扑咬」伤害翻倍 (30 HP vs 15 HP)
+          const damage = this.isBerserk
+            ? WOLF_ECO.berserkPounceDamage
+            : WOLF_ECO.pounceDamage;
+          const isAlive = prey.applyDamage(damage);
+
+          // 暴走状态下攻击频率翻倍（攻击冷却减半 0.75s vs 1.5s）
+          this.attackCd = this.isBerserk
+            ? WOLF_ECO.berserkAttackInterval
+            : WOLF_ECO.attackInterval;
 
           if (!isAlive) {
             // 猎物死亡：不直接移除，而是转为倒地尸体（颠倒），狼开始在原地进食尸体！
@@ -401,7 +430,9 @@ export class Wolf extends WorldCreature {
       this.chargeState === 'approach'
     ) {
       this.chargeState = 'windup';
-      this.chargeTimer = WOLF_ECO.windupDuration;
+      this.chargeTimer = this.isBerserk
+        ? WOLF_ECO.berserkWindupDuration
+        : WOLF_ECO.windupDuration;
       this.faceToward(prey.worldX, prey.worldY);
       return { moved: false, attackHit: null };
     }
