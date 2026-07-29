@@ -145,26 +145,26 @@ export class Wolf extends WorldCreature {
       return { moved: false, attackHit: null };
     }
 
-    // 1) 饿了：视野内觅食 / 追击
+    // 1) 无论饥饿度如何，只要附近/视野内有捕食目标（牛/马/鸡/猪），立刻触发猎捕
+    this.refreshPrey(eco);
+    if (this.prey) {
+      this.wantRest = false;
+      return this.huntPrey(dt, eco);
+    }
+
+    // 2) 视野内暂无猎物，但饿了：主动巡游搜寻猎物
     if (this.hunger >= WOLF_ECO.seekPreyAt) {
       this.wantRest = false;
-      this.refreshPrey(eco);
-      if (this.prey) {
-        return this.huntPrey(dt, eco);
-      }
-      // 视野内无猎物：扩大巡游寻找（仍不是透视）
       return this.forageRoam(dt);
     }
 
-    this.prey = null;
-
-    // 2) 不饿 / 刚吃完：视野内就近松树休息
+    // 3) 视野内无猎物且饱腹：寻找松树休息
     this.refreshRestTree(eco);
     if (this.restTree) {
       return this.goRestNearPine(dt, this.restTree);
     }
 
-    // 3) 视野内没树：小范围走着找（与觅食同机制）
+    // 4) 视野内没树：散步游荡
     return this.forageRoam(dt, /* lookingForRest */ true);
   }
 
