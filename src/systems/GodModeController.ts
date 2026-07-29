@@ -143,6 +143,7 @@ export class GodModeController {
     size: TreeSize = 'medium',
     kind: TreeKind = 'pine',
   ): void {
+    if (this.deps.harvest.isInMudSpot(x, y)) return;
     const mapDef = this.deps.getMapDef();
     const prefix =
       kind === 'apple'

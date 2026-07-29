@@ -644,7 +644,8 @@ export class HarvestWorld {
     y: number,
     kind: MapTree['kind'] extends infer K ? NonNullable<K> : 'pine',
     mapDef: LevelMapDef,
-  ): HarvestableTree {
+  ): HarvestableTree | null {
+    if (this.isInMudSpot(x, y)) return null;
     const prefix = kind === 'apple' ? 'apsap' : 'sap';
     const id = allocTreeId(prefix);
     const t: MapTree = { x, y, size: 'sapling', kind, id };
@@ -1104,7 +1105,7 @@ export class HarvestWorld {
       const sizeSlow = 90 / Math.max(90, m.radius * 0.85);
       if (grassCount >= MUD_CLEAR_GRASS) {
         m.fertility +=
-          dt * (MUD_FERTILITY_WITH_GRASS + grassCount * 2) * sizeSlow;
+          dt * (MUD_FERTILITY_WITH_GRASS + grassCount * 0.02) * sizeSlow;
       } else if (grassCount > 0) {
         m.fertility += dt * MUD_FERTILITY_WITH_GRASS * 0.45 * sizeSlow;
       } else {
