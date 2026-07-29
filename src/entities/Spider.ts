@@ -7,6 +7,7 @@ import {
   type KnockArcState,
 } from './knockArc';
 import type { WorldActor } from './WorldActor';
+import { MonsterPoseController, type WalkBobConfig } from './MonsterPoseController';
 import {
   circleHitsHurt,
   profileHurtOffset,
@@ -96,44 +97,11 @@ const AI = {
 } as const;
 
 /** 走路晃动默认（局部）；农场动物等可在 options 覆盖 */
-export type WalkBobConfig = {
-  /** 完整一步周期（秒）；越大越沉稳 */
-  period: number;
-  /** 上下抬脚像素 */
-  ampY: number;
-  /** 左右微摆像素 */
-  ampX: number;
-  /** 旋转幅度（弧度） */
-  ampRot: number;
-  /** 停步时回正速度 */
-  settle: number;
-};
+import { DEFAULT_WALK_BOB } from './MonsterPoseController';
+export type { WalkBobConfig } from './MonsterPoseController';
 
-const WALK: WalkBobConfig = {
-  period: 0.34,
-  ampY: 2.2,
-  ampX: 1.0,
-  ampRot: 0.022,
-  settle: 10,
-};
-
-/** 被炸飞姿态（作用在 sprite 局部；高度由 knock 抛物线负责） */
-const BLAST = {
-  lean: 0.5,
-  lift: 6,
-  tumble: 0.75,
-  settle: 5.2,
-} as const;
-
-/** 大弹空中旋转两圈（额外抬升交给世界高度抛物线） */
-const AIR_SPIN = {
-  duration: 0.62,
-  lift: 0,
-} as const;
-
-/** 脚底锚点 / 中心锚点（旋转时切到中心） */
+const WALK = DEFAULT_WALK_BOB;
 const ANCHOR_FOOT_Y = 0.88;
-const ANCHOR_CENTER_Y = 0.5;
 
 type MonsterAppearance = {
   textureUrl: string;
@@ -310,14 +278,10 @@ export class Spider extends Container implements WorldActor {
   }
   /** 1 = 朝右，-1 = 朝左 */
   private facing: 1 | -1 = 1;
-  /** 被炸飞姿态强度 */
-  private blastKnock = 0;
+  /** 姿态与动作控制器 */
+  private readonly poseController = new MonsterPoseController();
   /** 击飞抛物线（地面速度 + 高度） */
   readonly knock: KnockArcState = createKnockArcState();
-  /** 空中旋转进度 0→1 */
-  private spinT = 0;
-  private spinTarget = 0;
-  private spinSign: 1 | -1 = 1;
 
   /** AI */
   protected aiState: SpiderAIState = 'patrol';
@@ -329,12 +293,7 @@ export class Spider extends Container implements WorldActor {
   protected attackT = 0;
   /** 本段攻击是否已结算伤害 */
   protected attackDealt = false;
-  /** 走路相位 */
-  private walkPhase = 0;
-  /** 走路姿态（停步时指数回正，避免硬切） */
-  private walkPoseX = 0;
-  private walkPoseY = 0;
-  private walkPoseRot = 0;
+
   /** 攻击姿态 0→1 */
   protected attackPose = 0;
 
@@ -543,10 +502,7 @@ export class Spider extends Container implements WorldActor {
 
     applyKnockImpulse(this.knock, hit.knockVelX, hit.knockVelY, knockScale);
 
-    this.blastKnock = Math.max(
-      this.blastKnock,
-      Math.min(1.25, hit.poseStrength),
-    );
+    this.poseController.triggerBlastKnock(Math.min(1.25, hit.poseStrength));
     if (hit.dirX !== 0) {
       this.facing = hit.dirX < 0 ? -1 : 1;
       this.applyFacingToSprite();
@@ -554,9 +510,7 @@ export class Spider extends Container implements WorldActor {
 
     const turns = hit.airSpinTurns ?? 0;
     if (turns > 0) {
-      this.spinT = 0;
-      this.spinTarget = turns * Math.PI * 2;
-      this.spinSign = hit.dirX < 0 ? -1 : 1;
+      this.poseController.triggerSpin(turns, hit.dirX < 0 ? -1 : 1);
     }
 
     // 被攻击也会锁定玩家（不依赖察觉距离）
@@ -618,7 +572,6 @@ export class Spider extends Container implements WorldActor {
       this.knock.velY = 0;
       this.knock.velZ = 0;
       this.knock.height = 0;
-      this.blastKnock = 0;
       return { moved: false, attackHit: null };
     }
 
@@ -636,8 +589,7 @@ export class Spider extends Container implements WorldActor {
     const stunned =
       isKnockAirborne(this.knock) ||
       this.knock.height > AI.stunHeight ||
-      this.blastKnock > 0.35 ||
-      (this.spinTarget > 0 && this.spinT < 1);
+      this.poseController.isSpinning();
 
     // 仅 AI 主动位移才播走路晃动；纯分散挤开不算走路，否则会左右抖
     let aiMoved = false;
@@ -1239,100 +1191,16 @@ export class Spider extends Container implements WorldActor {
   }
 
   private updatePose(dt: number, walking: boolean): void {
-    const sprite = this.sprite;
-    // destroy 后 sprite 可能仍引用，但 anchor 等已清空
-    if (!sprite || sprite.destroyed || !sprite.anchor) return;
-
-    let ox = 0;
-    let oy = 0;
-    let orot = 0;
-    const spinning = this.spinTarget > 0 && this.spinT < 1;
-    const bob = this.walkBob;
-    const canBob = walking && !spinning && this.blastKnock < 0.15;
-
-    if (canBob) {
-      this.walkPhase += (Math.PI * 2 * dt) / bob.period;
-      // 双频抬脚；左右/旋转用 cos 错相，避免整只同步拧
-      const step = Math.sin(this.walkPhase * 2);
-      const sway = Math.cos(this.walkPhase);
-      this.walkPoseY = -Math.abs(step) * bob.ampY;
-      this.walkPoseX = sway * bob.ampX;
-      this.walkPoseRot = sway * bob.ampRot;
-    } else {
-      // 停步 / 受击中断：指数回正，避免硬切闪一下
-      const k = 1 - Math.exp(-bob.settle * dt);
-      this.walkPoseX += (0 - this.walkPoseX) * k;
-      this.walkPoseY += (0 - this.walkPoseY) * k;
-      this.walkPoseRot += (0 - this.walkPoseRot) * k;
-      if (Math.abs(this.walkPoseX) < 0.05) this.walkPoseX = 0;
-      if (Math.abs(this.walkPoseY) < 0.05) this.walkPoseY = 0;
-      if (Math.abs(this.walkPoseRot) < 0.001) this.walkPoseRot = 0;
-      if (
-        this.walkPoseX === 0 &&
-        this.walkPoseY === 0 &&
-        this.walkPoseRot === 0
-      ) {
-        this.walkPhase = 0;
-      }
-    }
-
-    ox += this.walkPoseX;
-    oy += this.walkPoseY;
-    orot += this.walkPoseRot;
-
-    // 攻击姿态：局部空间（贴图已按 facing 翻转，负 X = 朝向后方）
-    if (this.attackPose > 0.01 && this.aiState === 'attack') {
-      const a = this.attackPose;
-      if (this.attackT < AI.attackWindup) {
-        ox += -10 * a;
-        oy += 4 * a;
-        orot += -0.28 * a;
-      } else {
-        ox += 14 * a;
-        oy += -6 * a;
-        orot += 0.35 * a;
-      }
-    }
-
-    if (this.blastKnock > 0) {
-      const b = this.blastKnock;
-      oy += -BLAST.lift * b;
-      if (!spinning) {
-        orot += -BLAST.lean * b - BLAST.tumble * b * b;
-      }
-      ox += -6 * b;
-
-      this.blastKnock *= Math.exp(-BLAST.settle * dt);
-      if (this.blastKnock < 0.03) this.blastKnock = 0;
-    }
-
-    if (this.spinTarget > 0 && this.spinT < 1) {
-      this.spinT = Math.min(1, this.spinT + dt / AIR_SPIN.duration);
-      const u = this.spinT;
-      const eased = 1 - (1 - u) * (1 - u);
-      orot += this.spinSign * this.spinTarget * eased;
-      const loft = 4 * u * (1 - u);
-      oy += -AIR_SPIN.lift * loft;
-
-      if (this.spinT >= 1) {
-        this.spinTarget = 0;
-        this.spinT = 0;
-      }
-    }
-
-    // 转圈时绕身体中心转：锚点切到中心，补偿脚底→中心偏移
-    if (spinning) {
-      const sy = Math.abs(sprite.scale.y) || 1;
-      const toCenterY =
-        (ANCHOR_CENTER_Y - this.footAnchorY) * sprite.texture.height * sy;
-      sprite.anchor.set(0.5, ANCHOR_CENTER_Y);
-      sprite.x = ox;
-      sprite.y = oy + toCenterY;
-    } else {
-      sprite.anchor.set(0.5, this.footAnchorY);
-      sprite.x = ox;
-      sprite.y = oy;
-    }
-    sprite.rotation = orot;
+    this.poseController.update(
+      dt,
+      this.sprite,
+      walking,
+      this.footAnchorY,
+      this.walkBob,
+      this.attackPose,
+      this.aiState === 'attack',
+      AI.attackWindup,
+      this.attackT,
+    );
   }
 }

@@ -1,4 +1,5 @@
 import type { Container } from 'pixi.js';
+import { EcologySpawnerSystem } from './EcologySpawnerSystem';
 import {
   GRASS_GRID_CELL,
   GRASS_LOGIC_SLICES,
@@ -81,11 +82,7 @@ import {
   MudSpotField,
   type MudSpot,
 } from './MudSpotField';
-import {
-  NATURAL_SPAWN,
-  countAliveFarmHerbivores,
-  isFarmHerbivoreLabel,
-} from './ecologySpawn';
+
 
 /** 世界变更标志：控制昂贵的陆地泥土重绘 */
 export type HarvestWorldChangeOpts = {
@@ -157,8 +154,16 @@ export class HarvestWorld {
   private persistCooldown = 0;
   private treePersistDirty = false;
   private treePersistCooldown = 0;
+  private readonly ecologySpawner: EcologySpawnerSystem;
 
-  constructor(private readonly hooks: HarvestWorldHooks) {}
+  constructor(private readonly hooks: HarvestWorldHooks) {
+    this.ecologySpawner = new EcologySpawnerSystem({
+      getMapDef: () => this.hooks.getMapDef(),
+      onSpawnNaturalAnimal: (kind, x, y) =>
+        this.hooks.onSpawnNaturalAnimal?.(kind, x, y),
+      isGrassTooCloseToTrees: (x, y) => this.isGrassTooCloseToTrees(x, y),
+    });
+  }
 
   /** 判定坐标 (x, y) 是否位于泥地/休耕地范围内 */
   isInMudSpot(x: number, y: number): boolean {
@@ -1133,8 +1138,7 @@ export class HarvestWorld {
       this.grassFarSortDirty = false;
     }
 
-    this.tickNaturalAnimalSpawning(dt);
-    this.tickNaturalWolfSpawning(dt, creatures);
+    this.ecologySpawner.update(dt, this.grasses, creatures);
     this.tickNaturalPineSpawning(dt, creatures);
     this.flushGrassPersist();
     this.flushTreePersist();
@@ -1254,7 +1258,7 @@ export class HarvestWorld {
     }
   }
 
-  private naturalAnimalTimer = 20;
+
   private naturalPineTimer = 18;
 
   /** 场上存活狼数量 */
@@ -1346,85 +1350,7 @@ export class HarvestWorld {
     return tooClose;
   }
 
-  /**
-   * 草繁时自然孕育牛/马（阈值与上限见 ecologySpawn.NATURAL_SPAWN）。
-   */
-  private tickNaturalAnimalSpawning(dt: number): void {
-    if (!this.hooks.onSpawnNaturalAnimal) return;
 
-    const grassCount = this.grasses.length;
-    if (grassCount < NATURAL_SPAWN.grassForHerbivores) {
-      this.naturalAnimalTimer = 20;
-      return;
-    }
-
-    this.naturalAnimalTimer -= dt;
-    if (this.naturalAnimalTimer <= 0) {
-      this.naturalAnimalTimer = 20 + Math.random() * 10;
-
-      const candidates = this.grasses.filter((g) => g.size !== 'small');
-      const seedGrass =
-        candidates.length > 0
-          ? candidates[Math.floor(Math.random() * candidates.length)]!
-          : this.grasses[Math.floor(Math.random() * this.grasses.length)]!;
-
-      if (!seedGrass) return;
-
-      const angle = Math.random() * Math.PI * 2;
-      const dist = 35 + Math.random() * 50;
-      const spawnX = seedGrass.worldX + Math.cos(angle) * dist;
-      const spawnY = seedGrass.worldY + Math.sin(angle) * dist;
-
-      const mapDef = this.hooks.getMapDef();
-      if (!isOnGreenLand(spawnX, spawnY, mapDef, 255)) return;
-      if (this.isGrassTooCloseToTrees(spawnX, spawnY)) return;
-
-      // 仅牛/马；猪鸡不自然刷
-      const kinds: EnemyKind[] = ['cow', 'horse'];
-      const chosenKind = kinds[Math.floor(Math.random() * kinds.length)]!;
-
-      this.hooks.onSpawnNaturalAnimal(chosenKind, spawnX, spawnY);
-    }
-  }
-
-  private naturalWolfTimer = 35;
-
-  /**
-   * 食草动物积累后自然引狼（阈值与上限见 ecologySpawn.NATURAL_SPAWN）。
-   */
-  private tickNaturalWolfSpawning(
-    dt: number,
-    creatures?: ReadonlyArray<Spider>,
-  ): void {
-    if (!this.hooks.onSpawnNaturalAnimal || !creatures) return;
-
-    if (countAliveFarmHerbivores(creatures) < NATURAL_SPAWN.herbivoresForWolf) {
-      this.naturalWolfTimer = 30;
-      return;
-    }
-
-    this.naturalWolfTimer -= dt;
-    if (this.naturalWolfTimer <= 0) {
-      this.naturalWolfTimer = 35 + Math.random() * 15;
-
-      const herbivores = creatures.filter(
-        (s) => s.isAlive && !s.destroyed && isFarmHerbivoreLabel(s.label),
-      );
-      if (herbivores.length === 0) return;
-
-      const target =
-        herbivores[Math.floor(Math.random() * herbivores.length)]!;
-      const angle = Math.random() * Math.PI * 2;
-      const dist = 110 + Math.random() * 60;
-      const spawnX = target.worldX + Math.cos(angle) * dist;
-      const spawnY = target.worldY + Math.sin(angle) * dist;
-
-      const mapDef = this.hooks.getMapDef();
-      if (!isOnGreenLand(spawnX, spawnY, mapDef, 255)) return;
-
-      this.hooks.onSpawnNaturalAnimal('wolf', spawnX, spawnY);
-    }
-  }
 
   /**
    * 全岛无草时：种一小簇种子草（3～5 株），方便立刻连成片而不是单点散落。
