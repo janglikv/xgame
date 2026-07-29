@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { CameraController } from './controls/CameraController';
-import { EmptyScene } from './scenes/EmptyScene';
+import { MainScene } from './scenes/MainScene';
 
 function bootstrap(): void {
   const host = document.getElementById('app');
@@ -33,7 +33,7 @@ function bootstrap(): void {
   camera.position.set(8, 10, 12);
   camera.lookAt(0, 0, 0);
 
-  const scene = new EmptyScene();
+  const scene = new MainScene();
   const controls = new CameraController(camera, renderer.domElement, {
     moveSpeed: 12,
     lookSpeed: 0.002,

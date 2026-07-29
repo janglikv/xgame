@@ -1,16 +1,5 @@
 import * as THREE from 'three';
 
-export interface SpatialAxesGridOptions {
-  /** 从原点沿各轴正负方向延伸的米数，默认 10（总跨度 20m） */
-  extent?: number;
-  /** 刻度间隔（米），默认 1 */
-  step?: number;
-  /** 是否绘制三向网格面（XY / XZ / YZ） */
-  showPlanes?: boolean;
-  /** 是否在刻度旁显示米数标签（每 majorEvery 米显示） */
-  majorEvery?: number;
-}
-
 const AXIS_X = 0xff3355;
 const AXIS_Y = 0x33dd66;
 const AXIS_Z = 0x3399ff;
@@ -19,20 +8,28 @@ const TICK_COLOR = 0xd1d5db;
 const ORIGIN_COLOR = 0xffffff;
 
 /**
- * 空间坐标网格：XYZ 轴 + 每米刻度点 + 可选三向参考网格。
- * 约定：1 世界单位 = 1 米。
+ * 空间坐标网格：XYZ 轴 + 每米刻度点 + 三向参考网格。
+ * 约定：1 世界单位 = 1 米。配置内聚在类内，不对外传参。
  */
 export class SpatialAxesGrid extends THREE.Group {
-  constructor(options: SpatialAxesGridOptions = {}) {
+  /** 从原点沿各轴正负方向延伸的米数（总跨度 20m） */
+  private static readonly EXTENT = 10;
+  /** 刻度间隔（米） */
+  private static readonly STEP = 1;
+  /** 是否绘制三向网格面（XY / XZ / YZ） */
+  private static readonly SHOW_PLANES = true;
+  /** 米数标签间隔 */
+  private static readonly MAJOR_EVERY = 5;
+
+  constructor() {
     super();
     this.name = 'SpatialAxesGrid';
 
-    const extent = options.extent ?? 10;
-    const step = options.step ?? 1;
-    const showPlanes = options.showPlanes ?? true;
-    const majorEvery = options.majorEvery ?? 5;
+    const extent = SpatialAxesGrid.EXTENT;
+    const step = SpatialAxesGrid.STEP;
+    const majorEvery = SpatialAxesGrid.MAJOR_EVERY;
 
-    if (showPlanes) {
+    if (SpatialAxesGrid.SHOW_PLANES) {
       this.add(createPlaneGrids(extent, step));
     }
 
