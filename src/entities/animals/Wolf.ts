@@ -17,50 +17,62 @@ import {
 
 /** 狼：有限视野觅食；吃完后视野内就近找松树休息 */
 export const WOLF_ECO = {
-  /** 饥饿基础增长速率（秒，基础寿命延长至 160 秒） */
+  /** 饥饿基础增长速率（秒，约 167s 从 0→1） */
   hungerPerSec: 0.006,
-  /** 开始猎食 */
+  /** 开始主动搜捕 / 捡尸 */
   seekPreyAt: 0.15,
-  /** 触发饥饿「暴走状态」门槛 (55% 饥饿度) */
+  /** 触发饥饿「暴走状态」门槛 */
   berserkHungerAt: 0.55,
-  /** 基础搜寻视野 (500px) / 饥饿嗅觉扩展视野 (680px) */
+  /** 基础搜寻视野 / 饥饿嗅觉扩展视野 */
   visionRange: 500,
-  hungryVisionRange: 680,
+  hungryVisionRange: 720,
   chaseMemory: 550,
-  hungryChaseMemory: 750,
+  hungryChaseMemory: 800,
   eatRange: 58,
-  /** 常规逼近移速（提升至 290px/s，远高于猎物 185px/s 逃跑速度） */
+  /** 常规逼近移速（高于猎物 185 逃跑） */
   huntSpeed: 290,
-  /** 猛冲「扑咬」触发感知距离 */
+  /** 扑咬冷却中贴身跟进速度（须 > 猎物逃速 185，否则一刀后必丢） */
+  cooldownHuntSpeed: 230,
+  /** 蓄力时缓慢贴身，避免完全站桩被拉开 */
+  windupSpeed: 95,
+  /** 猛冲「扑咬」触发距离 */
   chargeRange: 165,
-  /** 猛冲「扑咬」极速 (560px/s) / 暴走极速 (680px/s) */
+  /** 猛冲「扑咬」极速 / 暴走极速 */
   dashSpeed: 560,
   berserkDashSpeed: 680,
   /** 「扑咬」前摇蓄力时间（秒） */
-  windupDuration: 0.22,
+  windupDuration: 0.18,
   berserkWindupDuration: 0.1,
   /** 「扑咬」猛冲持续时间（秒） */
   dashDuration: 0.35,
-  forageSpeed: 120,
-  forageRadius: 240,
+  forageSpeed: 140,
+  /** 饿时搜捕半径（略大，减少空地空转） */
+  forageRadius: 280,
+  hungryForageRadius: 400,
   walkSpeed: 90,
-  startHunger: 0.45,
-  /** 常规「扑咬」攻击力 (15 HP) */
+  /** 出生略饿，给约 2 分钟窗口找到第一顿 */
+  startHunger: 0.28,
+  /** 常规「扑咬」攻击力 */
   pounceDamage: 15,
-  /** 饥饿暴走「扑咬」攻击力（翻倍至 30 HP） */
+  /** 饥饿暴走「扑咬」攻击力 */
   berserkPounceDamage: 30,
   /** 对玩家反击时的攻击力 */
   counterAttackDamage: 60,
-  /** 常规「扑咬」攻击冷却间隔 (1.5s) */
-  attackInterval: 1.5,
-  /** 暴走「扑咬」攻击冷却间隔（0.75s） */
-  berserkAttackInterval: 0.75,
-  /** 吃完一具倒地尸体恢复 85% 饱腹度 */
+  /** 常规「扑咬」攻击冷却 */
+  attackInterval: 1.2,
+  /** 暴走「扑咬」攻击冷却 */
+  berserkAttackInterval: 0.65,
+  /** 吃完一具倒地尸体恢复饱腹度 */
   mealFeed: 0.85,
+  /** 进食时长（秒） */
+  eatDuration: 2.5,
+  /** 单次追击超时（秒）；暴走略长 */
+  huntTimeout: 7.0,
+  berserkHuntTimeout: 9.0,
   restArrive: 28,
   restOffsetY: 40,
-  /** 重索敌调整冷却（从 5.0s 缩短至 0.6s，绝不发呆） */
-  retargetCd: 0.6,
+  /** 重索敌冷却 */
+  retargetCd: 0.45,
   maxHp: 120,
 } as const;
 
@@ -68,7 +80,7 @@ export const WOLF_ECO = {
 export const WOLF_PREY_LABELS = new Set(['Chicken', 'Pig', 'Cow', 'Horse']);
 
 /**
- * 狼：视野内觅食猎杀；成功后在视野内就近找松树休息。
+ * 狼：视野内觅食猎杀；可捡食倒地猎物尸体；成功后就近找松树休息。
  * 无「全图透视」。
  */
 export class Wolf extends WorldCreature {
@@ -113,12 +125,12 @@ export class Wolf extends WorldCreature {
     return this.hunger;
   }
 
-  /** 极度饥饿（>= 65% 饥饿度）触发暴走状态：伤害翻倍(30HP)、攻击频率翻倍(0.75s) */
+  /** 极度饥饿触发暴走：伤害/频率提升 */
   get isBerserk(): boolean {
     return this.hunger >= WOLF_ECO.berserkHungerAt;
   }
 
-  /** 获取当前视野半径（饥饿时凭借嗅觉大幅扩大） */
+  /** 获取当前视野半径（饥饿时凭借嗅觉扩大） */
   private getVisionRange(baseRange?: number): number {
     if (baseRange) return baseRange;
     return this.hunger >= 0.4
@@ -141,15 +153,30 @@ export class Wolf extends WorldCreature {
     return dx * dx + dy * dy <= r * r;
   }
 
+  /** 是否为可食用猎物尸体（鸡猪牛马） */
+  private isEdibleCorpse(c: WorldCreature): boolean {
+    return (
+      c !== this &&
+      !c.destroyed &&
+      c.isCorpse &&
+      WOLF_PREY_KINDS.has(c.kind)
+    );
+  }
+
   protected override updateAI(
     dt: number,
     playerX: number,
     playerY: number,
     playerBodyProfileId: BodyProfileId | null = null,
   ): { moved: boolean; attackHit: SpiderAttackHit | null } {
-    // 暴走视觉反馈：暴走状态下狼身呈绯红发光 (0xff4444)
+    // 暴走视觉反馈
     if (this.sprite && !this.isCorpse) {
       this.sprite.tint = this.isBerserk ? 0xff4444 : 0xffffff;
+    }
+
+    // 关键：父类 updateAI 被完全覆盖，必须在此递减攻击冷却
+    if (this.attackCd > 0) {
+      this.attackCd = Math.max(0, this.attackCd - dt);
     }
 
     if (this.locked) {
@@ -166,8 +193,7 @@ export class Wolf extends WorldCreature {
       return { moved: false, attackHit: null };
     }
 
-    // 狼多食物少时的生存竞争机制：
-    // 统计全场狼数量与可捕捉的食草猎物（牛/马/鸡/猪）数量
+    // 狼多食物少：适度加速饥饿（最高 1.8 倍）
     let wolfCount = 0;
     let preyCount = 0;
     for (const c of eco.creatures) {
@@ -176,7 +202,6 @@ export class Wolf extends WorldCreature {
       else if (WOLF_PREY_KINDS.has(c.kind)) preyCount += 1;
     }
 
-    // 食物不足（平均每只狼不足 2 只猎物）时，适度提升饥饿消耗（最高 1.8 倍，避免急剧死）
     let hungerMult = 1.0;
     if (wolfCount > 0 && preyCount < wolfCount * 2) {
       const deficit = wolfCount * 2 - preyCount;
@@ -185,10 +210,11 @@ export class Wolf extends WorldCreature {
 
     this.hunger += WOLF_ECO.hungerPerSec * hungerMult * dt;
 
-    // 饿死判定：食物不足或长时间未猎捕到食物，饿死并倒地变为颠倒尸体
+    // 饿死 → 倒地尸体
     if (this.hunger >= 1.0) {
       this.prey = null;
       this.restTree = null;
+      this.eatingCorpse = null;
       this.applyDamage(this.maximumHp + 1);
       if (!this.isAlive && !this.isCorpse) {
         this.turnIntoCorpse(6.0);
@@ -196,68 +222,123 @@ export class Wolf extends WorldCreature {
       return { moved: false, attackHit: null };
     }
 
-    // 0) 进食倒地尸体状态：走到倒下尸体旁趴下进食 2.5 秒，吃完恢复饱腹并移除尸体
+    // 0) 继续进食已锁定尸体
     if (this.eatingCorpse) {
-      const corpse = this.eatingCorpse;
-      if (!corpse.destroyed && eco.creatures.includes(corpse)) {
-        const dist = Math.hypot(
-          corpse.worldX - this.worldX,
-          corpse.worldY - this.worldY,
-        );
-        this.faceToward(corpse.worldX, corpse.worldY);
+      const eatResult = this.tickEatingCorpse(dt, eco);
+      if (eatResult) return eatResult;
+    }
 
-        if (dist > WOLF_ECO.eatRange * 0.6) {
-          const moved = this.moveTowardAvoidingTrees(
-            corpse.worldX,
-            corpse.worldY,
-            WOLF_ECO.walkSpeed,
-            dt,
-            WOLF_ECO.eatRange * 0.4,
-            22,
-          );
-          return { moved, attackHit: null };
-        }
-
-        // 到达尸体旁：开始进食
-        this.eatingCorpseTimer -= dt;
-        this.aiState = 'patrol';
-
-        if (this.eatingCorpseTimer <= 0) {
-          // 进食 2.5 秒结束：恢复 85% 饱腹度，尸体被吃完消失，狼准备去树下休息
-          this.hunger = Math.max(0, this.hunger - WOLF_ECO.mealFeed);
-          eco.removeCreature(corpse);
-          this.eatingCorpse = null;
-          this.wantRest = true;
-          this.restTree = null;
-          this.retargetCd = WOLF_ECO.retargetCd;
-        }
-        return { moved: false, attackHit: null };
-      } else {
-        this.eatingCorpse = null;
+    // 0.5) 视野内有可食尸体：优先捡食（自己/同伴/玩家击杀的都算）
+    // 饥饿或刚想休息时都愿意捡，避免浪费肉
+    if (this.hunger >= WOLF_ECO.seekPreyAt * 0.5 || this.wantRest) {
+      this.refreshScavengeCorpse(eco);
+      if (this.eatingCorpse) {
+        this.wantRest = false;
+        this.prey = null;
+        this.chargeState = 'approach';
+        const eatResult = this.tickEatingCorpse(dt, eco);
+        if (eatResult) return eatResult;
       }
     }
 
-    // 1) 无论饥饿度如何，只要附近/视野内有捕食目标（牛/马/鸡/猪），立刻触发猎捕
+    // 1) 视野内有活猎物 → 猎捕
     this.refreshPrey(eco);
     if (this.prey) {
       this.wantRest = false;
       return this.huntPrey(dt, eco);
     }
 
-    // 2) 视野内暂无猎物，但饿了：主动巡游搜寻猎物
+    // 2) 饿了：扩大范围巡游搜捕
     if (this.hunger >= WOLF_ECO.seekPreyAt) {
       this.wantRest = false;
       return this.forageRoam(dt);
     }
 
-    // 3) 视野内无猎物且饱腹：寻找松树休息
+    // 3) 饱腹：找松树休息
     this.refreshRestTree(eco);
     if (this.restTree) {
       return this.goRestNearPine(dt, this.restTree);
     }
 
-    // 4) 视野内没树：散步游荡
+    // 4) 没树：慢悠悠游荡
     return this.forageRoam(dt, /* lookingForRest */ true);
+  }
+
+  /**
+   * 走向尸体并进食；尸体消失则清空目标。
+   * 返回 null 表示尸体无效，调用方继续后续 AI。
+   */
+  private tickEatingCorpse(
+    dt: number,
+    eco: CreatureEcologyContext,
+  ): { moved: boolean; attackHit: SpiderAttackHit | null } | null {
+    const corpse = this.eatingCorpse;
+    if (!corpse || !this.isEdibleCorpse(corpse) || !eco.creatures.includes(corpse)) {
+      this.eatingCorpse = null;
+      return null;
+    }
+
+    const dist = Math.hypot(
+      corpse.worldX - this.worldX,
+      corpse.worldY - this.worldY,
+    );
+    this.faceToward(corpse.worldX, corpse.worldY);
+
+    if (dist > WOLF_ECO.eatRange * 0.6) {
+      // 饿了跑快点去抢尸，避免同伴先吃完
+      const speed =
+        this.hunger >= WOLF_ECO.berserkHungerAt
+          ? WOLF_ECO.huntSpeed
+          : WOLF_ECO.forageSpeed;
+      const moved = this.moveTowardAvoidingTrees(
+        corpse.worldX,
+        corpse.worldY,
+        speed,
+        dt,
+        WOLF_ECO.eatRange * 0.4,
+        22,
+      );
+      return { moved, attackHit: null };
+    }
+
+    this.eatingCorpseTimer -= dt;
+    this.aiState = 'patrol';
+
+    if (this.eatingCorpseTimer <= 0) {
+      this.hunger = Math.max(0, this.hunger - WOLF_ECO.mealFeed);
+      eco.removeCreature(corpse);
+      this.eatingCorpse = null;
+      this.wantRest = true;
+      this.restTree = null;
+      this.retargetCd = WOLF_ECO.retargetCd;
+    }
+    return { moved: false, attackHit: null };
+  }
+
+  /** 视野内就近锁定可食尸体并开始进食计时 */
+  private refreshScavengeCorpse(eco: CreatureEcologyContext): void {
+    if (this.eatingCorpse && this.isEdibleCorpse(this.eatingCorpse)) {
+      if (eco.creatures.includes(this.eatingCorpse)) return;
+      this.eatingCorpse = null;
+    }
+
+    let best: WorldCreature | null = null;
+    let bestD = this.getVisionRange();
+
+    for (const c of eco.creatures) {
+      if (!this.isEdibleCorpse(c)) continue;
+      if (!this.inVision(c.worldX, c.worldY)) continue;
+      const d = Math.hypot(c.worldX - this.worldX, c.worldY - this.worldY);
+      if (d < bestD) {
+        bestD = d;
+        best = c;
+      }
+    }
+
+    if (best) {
+      this.eatingCorpse = best;
+      this.eatingCorpseTimer = WOLF_ECO.eatDuration;
+    }
   }
 
   /** 视野内觅食 / 找歇脚点游荡 */
@@ -265,17 +346,25 @@ export class Wolf extends WorldCreature {
     dt: number,
     lookingForRest = false,
   ): { moved: boolean; attackHit: SpiderAttackHit | null } {
+    const hungry = this.hunger >= 0.4;
+    const radius = lookingForRest
+      ? WOLF_ECO.forageRadius * 0.85
+      : hungry
+        ? WOLF_ECO.hungryForageRadius
+        : WOLF_ECO.forageRadius;
+    const speed = lookingForRest
+      ? WOLF_ECO.walkSpeed
+      : hungry
+        ? WOLF_ECO.forageSpeed * 1.15
+        : WOLF_ECO.forageSpeed;
+
     return {
       moved: this.updateSearchRoam(dt, {
-        radius: lookingForRest
-          ? WOLF_ECO.forageRadius * 0.85
-          : WOLF_ECO.forageRadius,
-        speed: lookingForRest
-          ? WOLF_ECO.walkSpeed
-          : WOLF_ECO.forageSpeed,
-        pauseMin: 0.12,
-        pauseMax: lookingForRest ? 0.55 : 0.35,
-        preferFar: 0.62,
+        radius,
+        speed,
+        pauseMin: lookingForRest ? 0.12 : 0.06,
+        pauseMax: lookingForRest ? 0.55 : hungry ? 0.18 : 0.3,
+        preferFar: hungry ? 0.78 : 0.62,
         leisurely: lookingForRest,
       }),
       attackHit: null,
@@ -284,8 +373,8 @@ export class Wolf extends WorldCreature {
 
   /**
    * 刷新猎物：
-   * - 新锁定：支持饥饿嗅觉扩展视野 (680px)
-   * - 智商权重：距离更近、体型更小(Chicken/Pig)的猎物优先
+   * - 新锁定：饥饿嗅觉扩展视野
+   * - 小体型（鸡/猪）优先，易咬死
    */
   private refreshPrey(eco: CreatureEcologyContext): void {
     const memoryRange = this.getChaseMemory();
@@ -293,17 +382,17 @@ export class Wolf extends WorldCreature {
       if (
         this.prey.isAlive &&
         !this.prey.destroyed &&
+        !this.prey.isCorpse &&
         eco.creatures.includes(this.prey) &&
-        this.inVision(
-          this.prey.worldX,
-          this.prey.worldY,
-          memoryRange,
-        )
+        this.inVision(this.prey.worldX, this.prey.worldY, memoryRange)
       ) {
         return;
       }
       this.prey = null;
       this.retargetCd = WOLF_ECO.retargetCd;
+      this.chargeState = 'approach';
+      this.huntTime = 0;
+      this.dashMisses = 0;
     }
     if (this.retargetCd > 0) return;
 
@@ -312,19 +401,23 @@ export class Wolf extends WorldCreature {
     const currentVision = this.getVisionRange();
 
     for (const c of eco.creatures) {
-      if (c === this || !c.isAlive || c.destroyed) continue;
+      if (c === this || !c.isAlive || c.destroyed || c.isCorpse) continue;
       if (!WOLF_PREY_KINDS.has(c.kind)) continue;
       if (!this.inVision(c.worldX, c.worldY, currentVision)) continue;
 
       const d = Math.hypot(c.worldX - this.worldX, c.worldY - this.worldY);
-      // 智商挑选：易捕获的小体型猎物优先 (Chicken: 1.5, Pig: 1.3, Cow: 1.0, Horse: 0.85)
       let weight = 1.0;
       if (c.kind === 'chicken') weight = 1.5;
       else if (c.kind === 'pig') weight = 1.3;
       else if (c.kind === 'cow') weight = 1.0;
       else if (c.kind === 'horse') weight = 0.85;
 
-      const score = d / weight;
+      // 低血量猎物更好咬死，优先收尾
+      const hpFrac =
+        c.maximumHp > 0 ? c.currentHp / c.maximumHp : 1;
+      const lowHpBonus = hpFrac < 0.5 ? 1.35 : 1.0;
+
+      const score = d / (weight * lowHpBonus);
       if (score < bestScore) {
         bestScore = score;
         best = c;
@@ -338,7 +431,12 @@ export class Wolf extends WorldCreature {
     _eco: CreatureEcologyContext,
   ): { moved: boolean; attackHit: SpiderAttackHit | null } {
     const prey = this.prey;
-    if (!prey || !prey.isAlive || prey.destroyed) {
+    if (!prey || !prey.isAlive || prey.destroyed || prey.isCorpse) {
+      // 追击中猎物倒地：立刻转进食
+      if (prey && prey.isCorpse && !prey.destroyed) {
+        this.eatingCorpse = prey;
+        this.eatingCorpseTimer = WOLF_ECO.eatDuration;
+      }
       this.prey = null;
       this.chargeState = 'approach';
       this.huntTime = 0;
@@ -346,7 +444,6 @@ export class Wolf extends WorldCreature {
       return { moved: false, attackHit: null };
     }
 
-    // 追击中超出记忆距离 → 丢失
     const memoryRange = this.getChaseMemory();
     if (!this.inVision(prey.worldX, prey.worldY, memoryRange)) {
       this.prey = null;
@@ -359,11 +456,13 @@ export class Wolf extends WorldCreature {
 
     this.huntTime += dt;
 
-    // 防止死追机制 1：追击超时 (>= 5.5 秒) 换目标，短暂调整 0.6s
-    if (this.huntTime >= 5.5) {
+    const huntTimeout = this.isBerserk
+      ? WOLF_ECO.berserkHuntTimeout
+      : WOLF_ECO.huntTimeout;
+    if (this.huntTime >= huntTimeout) {
       this.prey = null;
       this.chargeState = 'approach';
-      this.retargetCd = WOLF_ECO.retargetCd; // 0.6 秒警觉调整，绝不呆立发呆 5 秒
+      this.retargetCd = WOLF_ECO.retargetCd;
       this.huntTime = 0;
       this.dashMisses = 0;
       return this.forageRoam(dt, true);
@@ -374,19 +473,30 @@ export class Wolf extends WorldCreature {
       prey.worldY - this.worldY,
     );
 
-    // 阶段 1：蓄力准备 (windup)
+    // 阶段 1：蓄力 — 缓慢贴身，不全站桩
     if (this.chargeState === 'windup') {
       this.chargeTimer -= dt;
       this.faceToward(prey.worldX, prey.worldY);
       this.aiState = 'attack';
+      let moved = false;
+      if (dist > WOLF_ECO.eatRange * 0.85) {
+        moved = this.moveTowardAvoidingTrees(
+          prey.worldX,
+          prey.worldY,
+          WOLF_ECO.windupSpeed,
+          dt,
+          WOLF_ECO.eatRange * 0.5,
+          22,
+        );
+      }
       if (this.chargeTimer <= 0) {
         this.chargeState = 'dash';
         this.chargeTimer = WOLF_ECO.dashDuration;
       }
-      return { moved: false, attackHit: null };
+      return { moved, attackHit: null };
     }
 
-    // 阶段 2：猛冲扑杀 (dash)
+    // 阶段 2：猛冲扑杀
     if (this.chargeState === 'dash') {
       this.chargeTimer -= dt;
       this.aiState = 'chase';
@@ -404,34 +514,35 @@ export class Wolf extends WorldCreature {
         22,
       );
 
-      // 扑杀命中结算
-      if (dist <= WOLF_ECO.eatRange || this.chargeTimer <= 0) {
-        if (dist <= WOLF_ECO.eatRange + 25) {
+      // 用结算时的实时距离（移动后再量一次更准）
+      const hitDist = Math.hypot(
+        prey.worldX - this.worldX,
+        prey.worldY - this.worldY,
+      );
+
+      if (hitDist <= WOLF_ECO.eatRange || this.chargeTimer <= 0) {
+        if (hitDist <= WOLF_ECO.eatRange + 30) {
           this.dashMisses = 0;
           const dx = prey.worldX - this.worldX;
           const dy = prey.worldY - this.worldY;
           const d = Math.hypot(dx, dy);
           const inv = d > 1e-3 ? 1 / d : 1;
 
-          // 猛烈推开与冲击高弹跳 (220px/s 位移, 320px/s 垂直起跳)
           applyRecoilHop(prey.knock, dx * inv, dy * inv, 220, 320);
 
-          // 暴走状态下「扑咬」伤害翻倍 (30 HP vs 15 HP)
           const damage = this.isBerserk
             ? WOLF_ECO.berserkPounceDamage
             : WOLF_ECO.pounceDamage;
           const isAlive = prey.applyDamage(damage);
 
-          // 暴走状态下攻击频率翻倍（攻击冷却减半 0.75s vs 1.5s）
           this.attackCd = this.isBerserk
             ? WOLF_ECO.berserkAttackInterval
             : WOLF_ECO.attackInterval;
 
           if (!isAlive) {
-            // 猎物死亡：不直接移除，而是转为倒地尸体（颠倒），狼开始在原地进食尸体！
             prey.turnIntoCorpse();
             this.eatingCorpse = prey;
-            this.eatingCorpseTimer = 2.5; // 2.5 秒进食尸体过程
+            this.eatingCorpseTimer = WOLF_ECO.eatDuration;
             this.prey = null;
             this.chargeState = 'approach';
             this.huntTime = 0;
@@ -440,12 +551,11 @@ export class Wolf extends WorldCreature {
             return { moved: false, attackHit: null };
           }
         } else {
-          // 防止死追机制 2：猛冲扑空 2 次，换目标调整 0.6 秒
           this.dashMisses += 1;
-          if (this.dashMisses >= 2) {
+          if (this.dashMisses >= 3) {
             this.prey = null;
             this.chargeState = 'approach';
-            this.retargetCd = WOLF_ECO.retargetCd; // 0.6 秒调整，绝不呆立发呆
+            this.retargetCd = WOLF_ECO.retargetCd;
             this.huntTime = 0;
             this.dashMisses = 0;
             return this.forageRoam(dt, true);
@@ -456,7 +566,7 @@ export class Wolf extends WorldCreature {
       return { moved, attackHit: null };
     }
 
-    // 阶段 3：索敌逼近 (approach) -> 满足触发距离且攻击冷却完毕时切蓄力
+    // 阶段 3：逼近 → 进入蓄力
     if (
       dist <= WOLF_ECO.chargeRange &&
       this.attackCd <= 0 &&
@@ -470,10 +580,11 @@ export class Wolf extends WorldCreature {
       return { moved: false, attackHit: null };
     }
 
-    // 扑咬冷却中或踱步潜行：狼保持低速踱步观察(70px/s)，绝不全程疯狂加速“死追”！
-    const currentSpeed = this.attackCd > 0 ? 70 : WOLF_ECO.huntSpeed;
+    // 冷却中仍用较快跟进速度咬住距离（必须 > 猎物逃速 185）
+    const currentSpeed =
+      this.attackCd > 0 ? WOLF_ECO.cooldownHuntSpeed : WOLF_ECO.huntSpeed;
 
-    this.aiState = this.attackCd > 0 ? 'patrol' : 'chase';
+    this.aiState = 'chase';
     this.patrolPause = 0;
     const moved = this.moveTowardAvoidingTrees(
       prey.worldX,
@@ -488,8 +599,6 @@ export class Wolf extends WorldCreature {
 
   /**
    * 刷新歇脚松树：与觅食同一套视野。
-   * - 新目标：必须在 visionRange 内就近
-   * - 已锁定：chaseMemory 内可继续走向该树
    */
   private refreshRestTree(eco: CreatureEcologyContext): void {
     if (this.restTree) {
@@ -548,7 +657,6 @@ export class Wolf extends WorldCreature {
       return { moved: false, attackHit: null };
     }
 
-    // 走向歇脚点途中若树已远超记忆距离，放弃重觅
     if (!this.inVision(tree.worldX, tree.worldY, WOLF_ECO.chaseMemory)) {
       this.restTree = null;
       return this.forageRoam(dt, true);
