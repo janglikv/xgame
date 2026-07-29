@@ -95,7 +95,6 @@ export const BODY_PROFILES: Record<BodyProfileId, BodyProfile> = {
       { type: 'rect', ox: 0.8, oy: -44.47, w: 50.49, h: 8.51 },
     ],
   },
-  /** 动物默认：按体型粗设，进编辑器再精调 */
   chicken: {
     id: 'chicken',
     label: '鸡',
@@ -105,26 +104,32 @@ export const BODY_PROFILES: Record<BodyProfileId, BodyProfile> = {
   pig: {
     id: 'pig',
     label: '猪',
-    solid: [{ type: 'circle', ox: 0, oy: -14, r: 22 }],
-    hurt: [{ type: 'circle', ox: 0, oy: -18, r: 28 }],
+    solid: [{ type: 'circle', ox: -2.44, oy: -32.15, r: 21.2 }],
+    hurt: [{ type: 'circle', ox: 1.06, oy: -45.93, r: 28 }],
   },
   cow: {
     id: 'cow',
     label: '牛',
-    solid: [{ type: 'circle', ox: 0, oy: -16, r: 26 }],
-    hurt: [{ type: 'circle', ox: 0, oy: -22, r: 32 }],
+    solid: [{ type: 'circle', ox: -1.26, oy: -22.76, r: 22.75 }],
+    hurt: [
+      { type: 'circle', ox: -2.99, oy: -39.54, r: 32 },
+      { type: 'circle', ox: 22.63, oy: -69.55, r: 23.16 },
+    ],
   },
   horse: {
     id: 'horse',
     label: '马',
-    solid: [{ type: 'circle', ox: 0, oy: -18, r: 28 }],
-    hurt: [{ type: 'circle', ox: 0, oy: -28, r: 36 }],
+    solid: [{ type: 'circle', ox: -6.71, oy: -20.23, r: 24.31 }],
+    hurt: [
+      { type: 'circle', ox: -5.88, oy: -38.62, r: 34.6 },
+      { type: 'circle', ox: 26.41, oy: -88.89, r: 25.39 },
+    ],
   },
   wolf: {
     id: 'wolf',
     label: '狼',
-    solid: [{ type: 'circle', ox: 0, oy: -12, r: 16 }],
-    hurt: [{ type: 'circle', ox: 0, oy: -16, r: 22 }],
+    solid: [{ type: 'circle', ox: 2, oy: -9.25, r: 13.22 }],
+    hurt: [{ type: 'circle', ox: 4.32, oy: -21.01, r: 21.14 }],
   },
   bear: {
     id: 'bear',
