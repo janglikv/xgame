@@ -228,15 +228,58 @@ export abstract class GrassEater extends WorldCreature {
       this.clearEating();
       this.grassTarget = null;
       this.patrolPause = 0;
-      // 受受受惊模式：移速大幅提升至 185px/s 高速狂奔，强行终止觅食
-      const moved = this.updateSearchRoam(dt, {
-        radius: 380,
-        speed: 185,
-        pauseMin: 0,
-        pauseMax: 0.05,
-        preferFar: 0.85,
-        leisurely: false,
-      });
+
+      // 寻附近威胁最大的狼，计算反方向背向逃跑点
+      let fleeX = this.patrolTargetX;
+      let fleeY = this.patrolTargetY;
+
+      if (eco) {
+        let nearestWolf: WorldCreature | null = null;
+        let nearestD2 = Infinity;
+        for (const c of eco.creatures) {
+          if (c.isAlive && !c.destroyed && c.kind === 'wolf') {
+            const dx = c.worldX - this.worldX;
+            const dy = c.worldY - this.worldY;
+            const d2 = dx * dx + dy * dy;
+            if (d2 < nearestD2) {
+              nearestD2 = d2;
+              nearestWolf = c;
+            }
+          }
+        }
+        if (nearestWolf) {
+          const dx = this.worldX - nearestWolf.worldX;
+          const dy = this.worldY - nearestWolf.worldY;
+          const d = Math.hypot(dx, dy);
+          const inv = d > 1e-3 ? 1 / d : 1;
+          fleeX = this.worldX + dx * inv * 320;
+          fleeY = this.worldY + dy * inv * 320;
+          this.patrolTargetX = fleeX;
+          this.patrolTargetY = fleeY;
+        }
+      }
+
+      // 到达逃跑目标点后重新滚选远端逃跑点
+      const distToTarget = Math.hypot(
+        this.patrolTargetX - this.worldX,
+        this.patrolTargetY - this.worldY,
+      );
+      if (distToTarget < 25) {
+        this.pickSearchWaypoint(350, { preferFar: 0.85 });
+        fleeX = this.patrolTargetX;
+        fleeY = this.patrolTargetY;
+      }
+
+      this.aiState = 'chase';
+      // 智能避树平滑绕行狂奔（185px/s），绝不卡树
+      const moved = this.moveTowardAvoidingTrees(
+        fleeX,
+        fleeY,
+        185,
+        dt,
+        10,
+        this.bodyR,
+      );
       return { moved, attackHit: null };
     }
 
