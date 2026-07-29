@@ -30,8 +30,8 @@ export const WOLF_ECO = {
    */
   chaseMemory: 380,
   eatRange: 54,
-  /** 扑杀移速（高于牛食草动作，但给猎物拉开空间） */
-  huntSpeed: 168,
+  /** 扑杀追击移速（翻倍至 336px/s 极速扑杀） */
+  huntSpeed: 336,
   /** 觅食巡游移速（视野内无猎物时） */
   forageSpeed: 108,
   /** 觅食巡游半径 */
