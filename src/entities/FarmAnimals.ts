@@ -746,6 +746,8 @@ type HerbivoreEco = {
   fullSpeed: number;
   grassFeed: { small: number; medium: number; large: number };
   startHunger: number;
+  /** 吃草停顿时长（秒） */
+  eatPauseSec?: number;
 };
 
 const COW_ECO: HerbivoreEco = {
@@ -755,6 +757,7 @@ const COW_ECO: HerbivoreEco = {
   fullSpeed: 28,
   grassFeed: { small: 0.22, medium: 0.4, large: 0.62 },
   startHunger: 0.25,
+  eatPauseSec: 3.2,
 };
 
 const HORSE_ECO: HerbivoreEco = {
@@ -764,35 +767,95 @@ const HORSE_ECO: HerbivoreEco = {
   fullSpeed: 42,
   grassFeed: { small: 0.18, medium: 0.34, large: 0.52 },
   startHunger: 0.25,
+  eatPauseSec: 2.5,
 };
 
 /**
  * 食草基类：只找最近的大草吃；饱了走慢、饿了走快；没草会饿死。
- * 无闲逛。
+ * 吃草时停下停顿并切换低头吃草贴图，结束后恢复站立贴图。
  */
 abstract class GrassEater extends Spider {
   private hunger: number;
   private readonly ecoCfg: HerbivoreEco;
+  private readonly idleTextureUrl: string;
+  private readonly eatTextureUrl: string;
   /** 锁定的大草目标（降频重选） */
   private grassTarget: CreatureEcologyContext['grasses'][number] | null = null;
   private retargetT = 0;
+  /** 吃草停顿倒计时（秒） */
+  private eatTimer = 0;
+  /** 当前停下吃的草目标 */
+  private eatingGrassTarget: CreatureEcologyContext['grasses'][number] | null = null;
+  /** 是否显示吃草贴图 */
+  private showingEatPose = false;
 
   protected constructor(
     worldX: number,
     worldY: number,
     options: FarmAnimalOptions,
     scale: number,
-    appearance: { textureUrl: string; label: string; spriteLabel: string },
+    appearance: {
+      textureUrl: string;
+      /** 低头吃草贴图 */
+      eatTextureUrl: string;
+      label: string;
+      spriteLabel: string;
+    },
     ecoCfg: HerbivoreEco,
     walkBob: WalkBobConfig = ANIMAL_WALK_BOB.large,
   ) {
-    super(worldX, worldY, animalOptions(options, scale, appearance, walkBob));
+    super(
+      worldX,
+      worldY,
+      animalOptions(
+        options,
+        scale,
+        {
+          textureUrl: appearance.textureUrl,
+          label: appearance.label,
+          spriteLabel: appearance.spriteLabel,
+        },
+        walkBob,
+      ),
+    );
     this.ecoCfg = ecoCfg;
     this.hunger = ecoCfg.startHunger;
+    this.idleTextureUrl = appearance.textureUrl;
+    this.eatTextureUrl = appearance.eatTextureUrl;
+  }
+
+  override async load(): Promise<void> {
+    await super.load();
+    // 预缓存吃草贴图，避免第一次低头时闪一下
+    await this.preloadSpriteTexture(this.eatTextureUrl);
   }
 
   get hunger01(): number {
     return this.hunger;
+  }
+
+  /** 切换站立 / 低头吃草贴图 */
+  private setEatPose(on: boolean): void {
+    if (this.showingEatPose === on) return;
+    this.showingEatPose = on;
+    void this.applyEatPose(on);
+  }
+
+  private async applyEatPose(on: boolean): Promise<void> {
+    const url = on ? this.eatTextureUrl : this.idleTextureUrl;
+    await this.setSpriteTexture(url);
+    // 异步期间姿态可能又切了，以最新状态为准再补一次
+    if (this.showingEatPose !== on && !this.destroyed) {
+      await this.setSpriteTexture(
+        this.showingEatPose ? this.eatTextureUrl : this.idleTextureUrl,
+      );
+    }
+  }
+
+  private clearEating(): void {
+    this.eatingGrassTarget = null;
+    this.eatTimer = 0;
+    this.setEatPose(false);
   }
 
   /** 越饿越快：hunger 0→fullSpeed，1→forageSpeed */
@@ -854,6 +917,7 @@ abstract class GrassEater extends Spider {
   ): { moved: boolean; attackHit: SpiderAttackHit | null } {
     if (this.locked) {
       this.grassTarget = null;
+      this.clearEating();
       return super.updateAI(dt, playerX, playerY, playerBodyProfileId);
     }
 
@@ -863,6 +927,7 @@ abstract class GrassEater extends Spider {
     const speed = this.moveSpeed();
 
     if (eco && this.hunger >= 1) {
+      this.clearEating();
       this.applyDamage(this.maximumHp + 1);
       if (!this.isAlive) eco.removeCreature(this);
       return { moved: false, attackHit: null };
@@ -870,6 +935,42 @@ abstract class GrassEater extends Spider {
 
     if (!eco) {
       return { moved: false, attackHit: null };
+    }
+
+    // 正在停下吃草中
+    if (this.eatingGrassTarget) {
+      const g = this.eatingGrassTarget;
+      const valid =
+        eco.grasses.includes(g as (typeof eco.grasses)[number]) &&
+        ('isGrazable' in g ? (g as { isGrazable: boolean }).isGrazable : true);
+
+      if (!valid) {
+        this.clearEating();
+      } else {
+        this.eatTimer -= dt;
+        this.faceToward(g.worldX, g.worldY);
+        this.aiState = 'patrol';
+        this.setEatPose(true);
+
+        if (this.eatTimer > 0) {
+          return { moved: false, attackHit: null };
+        }
+
+        // 吃草停顿完成，扣减草体型并补充饥饿值
+        const sizeBefore = g.size;
+        const result = eco.consumeGrass(g);
+        if (result) {
+          const feed =
+            cfg.grassFeed[result] ??
+            cfg.grassFeed[sizeBefore] ??
+            cfg.grassFeed.medium;
+          this.hunger = Math.max(0, this.hunger - feed);
+        }
+        this.clearEating();
+        this.grassTarget = null;
+        this.retargetT = 1.0; // 吃完草后多留 1.0 秒停顿，避免无缝奔向下一草丛
+        return { moved: false, attackHit: null };
+      }
     }
 
     this.retargetT -= dt;
@@ -882,17 +983,12 @@ abstract class GrassEater extends Spider {
     if (nearest) {
       const { grass, dist } = nearest;
       if (dist <= cfg.eatRange) {
-        const sizeBefore = grass.size;
-        const result = eco.consumeGrass(grass);
-        if (result) {
-          const feed =
-            cfg.grassFeed[result] ??
-            cfg.grassFeed[sizeBefore] ??
-            cfg.grassFeed.medium;
-          this.hunger = Math.max(0, this.hunger - feed);
-        }
-        this.grassTarget = null;
-        this.retargetT = 0;
+        // 到达吃草范围：停下来，开启吃草倒计时并换低头贴图（牛 3.2s，马 2.5s）
+        this.eatingGrassTarget = grass;
+        this.eatTimer = cfg.eatPauseSec ?? 3.0;
+        this.aiState = 'patrol';
+        this.faceToward(grass.worldX, grass.worldY);
+        this.setEatPose(true);
         return { moved: false, attackHit: null };
       }
       this.aiState = 'chase';
@@ -936,6 +1032,7 @@ export class Cow extends GrassEater {
       ANIMAL_SCALE.cow,
       {
         textureUrl: '/assets/cow/cow.png',
+        eatTextureUrl: '/assets/cow/cow-eat.png',
         label: 'Cow',
         spriteLabel: 'CowSprite',
       },
@@ -954,6 +1051,7 @@ export class Horse extends GrassEater {
       ANIMAL_SCALE.horse,
       {
         textureUrl: '/assets/horse/horse.png',
+        eatTextureUrl: '/assets/horse/horse-eat.png',
         label: 'Horse',
         spriteLabel: 'HorseSprite',
       },

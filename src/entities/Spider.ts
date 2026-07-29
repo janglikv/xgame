@@ -511,6 +511,29 @@ export class Spider extends Container implements WorldActor {
     this.addChildAt(sprite, 0);
   }
 
+  /** 预加载变体贴图（吃草等），走同一描边缓存，不替换当前 sprite */
+  protected async preloadSpriteTexture(textureUrl: string): Promise<void> {
+    await loadMonsterTexture(textureUrl, this.appearance.footAnchorY);
+  }
+
+  /**
+   * 热切换贴图（吃草姿态等）。
+   * 与 load 相同描边/锚点规则；调用方需保证 sprite 已 load。
+   */
+  protected async setSpriteTexture(textureUrl: string): Promise<void> {
+    const sprite = this.sprite;
+    if (!sprite || sprite.destroyed) return;
+    const loaded = await loadMonsterTexture(
+      textureUrl,
+      this.appearance.footAnchorY,
+    );
+    if (!this.sprite || this.sprite.destroyed) return;
+    this.footAnchorY = loaded.footAnchorY;
+    this.sprite.texture = loaded.texture;
+    this.sprite.anchor.set(0.5, loaded.footAnchorY);
+    this.applyFacingToSprite();
+  }
+
   /**
    * 写到世界坐标层（父级 worldRoot 负责镜头）。
    * zIndex = 脚底 worldY，参与纵深排序。
