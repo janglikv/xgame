@@ -104,9 +104,15 @@ export class LevelScene extends Container implements GameScene {
   /** 树在角色身前（worldY 偏大） */
   private readonly treeFrontLayer: Container;
   private readonly nightOverlay: NightOverlay;
-  /** 树林黄泥土重绘防抖 */
+  /**
+   * 树林黄泥土重绘防抖。
+   * drawForestSoilTerrain 随树数变重，树生长/播种会频繁触发；
+   * 泥土只是装饰，可大幅降频（秒级合并所有变更）。
+   */
   private landRedrawCooldown = 0;
   private landRedrawPending = false;
+  /** 两次泥土重绘最小间隔（秒） */
+  private static readonly LAND_SOIL_REDRAW_INTERVAL_SEC = 12;
 
   private readonly roster = new CharacterRoster();
   private readonly healthBar: HealthBar;
@@ -561,18 +567,22 @@ export class LevelScene extends Container implements GameScene {
     this.sortLayer.sortChildren();
   }
 
-  /** 树林泥土重绘防抖（避免树生长时每帧重绘整层） */
+  /** 标记泥土待刷新（合并多次树变更，不立刻画） */
   private scheduleLandRedraw(): void {
     this.landRedrawPending = true;
   }
 
+  /**
+   * 低频落盘泥土重绘：间隔内多次 schedule 只画一次。
+   * 首次进入冷却为 0 时会较快响应一次，之后按 INTERVAL 拉长。
+   */
   private flushLandRedraw(dt: number): void {
     if (this.landRedrawCooldown > 0) {
       this.landRedrawCooldown = Math.max(0, this.landRedrawCooldown - dt);
     }
     if (!this.landRedrawPending || this.landRedrawCooldown > 0) return;
     this.landRedrawPending = false;
-    this.landRedrawCooldown = 1.2;
+    this.landRedrawCooldown = LevelScene.LAND_SOIL_REDRAW_INTERVAL_SEC;
     this.worldMap.redrawForestSoil();
   }
 
