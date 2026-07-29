@@ -52,6 +52,7 @@ export type GodModeDeps = {
   syncWorldActors: () => void;
   sortDepth: () => void;
   persistMapDraft: () => void;
+  afterWorldChange?: () => void;
 };
 
 /**
@@ -172,6 +173,7 @@ export class GodModeController {
     this.deps.harvest.mountTree(t);
     this.deps.syncWorldActors();
     this.deps.sortDepth();
+    this.deps.afterWorldChange?.();
     this.deps.persistMapDraft();
   }
 
@@ -282,6 +284,7 @@ export class GodModeController {
         );
       }
       harvest.removeTreeEntity(bestTree);
+      this.deps.afterWorldChange?.();
       this.deps.persistMapDraft();
       return;
     }

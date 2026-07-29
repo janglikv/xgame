@@ -193,6 +193,7 @@ export class LevelScene extends Container implements GameScene {
       afterWorldChange: () => {
         this.syncWorldActors();
         this.sortDepth();
+        this.worldMap.redrawLand();
       },
       onSpawnNaturalAnimal: (kind, x, y) => {
         if (kind === 'wolf') {

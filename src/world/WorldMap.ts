@@ -8,6 +8,7 @@ import {
   isOcean,
   landRectOf,
   syncRuntimeTreesFromDef,
+  treeSizeOf,
 } from '../data/maps/walkMask';
 import type { Vec2 } from '../utils/math';
 import { fbm2D, makeSeamlessNoiseTexture } from '../utils/noiseTexture';
@@ -189,6 +190,7 @@ export class WorldMap extends Container {
   private readonly def: LevelMapDef;
   private built = false;
   private ocean: OceanLayer | null = null;
+  private landGfx: Graphics | null = null;
 
   constructor(
     def?: LevelMapDef,
@@ -213,6 +215,13 @@ export class WorldMap extends Container {
     syncRuntimeTreesFromDef(this.def);
     this.build();
     this.built = true;
+  }
+
+  /** 重绘陆地（树林生长 / 砍伐 / 生态变迁时改变黄泥土地貌） */
+  redrawLand(): void {
+    if (!this.landGfx || this.landGfx.destroyed) return;
+    this.landGfx.clear();
+    this.drawLand(this.landGfx);
   }
 
   /** 海面动画（波纹滚动 / 泡沫呼吸） */
@@ -280,6 +289,7 @@ export class WorldMap extends Container {
 
     const land = new Graphics();
     land.label = 'Land';
+    this.landGfx = land;
 
     // 建立无缝程序化噪点图层 Overlay
     const noiseTex = makeSeamlessNoiseTexture({
@@ -422,6 +432,177 @@ export class WorldMap extends Container {
         g.circle(gx, gy, size).fill({ color: gColor, alpha: gAlpha });
       }
     }
+
+    // 6) 树林集群专属硬泥土地貌 Overlay（覆盖在所有草地色块之上，3棵及以上抱团才触发）
+    this.drawForestSoilTerrain(g);
+  }
+
+  /**
+   * 绘制树林真实黄泥土地貌（Forest Soil Terrain）
+   * 集群判定与二阶贝塞尔平滑起伏机制：
+   * 1. 只有当树木数量与密度达到一定规模（周边 145px 内至少有 3 棵树抱团聚集成林）时，才触发扩展硬泥土；
+   * 2. 边缘平滑弧线：采用二次贝塞尔曲线 (Midpoint Spline Smoothing) 消除折线与尖角，呈现极其自然平滑的异形林地。
+   */
+  private drawForestSoilTerrain(g: Graphics): void {
+    const rawTrees = (this.def.trees ?? []).filter((t) => t);
+    if (rawTrees.length === 0) return;
+
+    const CLUSTER_SEARCH_R2 = 145 * 145; // 搜索半径 145px
+    const HARD_SOIL_THRESHOLD = 3; // 至少 3 棵树聚丛形成硬泥土
+
+    // 筛选出属于森林集群节点（周边 145px 内同伴树木 >= 3 棵）的树木
+    const clusterTrees = rawTrees.filter((t1) => {
+      let count = 0;
+      for (const t2 of rawTrees) {
+        const dx = t2.x - t1.x;
+        const dy = t2.y - t1.y;
+        if (dx * dx + dy * dy <= CLUSTER_SEARCH_R2) {
+          count += 1;
+          if (count >= HARD_SOIL_THRESHOLD) return true;
+        }
+      }
+      return false;
+    });
+
+    // 数量稀疏（仅 1~2 棵树），不足以形成树林硬泥土，保持纯绿草地
+    if (clusterTrees.length === 0) return;
+
+    // 1) 边缘羽化柔和过渡带（最外圈浅暖黄渐隐软边界）
+    for (let idx = 0; idx < clusterTrees.length; idx++) {
+      const t = clusterTrees[idx]!;
+      const size = treeSizeOf(t);
+      const rx = size === 'large' ? 180 : size === 'medium' ? 120 : 68;
+      const ry = size === 'large' ? 108 : size === 'medium' ? 70 : 40;
+
+      this.drawSmoothOrganicPath(
+        g,
+        t.x,
+        t.y + ry * 0.12,
+        rx,
+        ry,
+        0x0500 + idx * 29,
+        16,
+      );
+      g.fill({ color: 0xd6ae74, alpha: 0.35 });
+    }
+
+    // 2) 主亮黄泥土过渡带（清新浅黄泥土色）
+    for (let idx = 0; idx < clusterTrees.length; idx++) {
+      const t = clusterTrees[idx]!;
+      const size = treeSizeOf(t);
+      const rx = size === 'large' ? 160 : size === 'medium' ? 105 : 58;
+      const ry = size === 'large' ? 94 : size === 'medium' ? 60 : 34;
+
+      this.drawSmoothOrganicPath(
+        g,
+        t.x,
+        t.y + ry * 0.12,
+        rx,
+        ry,
+        0x1000 + idx * 37,
+        14,
+      );
+      g.fill({ color: 0xc29958, alpha: 0.65 });
+    }
+
+    // 3) 核心柔和暖木黄泥土块（温润浅棕黄泥土区）
+    for (let idx = 0; idx < clusterTrees.length; idx++) {
+      const t = clusterTrees[idx]!;
+      const size = treeSizeOf(t);
+      const rx = size === 'large' ? 122 : size === 'medium' ? 78 : 40;
+      const ry = size === 'large' ? 70 : size === 'medium' ? 44 : 22;
+
+      this.drawSmoothOrganicPath(
+        g,
+        t.x,
+        t.y + ry * 0.12,
+        rx,
+        ry,
+        0x5000 + idx * 43,
+        12,
+      );
+      g.fill({ color: 0xa67c42, alpha: 0.78 });
+    }
+
+    // 4) 林下明亮颗粒与细碎点缀
+    const rng = createRng(this.seed ^ 0x7777);
+    for (const t of clusterTrees) {
+      const size = treeSizeOf(t);
+      const count = size === 'large' ? 12 : size === 'medium' ? 7 : 4;
+      const spread = size === 'large' ? 120 : size === 'medium' ? 75 : 40;
+
+      for (let i = 0; i < count; i++) {
+        const ang = rng() * Math.PI * 2;
+        const dist = (0.15 + rng() * 0.85) * spread;
+        const px = t.x + Math.cos(ang) * dist;
+        const py = t.y + Math.sin(ang) * dist * 0.58;
+        const prx = 2.5 + rng() * 5.0;
+        const pry = 1.5 + rng() * 3.2;
+
+        this.drawSmoothOrganicPath(
+          g,
+          px,
+          py,
+          prx,
+          pry,
+          (i * 19 + Math.floor(px)) ^ 0xabc,
+          7,
+        );
+        const pColor = rng() < 0.65 ? 0xe8c78c : 0x8c6636;
+        g.fill({ color: pColor, alpha: 0.7 });
+      }
+    }
+  }
+
+  /**
+   * 在 Graphics 上使用二次贝塞尔中点平滑算法 (Quadratic Midpoint Spline) 绘制平滑自然弧线构成的有机起伏路径
+   */
+  private drawSmoothOrganicPath(
+    g: Graphics,
+    cx: number,
+    cy: number,
+    rx: number,
+    ry: number,
+    seedOffset: number,
+    points = 14,
+  ): void {
+    const rawPoints: Array<{ x: number; y: number }> = [];
+    const rng = createRng(this.seed ^ seedOffset);
+    const angleStep = (Math.PI * 2) / points;
+
+    for (let i = 0; i < points; i++) {
+      const baseAngle = i * angleStep;
+      const angle = baseAngle + (rng() - 0.5) * 0.28;
+      // 0.72 ~ 1.28x 柔和自然的半径起伏
+      const radNoise = 0.72 + rng() * 0.56;
+      const curRx = rx * radNoise;
+      const curRy = ry * radNoise;
+      rawPoints.push({
+        x: cx + Math.cos(angle) * curRx,
+        y: cy + Math.sin(angle) * curRy,
+      });
+    }
+
+    if (rawPoints.length < 3) return;
+
+    g.beginPath();
+    const len = rawPoints.length;
+    // 取最后一对顶点的中点作为平滑曲线起点
+    const p0 = rawPoints[len - 1]!;
+    const p1 = rawPoints[0]!;
+    const midX = (p0.x + p1.x) / 2;
+    const midY = (p0.y + p1.y) / 2;
+    g.moveTo(midX, midY);
+
+    for (let i = 0; i < len; i++) {
+      const pCurrent = rawPoints[i]!;
+      const pNext = rawPoints[(i + 1) % len]!;
+      const nextMidX = (pCurrent.x + pNext.x) / 2;
+      const nextMidY = (pCurrent.y + pNext.y) / 2;
+      // 使用当前顶点作为控制点，二次贝塞尔平滑圆润地连接到下一个中点
+      g.quadraticCurveTo(pCurrent.x, pCurrent.y, nextMidX, nextMidY);
+    }
+    g.closePath();
   }
 
   private drawLandDecor(g: Graphics): void {

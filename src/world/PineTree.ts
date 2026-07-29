@@ -41,6 +41,7 @@ export function drawPineLocal(
   const outline = Math.max(1.8, 1.15 * scale);
   const strokeBlack = { width: outline, color: 0x000000, alpha: 1 };
 
+  // 1. 脚底椭圆阴影
   g.ellipse(x, y + 2, 11 * scale, 3.6 * scale).fill({
     color: 0x000000,
     alpha: 0.16,
