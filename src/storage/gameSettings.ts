@@ -12,8 +12,8 @@ export interface GameSettingsSnapshot {
    */
   brightnessUi: number;
   /**
-   * true = 锁定视角（镜头跟随英雄 + 右键点地移动）；
-   * false = 自由视角（WASD / 拖拽）。
+   * true = 锁定视角（镜头跟随英雄 + 右键点地 / WASD 移动）；
+   * false = 自由视角（WASD 移镜头 / 拖拽）。
    */
   cameraLocked: boolean;
   /** 英雄无敌 */

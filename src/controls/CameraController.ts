@@ -24,7 +24,7 @@ export type CameraViewMode = 'free' | 'locked';
 /**
  * 相机控制：
  * - 自由视角：WASD 水平移动 + Space/Shift 升降 + 按住左键拖拽转向
- * - 锁定视角：进入时快照「相对英雄的位移 + 当前朝向」，之后随英雄平移保持该关系
+ * - 锁定视角：镜头跟随英雄；WASD 供外部驱动英雄移动（相对镜头水平方向）
  * 自由模式默认将位姿缓存到 localStorage。
  */
 export class CameraController {
@@ -339,9 +339,54 @@ export class CameraController {
   }
 
   /**
+   * 根据当前 WASD 与相机水平朝向，写出单位方向（世界 XZ，Y=0）。
+   * 无按键 / 未启用 / 无焦点时返回零向量。
+   * 锁定视角下由主循环用此方向驱动英雄；自由视角由 update 驱动镜头。
+   */
+  getWasdWishXZ(out: THREE.Vector3): THREE.Vector3 {
+    out.set(0, 0, 0);
+    if (!this.enabled) return out;
+    if (!document.hasFocus() || document.hidden) return out;
+
+    this.fillHorizontalBasis();
+
+    if (this.keys.has('KeyW')) out.add(this.forward);
+    if (this.keys.has('KeyS')) out.sub(this.forward);
+    if (this.keys.has('KeyD')) out.add(this.right);
+    if (this.keys.has('KeyA')) out.sub(this.right);
+
+    if (out.lengthSq() > 1e-10) out.normalize();
+    return out;
+  }
+
+  /**
+   * 填充 this.forward / this.right（水平、单位）。
+   * 锁定视角用相机世界朝向；自由视角用 yaw。
+   */
+  private fillHorizontalBasis(): void {
+    if (this.viewMode === 'locked') {
+      this.camera.getWorldDirection(this.forward);
+      this.forward.y = 0;
+      if (this.forward.lengthSq() < 1e-10) {
+        // 镜头近乎竖直时，用 follow 四元数的 -Z 兜底
+        this.forward.set(0, 0, -1).applyQuaternion(this.camera.quaternion);
+        this.forward.y = 0;
+      }
+      if (this.forward.lengthSq() < 1e-10) {
+        this.forward.set(0, 0, -1);
+      } else {
+        this.forward.normalize();
+      }
+    } else {
+      this.forward.set(-Math.sin(this.yaw), 0, -Math.cos(this.yaw)).normalize();
+    }
+    this.right.crossVectors(this.forward, this.worldUp).normalize();
+  }
+
+  /**
    * 每帧调用：
-   * - 锁定：镜头跟随目标
-   * - 自由：按键移动（朝向由鼠标控制）
+   * - 锁定：镜头跟随目标（英雄 WASD 在外部处理）
+   * - 自由：按键移动镜头（朝向由鼠标控制）
    */
   update(delta: number): void {
     if (this.viewMode === 'locked') {
@@ -363,9 +408,7 @@ export class CameraController {
     }
 
     this.wishDir.set(0, 0, 0);
-
-    this.forward.set(-Math.sin(this.yaw), 0, -Math.cos(this.yaw)).normalize();
-    this.right.crossVectors(this.forward, this.worldUp).normalize();
+    this.fillHorizontalBasis();
 
     if (this.keys.has('KeyW')) this.wishDir.add(this.forward);
     if (this.keys.has('KeyS')) this.wishDir.sub(this.forward);

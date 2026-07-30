@@ -151,6 +151,18 @@ export class MainScene extends THREE.Scene {
     this.missFortune.moveTo(clampedX, clampedZ);
   }
 
+  /**
+   * 英雄 WASD 连续移动（世界 XZ 方向向量，未归一化亦可）。
+   * 零向量 = 松开；有输入时取消普攻与点地目标。
+   */
+  commandHeroMoveInput(dirX: number, dirZ: number): void {
+    if (!this.missFortune.isAlive) {
+      this.missFortune.setMoveInput(0, 0);
+      return;
+    }
+    this.missFortune.setMoveInput(dirX, dirZ);
+  }
+
   /** 英雄普攻：锁定敌方单位（射程内开火，外追击） */
   commandHeroAttack(target: CombatUnit): void {
     if (!this.missFortune.isAlive) return;

@@ -13,8 +13,8 @@ export interface EscMenuOptions {
   /** 全局亮度 0~1（1=最亮） */
   onBrightnessChange: (value: number) => void;
   /**
-   * 视角模式：true = 锁定（跟随英雄 + 右键点地移动）；
-   * false = 自由（WASD / 左键拖拽）。
+   * 视角模式：true = 锁定（跟随英雄 + 右键点地 / WASD 移动）；
+   * false = 自由（WASD 移镜头 / 左键拖拽）。
    */
   onCameraLockChange: (locked: boolean) => void;
   /** 英雄无敌开关回调 */
@@ -617,8 +617,8 @@ export class EscMenu {
       this.region('cameraLock'),
       '锁定视角',
       this.cameraLocked
-        ? '保持当前相对位置与朝向跟随 · 右键点地'
-        : '关闭后为自由视角（WASD / 拖拽）',
+        ? '跟随英雄 · 右键点地 / WASD 移动'
+        : '关闭后为自由视角（WASD 移镜头 / 拖拽）',
       this.cameraLocked,
       this.hoverId === 'cameraLock',
       this.pressId === 'cameraLock',

@@ -3,12 +3,11 @@ import type { ProjectileManager } from '../../effects/ProjectileManager';
 import { CircleBody } from '../collision/CircleBody';
 import type { CombatUnit, TeamId } from '../combat/CombatUnit';
 import { distXZ, isValidTarget } from '../combat/combatMath';
-import { HealthBar } from '../ui/HealthBar';
 
 /**
  * 第一个英雄：厄运小姐。
  * 独立模型（起步形态参考小兵五球+巫师帽，但与小兵代码完全分离，后续可自由改型）。
- * 锁定视角：右键点地移动；右键敌方单位普通攻击（双枪交替、弹从枪口出）。
+ * 锁定视角：右键点地 / WASD 移动；右键敌方单位普通攻击（双枪交替、弹从枪口出）。
  */
 export class MissFortune extends THREE.Group implements CombatUnit {
   static readonly DISPLAY_NAME = '厄运小姐';
@@ -131,7 +130,6 @@ export class MissFortune extends THREE.Group implements CombatUnit {
   /** 左/右枪口锚点（世界坐标发弹） */
   private readonly leftMuzzle: THREE.Object3D;
   private readonly rightMuzzle: THREE.Object3D;
-  private readonly healthBar: HealthBar;
 
   private readonly baseLeftHand = new THREE.Vector3(0.48, 0.62, 0.28);
   private readonly baseRightHand = new THREE.Vector3(-0.48, 0.62, 0.28);
@@ -141,6 +139,13 @@ export class MissFortune extends THREE.Group implements CombatUnit {
   /** 点地移动目标（XZ）；null 表示无目标（仍可能在减速滑步） */
   private moveTargetX: number | null = null;
   private moveTargetZ: number | null = null;
+  /**
+   * WASD 连续移动：激活时按单位方向全速走，优先于点地目标。
+   * 松开后清除，速度自然刹停。
+   */
+  private moveInputActive = false;
+  private moveInputX = 0;
+  private moveInputZ = 0;
   /** 当前水平速度（世界 XZ） */
   private velX = 0;
   private velZ = 0;
@@ -335,16 +340,6 @@ export class MissFortune extends THREE.Group implements CombatUnit {
     this.rightFoot.castShadow = true;
     this.add(this.rightFoot);
 
-    // 头顶血条（改由 HeroHealthBarHUD 屏幕 2D 层精确渲染，隐藏 3D 场景杂合血条）
-    const s = MissFortune.SCALE;
-    this.healthBar = new HealthBar({
-      width: 0.55 / s,
-      height: 0.045 / s,
-      yOffset: 1.45,
-      team: this.team,
-    });
-    this.healthBar.visible = false;
-
     this.applyLocomotionPose(0);
   }
 
@@ -365,7 +360,6 @@ export class MissFortune extends THREE.Group implements CombatUnit {
   takeDamage(amount: number): void {
     if (this.invincible || !this.isAlive || amount <= 0) return;
     this.hp = Math.max(0, this.hp - amount);
-    this.healthBar.setHp(this.hp, this.maxHp);
     if (!this.isAlive) {
       this.clearAttackTarget();
       this.stopMoving();
@@ -376,7 +370,6 @@ export class MissFortune extends THREE.Group implements CombatUnit {
 
   respawn(): void {
     this.hp = MissFortune.MAX_HP;
-    this.healthBar.setHp(this.hp, this.maxHp);
     this.position.set(this.spawnX, 0, this.spawnZ);
     this.clearAttackTarget();
     this.stopMoving();
@@ -485,15 +478,43 @@ export class MissFortune extends THREE.Group implements CombatUnit {
     return { x, z };
   }
 
-  /** 是否在移动（有目标或仍在减速） */
+  /** 是否在移动（有目标 / WASD 输入或仍在减速） */
   get isMoving(): boolean {
+    if (this.moveInputActive) return true;
     if (this.moveTargetX != null && this.moveTargetZ != null) return true;
     return this.speed() > MissFortune.STOP_SPEED;
   }
 
-  /** 右键点地：设置地面目标（世界 XZ）；取消普攻锁定 */
+  /**
+   * WASD 连续移动（世界 XZ 方向，长度任意，内部归一化）。
+   * 有输入时取消普攻与点地目标；零向量表示松开。
+   */
+  setMoveInput(dirX: number, dirZ: number): void {
+    if (!this.isAlive) {
+      this.clearMoveInput();
+      return;
+    }
+    if (!Number.isFinite(dirX) || !Number.isFinite(dirZ)) {
+      this.clearMoveInput();
+      return;
+    }
+    const len = Math.hypot(dirX, dirZ);
+    if (len < 1e-6) {
+      this.clearMoveInput();
+      return;
+    }
+    this.clearAttackTarget();
+    this.moveTargetX = null;
+    this.moveTargetZ = null;
+    this.moveInputActive = true;
+    this.moveInputX = dirX / len;
+    this.moveInputZ = dirZ / len;
+  }
+
+  /** 右键点地：设置地面目标（世界 XZ）；取消普攻锁定与 WASD 输入 */
   moveTo(x: number, z: number): void {
     if (!Number.isFinite(x) || !Number.isFinite(z)) return;
+    this.clearMoveInput();
     this.clearAttackTarget();
     this.moveTargetX = x;
     this.moveTargetZ = z;
@@ -505,14 +526,23 @@ export class MissFortune extends THREE.Group implements CombatUnit {
    */
   private chaseTo(x: number, z: number): void {
     if (!Number.isFinite(x) || !Number.isFinite(z)) return;
+    // 追击时若玩家正按 WASD，不覆盖（由 setMoveInput 优先）
+    if (this.moveInputActive) return;
     this.moveTargetX = x;
     this.moveTargetZ = z;
   }
 
-  /** 取消点地目标（速度会自然刹停，不清零） */
+  /** 取消点地目标与 WASD 输入（速度会自然刹停，不清零） */
   stopMoving(): void {
+    this.clearMoveInput();
     this.moveTargetX = null;
     this.moveTargetZ = null;
+  }
+
+  private clearMoveInput(): void {
+    this.moveInputActive = false;
+    this.moveInputX = 0;
+    this.moveInputZ = 0;
   }
 
   private speed(): number {
@@ -640,7 +670,13 @@ export class MissFortune extends THREE.Group implements CombatUnit {
     let moveFaceX: number | null = null;
     let moveFaceZ: number | null = null;
 
-    if (this.moveTargetX != null && this.moveTargetZ != null) {
+    if (this.moveInputActive) {
+      // WASD：相对镜头的连续方向，满速
+      moveFaceX = this.moveInputX;
+      moveFaceZ = this.moveInputZ;
+      desiredVelX = this.moveInputX * MissFortune.MOVE_SPEED;
+      desiredVelZ = this.moveInputZ * MissFortune.MOVE_SPEED;
+    } else if (this.moveTargetX != null && this.moveTargetZ != null) {
       const dx = this.moveTargetX - this.position.x;
       const dz = this.moveTargetZ - this.position.z;
       const dist = Math.hypot(dx, dz);
@@ -698,10 +734,14 @@ export class MissFortune extends THREE.Group implements CombatUnit {
       this.velZ += dvz * s;
     }
 
-    // 积分位移，避免单帧冲过目标
+    // 积分位移，避免单帧冲过点地目标
     let moveX = this.velX * delta;
     let moveZ = this.velZ * delta;
-    if (this.moveTargetX != null && this.moveTargetZ != null) {
+    if (
+      !this.moveInputActive &&
+      this.moveTargetX != null &&
+      this.moveTargetZ != null
+    ) {
       const dx = this.moveTargetX - this.position.x;
       const dz = this.moveTargetZ - this.position.z;
       const dist = Math.hypot(dx, dz);
@@ -733,6 +773,7 @@ export class MissFortune extends THREE.Group implements CombatUnit {
     this.applyFacing(delta);
 
     if (
+      !this.moveInputActive &&
       this.moveTargetX == null &&
       this.moveTargetZ == null &&
       spd <= MissFortune.STOP_SPEED

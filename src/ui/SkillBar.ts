@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 
-export type SkillSlotId = 'Q' | 'W' | 'E' | 'R';
+export type SkillSlotId = 'Q' | 'E' | 'R' | 'F';
 
 export interface SkillBarOptions {
   /**
@@ -25,13 +25,13 @@ interface SlotState {
   label: string;
 }
 
-const SLOTS: SkillSlotId[] = ['Q', 'W', 'E', 'R'];
+const SLOTS: SkillSlotId[] = ['Q', 'E', 'R', 'F'];
 
 const KEY_TO_SLOT: Record<string, SkillSlotId> = {
   KeyQ: 'Q',
-  KeyW: 'W',
   KeyE: 'E',
   KeyR: 'R',
+  KeyF: 'F',
 };
 
 const DEFAULT_SLOT: SlotState = {
@@ -43,18 +43,19 @@ const DEFAULT_SLOT: SlotState = {
 };
 
 /**
- * 底部技能栏：Q / W / E / R。
+ * 左下角技能栏：Q / E / R / F，下方为英雄血条。
  * 与主场景同 canvas 叠加渲染（正交 HUD + Canvas 纹理）。
  */
 export class SkillBar {
   private static readonly CANVAS_W = 560;
-  private static readonly CANVAS_H = 120;
+  private static readonly CANVAS_H = 168;
   /** 面板在 UI 空间中的宽度（屏幕高度为 2 时） */
   private static readonly PANEL_W = 0.92;
   private static readonly PANEL_ASPECT =
     SkillBar.CANVAS_W / SkillBar.CANVAS_H;
-  /** 相对屏幕底部的上移量（UI 空间，高度 2） */
-  private static readonly BOTTOM_OFFSET = 0.14;
+  /** 相对屏幕底部 / 左侧的边距（UI 空间，高度 2） */
+  private static readonly BOTTOM_OFFSET = 0.06;
+  private static readonly LEFT_OFFSET = 0.06;
 
   private readonly uiScene = new THREE.Scene();
   private readonly uiCamera: THREE.OrthographicCamera;
@@ -75,17 +76,20 @@ export class SkillBar {
   private readonly pressed = new Set<SkillSlotId>();
   private readonly slots: Record<SkillSlotId, SlotState> = {
     Q: { ...DEFAULT_SLOT },
-    W: { ...DEFAULT_SLOT },
     E: {
       ...DEFAULT_SLOT,
       ready: true,
       label: '弹雨',
     },
     R: { ...DEFAULT_SLOT },
+    F: { ...DEFAULT_SLOT },
   };
   private dirty = true;
   private viewW = 1;
   private viewH = 1;
+
+  private hp = 0;
+  private maxHp = 1;
 
   constructor(options: SkillBarOptions = {}) {
     this.onSkillPress = options.onSkillPress;
@@ -121,10 +125,8 @@ export class SkillBar {
     this.panelMesh.name = 'SkillBar';
     this.panelMesh.frustumCulled = false;
     this.panelMesh.renderOrder = 2;
-    // 贴在屏幕底部中央
-    this.panelMesh.position.set(0, -1 + SkillBar.BOTTOM_OFFSET + panelH / 2, 0);
-
     this.uiScene.add(this.panelMesh);
+    this.layoutPanel();
     this.redraw();
 
     this.onKeyDown = (e: KeyboardEvent) => {
@@ -192,6 +194,21 @@ export class SkillBar {
     if (changed) this.dirty = true;
   }
 
+  /** 更新英雄生命值（显示在技能栏下方） */
+  setHp(current: number, max: number): void {
+    const nextHp = Math.max(0, current);
+    const nextMax = Math.max(max, 1e-6);
+    if (
+      Math.abs(this.hp - nextHp) < 1e-3 &&
+      Math.abs(this.maxHp - nextMax) < 1e-3
+    ) {
+      return;
+    }
+    this.hp = nextHp;
+    this.maxHp = nextMax;
+    this.dirty = true;
+  }
+
   setSize(width: number, height: number): void {
     this.viewW = Math.max(width, 1);
     this.viewH = Math.max(height, 1);
@@ -201,6 +218,17 @@ export class SkillBar {
     this.uiCamera.top = 1;
     this.uiCamera.bottom = -1;
     this.uiCamera.updateProjectionMatrix();
+    this.layoutPanel();
+  }
+
+  /** 将面板锚在屏幕左下角（随宽高比更新） */
+  private layoutPanel(): void {
+    const aspect = this.viewW / this.viewH;
+    const panelW = SkillBar.PANEL_W;
+    const panelH = panelW / SkillBar.PANEL_ASPECT;
+    const x = -aspect + SkillBar.LEFT_OFFSET + panelW / 2;
+    const y = -1 + SkillBar.BOTTOM_OFFSET + panelH / 2;
+    this.panelMesh.position.set(x, y, 0);
   }
 
   /** 主场景 / 亮度层之后调用：不清色，只清深度后叠 HUD */
@@ -246,15 +274,95 @@ export class SkillBar {
     const slotSize = 78;
     const totalSlotsW = SLOTS.length * slotSize + (SLOTS.length - 1) * gap;
     let x = (W - totalSlotsW) / 2;
-    const y = (H - slotSize) / 2 + 2;
+    // 技能槽靠上，下方留给血条
+    const y = 18;
 
     for (const slot of SLOTS) {
       this.drawSlot(x, y, slotSize, slot);
       x += slotSize + gap;
     }
 
+    this.drawHeroHpBar(W, H);
+
     this.texture.needsUpdate = true;
     this.dirty = false;
+  }
+
+  /** 技能栏下方的英雄血条 + 数值 */
+  private drawHeroHpBar(W: number, H: number): void {
+    const { ctx } = this;
+    const barW = 360;
+    const barH = 18;
+    const barX = (W - barW) / 2;
+    const barY = H - 38;
+    const ratio = THREE.MathUtils.clamp(this.hp / this.maxHp, 0, 1);
+
+    // 外框
+    this.roundRect(barX, barY, barW, barH, 6);
+    ctx.fillStyle = 'rgba(8, 12, 20, 0.92)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(148, 163, 184, 0.4)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    const inset = 2;
+    const innerW = barW - inset * 2;
+    const innerH = barH - inset * 2;
+    const fillW = Math.max(0, Math.round(innerW * ratio));
+
+    if (fillW > 0) {
+      this.roundRect(barX + inset, barY + inset, fillW, innerH, 4);
+      const grad = ctx.createLinearGradient(
+        barX,
+        barY,
+        barX,
+        barY + barH,
+      );
+      if (ratio > 0.3) {
+        grad.addColorStop(0, '#60a5fa');
+        grad.addColorStop(1, '#2563eb');
+      } else {
+        grad.addColorStop(0, '#f87171');
+        grad.addColorStop(1, '#dc2626');
+      }
+      ctx.fillStyle = grad;
+      ctx.fill();
+
+      // 顶光
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.22)';
+      ctx.fillRect(
+        barX + inset,
+        barY + inset,
+        fillW,
+        Math.max(1, innerH * 0.35),
+      );
+    }
+
+    // 每 100 HP 分格
+    const stepHp = 100;
+    const totalSteps = Math.floor(this.maxHp / stepHp);
+    if (totalSteps > 1 && totalSteps < 30) {
+      ctx.strokeStyle = 'rgba(15, 23, 42, 0.45)';
+      ctx.lineWidth = 1;
+      for (let i = 1; i < totalSteps; i += 1) {
+        const dx = barX + inset + (innerW * (i * stepHp)) / this.maxHp;
+        ctx.beginPath();
+        ctx.moveTo(dx, barY + inset);
+        ctx.lineTo(dx, barY + inset + innerH);
+        ctx.stroke();
+      }
+    }
+
+    // 数值
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = '700 12px system-ui, -apple-system, "Segoe UI", sans-serif';
+    ctx.fillStyle = '#f1f5f9';
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.75)';
+    ctx.shadowBlur = 3;
+    const hpText = `${Math.ceil(this.hp)} / ${Math.ceil(this.maxHp)}`;
+    ctx.fillText(hpText, W / 2, barY + barH / 2 + 0.5);
+    ctx.shadowBlur = 0;
   }
 
   private drawSlot(x: number, y: number, size: number, slot: SkillSlotId): void {

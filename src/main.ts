@@ -7,7 +7,6 @@ import {
   type GameSettingsSnapshot,
 } from './storage/gameSettings';
 import { EscMenu } from './ui/EscMenu';
-import { HeroHealthBarHUD } from './ui/HeroHealthBarHUD';
 import { ScreenBrightness } from './ui/ScreenBrightness';
 import { SkillBar } from './ui/SkillBar';
 
@@ -137,11 +136,7 @@ function bootstrap(): void {
   });
   escMenu.setSize(width, height);
 
-  // 屏幕空间 2D 英雄血条 HUD (MOBA 风格，绝对悬浮于头顶 24px，不遮挡身躯与帽子)
-  const heroHealthBar = new HeroHealthBarHUD(host);
-  heroHealthBar.setSize(width, height);
-
-  // 底部技能栏 QWER（E = 枪林弹雨）
+  // 底部技能栏 QERF（E = 枪林弹雨）
   const skillBar = new SkillBar({
     isInputBlocked: () => escMenu.isOpen,
     onSkillPress: (slot) => {
@@ -153,12 +148,13 @@ function bootstrap(): void {
   });
   skillBar.setSize(width, height);
 
-  // 锁定视角：右键点敌 → 普攻；右键点地 → 移动
+  // 锁定视角：右键点敌 → 普攻；右键点地 / WASD → 移动
   // 技能选点：左键确认，右键取消
   const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
   const raycaster = new THREE.Raycaster();
   const pointerNdc = new THREE.Vector2();
   const hitPoint = new THREE.Vector3();
+  const wasdWish = new THREE.Vector3();
 
   const pickGround = (clientX: number, clientY: number): boolean => {
     const rect = renderer.domElement.getBoundingClientRect();
@@ -227,7 +223,6 @@ function bootstrap(): void {
     screenBrightness.setSize(w, h);
     escMenu.setSize(w, h);
     skillBar.setSize(w, h);
-    heroHealthBar.setSize(w, h);
   };
 
   window.addEventListener('resize', onResize);
@@ -239,22 +234,30 @@ function bootstrap(): void {
     // 钳制单帧游戏时间，避免切 tab 后大 delta 在一帧内跑完转身（视觉突变）
     const delta = Math.min(clock.getDelta(), 1 / 20);
 
+    // 锁定视角：WASD 相对镜头水平方向驱动英雄（自由视角 WASD 仍只移镜头）
+    if (controls.isLocked) {
+      controls.getWasdWishXZ(wasdWish);
+      scene.commandHeroMoveInput(wasdWish.x, wasdWish.z);
+    } else {
+      scene.commandHeroMoveInput(0, 0);
+    }
+
     // 先推进场景（英雄位移），再跟随镜头
     scene.update(delta);
     controls.update(delta);
 
-    // 技能栏：E 冷却 / 选点高亮
+    // 技能栏：E 冷却 / 选点高亮 / 英雄血量
     skillBar.setCooldown(
       'E',
       scene.hero.eCooldownRemaining,
       scene.hero.eCooldownTotal,
     );
     skillBar.setTargeting(scene.skillTargetingSlot);
+    skillBar.setHp(scene.hero.hp, scene.hero.maxHp);
 
     renderer.render(scene, camera);
     // 压暗世界画面，设置面板保持清晰可读
     screenBrightness.render(renderer);
-    heroHealthBar.update(camera, scene.hero, delta);
     skillBar.render(renderer);
     escMenu.render(renderer);
   };
