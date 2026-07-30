@@ -44,10 +44,10 @@ export function createProceduralDirtMaps(
   const normal = normalCtx.createImageData(resolution, resolution);
   const rough = roughCtx.createImageData(resolution, resolution);
 
-  // 泥土调色：亮褐 / 中褐 / 深褐
-  const cLight = { r: 118, g: 84, b: 52 };
-  const cMid = { r: 86, g: 58, b: 36 };
-  const cDark = { r: 52, g: 34, b: 22 };
+  // 纯灰色调：中等沉稳灰
+  const cLight = { r: 128, g: 128, b: 128 };
+  const cMid = { r: 100, g: 100, b: 100 };
+  const cDark = { r: 75, g: 75, b: 75 };
 
   const strength = 2.8; // 法线强度
 
@@ -82,9 +82,9 @@ export function createProceduralDirtMaps(
       }
 
       // 少量浅色砂砾点
-      r = clamp8(r + gravel * 90);
-      g = clamp8(g + gravel * 70);
-      b = clamp8(b + gravel * 40);
+      r = clamp8(r + gravel * 60);
+      g = clamp8(g + gravel * 60);
+      b = clamp8(b + gravel * 60);
 
       const pi = i * 4;
       albedo.data[pi] = r;
@@ -163,11 +163,11 @@ export function createProceduralDirtMaterial(
   const material = new THREE.MeshStandardMaterial({
     map: maps.map,
     normalMap: maps.normalMap,
-    normalScale: new THREE.Vector2(1.1, 1.1),
+    normalScale: new THREE.Vector2(0.5, 0.5),
     roughnessMap: maps.roughnessMap,
-    roughness: 1,
+    roughness: 0.9,
     metalness: 0,
-    color: 0xffffff,
+    color: 0x888888,
   });
 
   return { material, maps };

@@ -35,7 +35,7 @@ function bootstrap(): void {
   const scene = new MainScene();
 
   const controls = new CameraController(camera, renderer.domElement, {
-    moveSpeed: 3.6,
+    moveSpeed: 1.8,
     lookSpeed: 0.002,
   });
 

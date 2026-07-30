@@ -198,7 +198,7 @@ function createTickPoints(extent: number, step: number): THREE.Group {
   const group = new THREE.Group();
   group.name = 'TickPoints';
 
-  const sphereGeom = new THREE.SphereGeometry(0.035, 10, 10);
+  const sphereGeom = new THREE.SphereGeometry(0.00875, 10, 10);
   const materials = {
     x: new THREE.MeshBasicMaterial({ color: AXIS_X }),
     y: new THREE.MeshBasicMaterial({ color: AXIS_Y }),
