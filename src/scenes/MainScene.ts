@@ -6,6 +6,7 @@ import { resolveCircleCollisions } from '../world/collision/resolveCircleCollisi
 import { createSceneLights } from '../world/createSceneLights';
 import { DefenseTower } from '../world/DefenseTower';
 import { DirtFloor } from '../world/DirtFloor';
+import { MissFortune } from '../world/champions/MissFortune';
 import { MinionWaveSpawner } from '../world/MinionWaveSpawner';
 import { NexusCrystal } from '../world/NexusCrystal';
 import { SpatialAxesGrid } from '../world/SpatialAxesGrid';
@@ -34,6 +35,8 @@ export class MainScene extends THREE.Scene {
   private readonly defenseTowers: DefenseTower[];
   private readonly minionSpawner: MinionWaveSpawner;
   private readonly projectiles: ProjectileManager;
+  /** 第一个英雄：厄运小姐（独立模型，无小兵 AI） */
+  private readonly missFortune: MissFortune;
 
   private axesVisible = true;
   private colliderMarkersVisible = true;
@@ -93,6 +96,10 @@ export class MainScene extends THREE.Scene {
     // AI 发兵 + 锁定弹道
     this.minionSpawner = new MinionWaveSpawner(this);
     this.projectiles = new ProjectileManager(this);
+
+    // 第一个角色：厄运小姐 @ x=0（独立模型、粉帽、三倍体型，无 AI）
+    this.missFortune = new MissFortune(0, 0);
+    this.add(this.missFortune);
   }
 
   get showAxes(): boolean {
@@ -210,7 +217,7 @@ export class MainScene extends THREE.Scene {
     this.projectiles.update(delta);
     this.minionSpawner.pruneDead();
 
-    // 移动后再做地面圆碰撞（死兵已 prune；死塔/死水晶仍挡路）
+    // 移动后再做地面圆碰撞（死兵已 prune；死塔/死水晶仍挡路；英雄挡路）
     const bodies = this.collectColliderBodies();
     resolveCircleCollisions(bodies);
     // 兵线两侧夹紧：圆心+半径不得超出地板 Z 范围
@@ -230,6 +237,8 @@ export class MainScene extends THREE.Scene {
     for (const tower of this.defenseTowers) {
       tower.dispose();
     }
+    this.remove(this.missFortune);
+    this.missFortune.dispose();
     this.minionSpawner.dispose();
     this.projectiles.dispose();
   }
@@ -239,7 +248,7 @@ export class MainScene extends THREE.Scene {
       ...this.nexusCrystals.map((n) => n.collider),
       ...this.defenseTowers.map((t) => t.collider),
       ...this.minionSpawner.activeMinions.map((m) => m.collider),
+      this.missFortune.collider,
     ];
   }
 }
-
