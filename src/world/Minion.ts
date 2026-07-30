@@ -101,6 +101,7 @@ export class Minion extends THREE.Group implements CombatUnit {
   private readonly rightHand: THREE.Mesh;
   private readonly leftFoot: THREE.Mesh;
   private readonly rightFoot: THREE.Mesh;
+  private readonly staff: THREE.Group;
   /** 法杖顶端能量球，弹道从此处发出 */
   private readonly staffOrb: THREE.Object3D;
   private readonly healthBar: HealthBar;
@@ -270,6 +271,7 @@ export class Minion extends THREE.Group implements CombatUnit {
 
     // 魔法杖：握在中下段，杖身近直立、宝珠略朝前上
     const { group: staff, orb } = createMagicStaff();
+    this.staff = staff;
     staff.position.set(0, -0.06, 0);
     staff.rotation.order = 'YXZ';
     staff.rotation.set(
@@ -371,6 +373,20 @@ export class Minion extends THREE.Group implements CombatUnit {
 
     this.leftFoot.position.copy(this.baseLeftFoot);
     this.rightFoot.position.copy(this.baseRightFoot);
+
+    // 武器脱手掉地动效：从右手滑动脱落，横躺掉落在地表并带有小幅弹性跳跃
+    const bounce =
+      tFall > 0.6 ? Math.sin(((tFall - 0.6) / 0.4) * Math.PI) * 0.04 : 0;
+    this.staff.position.set(
+      0.15 * fallEase,
+      -0.06 - 0.22 * fallEase + bounce,
+      0.18 * fallEase,
+    );
+    this.staff.rotation.set(
+      0.45 * (1 - fallEase) + 1.35 * fallEase,
+      0.15 * (1 - fallEase) - 0.3 * fallEase,
+      0.35 * (1 - fallEase) + 0.95 * fallEase,
+    );
 
     // 2. 渐隐（0.8s ~ 1.6s）
     if (this.deathElapsed >= fadeStart) {
@@ -649,6 +665,8 @@ export class Minion extends THREE.Group implements CombatUnit {
     this.rightFoot.position.copy(this.baseRightFoot);
     this.leftHand.position.copy(this.baseLeftHand);
     this.rightHand.position.copy(this.baseRightHand);
+    this.staff.position.set(0, -0.06, 0);
+    this.staff.rotation.set(0.45, 0.15, 0.35);
   }
 
   private animateWalk(_delta: number): void {
