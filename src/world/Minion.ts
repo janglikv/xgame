@@ -350,30 +350,33 @@ export class Minion extends THREE.Group implements CombatUnit {
     const tFall = Math.min(1, this.deathElapsed / fallTime);
     const fallEase = 1 - Math.pow(1 - tFall, 2.5);
 
-    this.bodyRoot.rotation.x = -Math.PI * 0.48 * fallEase;
-    this.bodyRoot.position.y = -0.36 * fallEase;
-    this.bodyRoot.position.z = -0.32 * fallEase;
+    const angle = Math.PI * 0.48 * fallEase;
+    this.bodyRoot.rotation.x = -angle;
+
+    // 几何补偿：随着倾倒角度增加，正确抬升 bodyRoot Y 轴，确保身体球底部精准贴于地面 y = 0 以上
+    this.bodyRoot.position.y = 0.38 * (1 - Math.cos(angle));
+    this.bodyRoot.position.z = -0.15 * fallEase;
 
     this.leftHand.position.set(
-      this.baseLeftHand.x + 0.08 * fallEase,
-      this.baseLeftHand.y * (1 - fallEase) + 0.05 * fallEase,
-      this.baseLeftHand.z - 0.18 * fallEase,
+      this.baseLeftHand.x + 0.1 * fallEase,
+      this.baseLeftHand.y * (1 - fallEase) + 0.06 * fallEase,
+      this.baseLeftHand.z - 0.12 * fallEase,
     );
     this.rightHand.position.set(
-      this.baseRightHand.x - 0.08 * fallEase,
-      this.baseRightHand.y * (1 - fallEase) + 0.05 * fallEase,
-      this.baseRightHand.z - 0.18 * fallEase,
+      this.baseRightHand.x - 0.1 * fallEase,
+      this.baseRightHand.y * (1 - fallEase) + 0.06 * fallEase,
+      this.baseRightHand.z - 0.12 * fallEase,
     );
 
     this.leftFoot.position.set(
       this.baseLeftFoot.x,
-      this.baseLeftFoot.y * (1 - fallEase),
-      this.baseLeftFoot.z - 0.1 * fallEase,
+      this.baseLeftFoot.y * (1 - fallEase) + 0.05 * fallEase,
+      this.baseLeftFoot.z - 0.08 * fallEase,
     );
     this.rightFoot.position.set(
       this.baseRightFoot.x,
-      this.baseRightFoot.y * (1 - fallEase),
-      this.baseRightFoot.z - 0.1 * fallEase,
+      this.baseRightFoot.y * (1 - fallEase) + 0.05 * fallEase,
+      this.baseRightFoot.z - 0.08 * fallEase,
     );
 
     // 2. 渐隐（0.8s ~ 1.6s）
