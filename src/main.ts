@@ -110,7 +110,7 @@ function bootstrap(): void {
 
   const onPointerDownCommand = (e: PointerEvent): void => {
     if (e.button !== 2) return;
-    if (escMenu.isOpen || !controls.isLocked) return;
+    if (escMenu.isOpen) return;
     e.preventDefault();
 
     const rect = renderer.domElement.getBoundingClientRect();
