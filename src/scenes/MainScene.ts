@@ -13,6 +13,9 @@ import { SpatialAxesGrid } from '../world/SpatialAxesGrid';
  * 主场景：灯光 + 地板 + 坐标辅助 + 防御塔 + AI 发兵 + 弹道战斗 + 地面圆碰撞。
  */
 export class MainScene extends THREE.Scene {
+  /** 时间快进固定步长（秒），保证战斗/发兵逻辑稳定 */
+  private static readonly SKIP_STEP = 1 / 30;
+
   private readonly floor: DirtFloor;
   private readonly axesGrid: SpatialAxesGrid;
   private readonly defenseTowers: DefenseTower[];
@@ -21,6 +24,11 @@ export class MainScene extends THREE.Scene {
 
   private axesVisible = true;
   private colliderMarkersVisible = true;
+
+  /** 待快进的游戏时间（秒） */
+  private skipGameLeft = 0;
+  /** 对应消耗的真实时间（秒） */
+  private skipRealLeft = 0;
 
   constructor() {
     super();
@@ -74,8 +82,71 @@ export class MainScene extends THREE.Scene {
     }
   }
 
-  /** 每帧更新 */
-  update(delta: number): void {
+  /**
+   * 在真实时间 realSeconds 内平滑推进 gameSeconds 游戏时间（可叠加）。
+   * 例：快进 1 分钟 → skipTime(60, 1)；快进 3 分钟 → skipTime(180, 3)。
+   */
+  skipTime(gameSeconds: number, realSeconds: number): void {
+    if (!(gameSeconds > 0) || !(realSeconds > 0)) return;
+    if (!Number.isFinite(gameSeconds) || !Number.isFinite(realSeconds)) return;
+    this.skipGameLeft += gameSeconds;
+    this.skipRealLeft += realSeconds;
+  }
+
+  get isSkipping(): boolean {
+    return this.skipRealLeft > 0 && this.skipGameLeft > 0;
+  }
+
+  /**
+   * 每帧更新。
+   * @param realDelta 真实流逝时间（秒）；内部若处于快进会按倍率推进游戏时间
+   */
+  update(realDelta: number): void {
+    if (!(realDelta > 0) || !Number.isFinite(realDelta)) return;
+
+    let realLeft = realDelta;
+
+    // 快进：把真实帧时间按倍率换成游戏时间，分摊在 realSeconds 内完成
+    if (this.skipRealLeft > 0 && this.skipGameLeft > 0) {
+      const realStep = Math.min(realLeft, this.skipRealLeft);
+      const rate = this.skipGameLeft / this.skipRealLeft;
+      const gameStep = realStep * rate;
+      this.simulate(gameStep);
+      this.skipGameLeft = Math.max(0, this.skipGameLeft - gameStep);
+      this.skipRealLeft = Math.max(0, this.skipRealLeft - realStep);
+      if (this.skipRealLeft <= 1e-8 || this.skipGameLeft <= 1e-8) {
+        if (this.skipGameLeft > 1e-6) this.simulate(this.skipGameLeft);
+        this.skipGameLeft = 0;
+        this.skipRealLeft = 0;
+      }
+      realLeft -= realStep;
+    }
+
+    // 快进结束后（或本帧未快进）按正常 1x 推进
+    if (realLeft > 1e-8) {
+      this.simulate(realLeft);
+    }
+  }
+
+  /** 以固定小步长推进游戏逻辑，避免单帧游戏 delta 过大 */
+  private simulate(gameDelta: number): void {
+    if (!(gameDelta > 0) || !Number.isFinite(gameDelta)) return;
+
+    const step = MainScene.SKIP_STEP;
+    let remaining = gameDelta;
+    // 单次 simulate 最多约 4s 游戏时间用小步；余量一次吃掉
+    const maxSubsteps = 120;
+    let n = 0;
+    while (remaining > step + 1e-8 && n < maxSubsteps) {
+      this.tick(step);
+      remaining -= step;
+      n += 1;
+    }
+    if (remaining > 1e-8) this.tick(remaining);
+  }
+
+  /** 单步游戏逻辑（游戏时间 delta） */
+  private tick(delta: number): void {
     // 本帧开战前的存活单位（塔 + 小兵），供双方索敌
     const combatUnits = [
       ...this.defenseTowers.filter((t) => t.isAlive),

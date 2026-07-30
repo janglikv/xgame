@@ -1,12 +1,12 @@
 import type { Object3D } from 'three';
 import type { ProjectileManager } from '../effects/ProjectileManager';
 import type { CombatUnit, TeamId } from './combat/CombatUnit';
-import { Minion } from './Minion';
+import { Minion, type MinionKind } from './Minion';
 
 export type MinionTeam = TeamId;
 
 /**
- * AI 发兵：双方从 x=±10 逐个出兵，每波 6 人，波次循环。
+ * AI 发兵：双方从 x=±10 逐个出兵，每波 6 人（前 3 近战 + 后 3 远程），波次循环。
  */
 export class MinionWaveSpawner {
   /** 蓝方出生点 X */
@@ -15,6 +15,8 @@ export class MinionWaveSpawner {
   static readonly RED_SPAWN_X = 10;
   /** 每波小兵数量（每方） */
   static readonly WAVE_SIZE = 6;
+  /** 每波末尾远程兵数量 */
+  static readonly RANGED_COUNT = 3;
   /** 同队相邻小兵出现间隔（秒） */
   static readonly SPAWN_INTERVAL = 0.75;
   /** 一波全部出完后，到下一波开始的间隔（秒） */
@@ -130,7 +132,12 @@ export class MinionWaveSpawner {
       team === 'blue'
         ? MinionWaveSpawner.BLUE_SPAWN_X
         : MinionWaveSpawner.RED_SPAWN_X;
-    const minion = new Minion(x, MinionWaveSpawner.SPAWN_Z, team);
+    // remaining 含本只：6/5/4 近战，3/2/1 远程
+    const remaining =
+      team === 'blue' ? this.blueRemaining : this.redRemaining;
+    const kind: MinionKind =
+      remaining <= MinionWaveSpawner.RANGED_COUNT ? 'ranged' : 'melee';
+    const minion = new Minion(x, MinionWaveSpawner.SPAWN_Z, team, kind);
     this.minions.push(minion);
     this.parent.add(minion);
   }

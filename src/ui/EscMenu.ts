@@ -5,13 +5,28 @@ export interface EscMenuOptions {
   onAxesChange: (visible: boolean) => void;
   /** 碰撞体积白圈开关回调 */
   onColliderMarkersChange: (visible: boolean) => void;
+  /**
+   * 时间快进：在真实时间 realSeconds 内推进 gameSeconds 游戏时间。
+   * 例：(60, 1) 一分钟 / 一秒；(180, 3) 三分钟 / 三秒。
+   */
+  onSkipTime: (gameSeconds: number, realSeconds: number) => void;
+  /** 全局亮度 0~1（1=最亮） */
+  onBrightnessChange: (value: number) => void;
   /** 面板开/关（用于暂停相机等） */
   onOpenChange?: (open: boolean) => void;
   initialAxesVisible?: boolean;
   initialColliderMarkersVisible?: boolean;
+  initialBrightness?: number;
 }
 
-type HitId = 'axes' | 'colliders' | 'close' | 'dim';
+type HitId =
+  | 'axes'
+  | 'colliders'
+  | 'brightness'
+  | 'skip1m'
+  | 'skip3m'
+  | 'close'
+  | 'dim';
 
 interface HitRegion {
   id: HitId;
@@ -28,11 +43,15 @@ interface HitRegion {
  */
 export class EscMenu {
   private static readonly CANVAS_W = 720;
-  private static readonly CANVAS_H = 820;
+  private static readonly CANVAS_H = 1120;
   /** 面板在 UI 空间中的高度（屏幕高度为 2 时） */
-  private static readonly PANEL_H = 1.05;
+  private static readonly PANEL_H = 1.28;
   private static readonly PANEL_ASPECT =
     EscMenu.CANVAS_W / EscMenu.CANVAS_H;
+
+  /** 亮度滑条有效轨道相对 region 的内边距 */
+  private static readonly SLIDER_PAD_X = 24;
+  private static readonly SLIDER_TRACK_H = 12;
 
   private readonly uiScene = new THREE.Scene();
   private readonly uiCamera: THREE.OrthographicCamera;
@@ -48,6 +67,11 @@ export class EscMenu {
 
   private readonly onAxesChange: (visible: boolean) => void;
   private readonly onColliderMarkersChange: (visible: boolean) => void;
+  private readonly onSkipTime: (
+    gameSeconds: number,
+    realSeconds: number,
+  ) => void;
+  private readonly onBrightnessChange: (value: number) => void;
   private readonly onOpenChange?: (open: boolean) => void;
 
   private readonly onKeyDown: (e: KeyboardEvent) => void;
@@ -61,8 +85,11 @@ export class EscMenu {
   private open = false;
   private axesOn: boolean;
   private collidersOn: boolean;
+  /** 全局亮度 0~1 */
+  private brightness: number;
   private hoverId: HitId | null = null;
   private pressId: HitId | null = null;
+  private draggingBrightness = false;
   private viewW = 1;
   private viewH = 1;
   private regions: HitRegion[] = [];
@@ -72,9 +99,16 @@ export class EscMenu {
     this.domElement = domElement;
     this.onAxesChange = options.onAxesChange;
     this.onColliderMarkersChange = options.onColliderMarkersChange;
+    this.onSkipTime = options.onSkipTime;
+    this.onBrightnessChange = options.onBrightnessChange;
     this.onOpenChange = options.onOpenChange;
     this.axesOn = options.initialAxesVisible ?? true;
     this.collidersOn = options.initialColliderMarkersVisible ?? true;
+    this.brightness = THREE.MathUtils.clamp(
+      options.initialBrightness ?? 1,
+      0,
+      1,
+    );
 
     this.uiCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
     this.uiCamera.position.z = 1;
@@ -143,16 +177,44 @@ export class EscMenu {
       const id = this.hitTest(e.clientX, e.clientY);
       this.pressId = id;
       this.setHover(id);
+      if (id === 'brightness') {
+        this.draggingBrightness = true;
+        try {
+          this.domElement.setPointerCapture(e.pointerId);
+        } catch {
+          // ignore capture failures (rare non-primary pointers)
+        }
+        this.applyBrightnessFromPointer(e.clientX, e.clientY);
+      }
     };
 
     this.onPointerMove = (e: PointerEvent) => {
       if (!this.open) return;
+      if (this.draggingBrightness) {
+        this.applyBrightnessFromPointer(e.clientX, e.clientY);
+        this.domElement.style.cursor = 'pointer';
+        return;
+      }
       this.setHover(this.hitTest(e.clientX, e.clientY));
       this.updateCursor();
     };
 
     this.onPointerUp = (e: PointerEvent) => {
       if (!this.open || e.button !== 0) return;
+      if (this.draggingBrightness) {
+        this.draggingBrightness = false;
+        this.pressId = null;
+        try {
+          if (this.domElement.hasPointerCapture(e.pointerId)) {
+            this.domElement.releasePointerCapture(e.pointerId);
+          }
+        } catch {
+          // ignore
+        }
+        this.setHover(this.hitTest(e.clientX, e.clientY));
+        this.updateCursor();
+        return;
+      }
       const id = this.hitTest(e.clientX, e.clientY);
       if (id && id === this.pressId) this.activate(id);
       this.pressId = null;
@@ -161,6 +223,7 @@ export class EscMenu {
     };
 
     this.onPointerLeave = () => {
+      this.draggingBrightness = false;
       this.pressId = null;
       this.setHover(null);
       if (this.open) this.domElement.style.cursor = 'default';
@@ -183,6 +246,7 @@ export class EscMenu {
     this.root.visible = open;
     this.hoverId = null;
     this.pressId = null;
+    this.draggingBrightness = false;
     this.dirty = true;
     if (!open) {
       // 交还给相机控制器自己的 cursor
@@ -245,6 +309,17 @@ export class EscMenu {
         this.dirty = true;
         this.onColliderMarkersChange(this.collidersOn);
         break;
+      case 'skip1m':
+        // 1 分钟游戏时间，1 秒真实时间完成
+        this.onSkipTime(60, 1);
+        break;
+      case 'skip3m':
+        // 3 分钟游戏时间，3 秒真实时间完成
+        this.onSkipTime(180, 3);
+        break;
+      case 'brightness':
+        // 拖动中处理，点击不切换
+        break;
       case 'close':
       case 'dim':
         this.setOpen(false);
@@ -263,8 +338,47 @@ export class EscMenu {
     const interactive =
       this.hoverId === 'axes' ||
       this.hoverId === 'colliders' ||
+      this.hoverId === 'brightness' ||
+      this.hoverId === 'skip1m' ||
+      this.hoverId === 'skip3m' ||
       this.hoverId === 'close';
     this.domElement.style.cursor = interactive ? 'pointer' : 'default';
+  }
+
+  private applyBrightnessFromPointer(clientX: number, clientY: number): void {
+    const canvasPos = this.clientToCanvas(clientX, clientY);
+    if (!canvasPos) return;
+    const region = this.region('brightness');
+    const trackX = region.x + EscMenu.SLIDER_PAD_X;
+    const trackW = region.w - EscMenu.SLIDER_PAD_X * 2;
+    if (trackW <= 0) return;
+    const t = THREE.MathUtils.clamp((canvasPos.x - trackX) / trackW, 0, 1);
+    if (Math.abs(t - this.brightness) < 1e-4) return;
+    this.brightness = t;
+    this.dirty = true;
+    this.onBrightnessChange(this.brightness);
+  }
+
+  /** 屏幕坐标 → 面板 canvas 像素；点不在面板上返回 null */
+  private clientToCanvas(
+    clientX: number,
+    clientY: number,
+  ): { x: number; y: number } | null {
+    const rect = this.domElement.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return null;
+
+    const x = ((clientX - rect.left) / rect.width) * 2 - 1;
+    const y = -(((clientY - rect.top) / rect.height) * 2 - 1);
+    this.pointerNdc.set(x, y);
+    this.raycaster.setFromCamera(this.pointerNdc, this.uiCamera);
+    const hits = this.raycaster.intersectObject(this.panelMesh, false);
+    if (hits.length === 0) return null;
+    const uv = hits[0].uv;
+    if (!uv) return null;
+    return {
+      x: uv.x * EscMenu.CANVAS_W,
+      y: (1 - uv.y) * EscMenu.CANVAS_H,
+    };
   }
 
   private hitTest(clientX: number, clientY: number): HitId | null {
@@ -302,28 +416,45 @@ export class EscMenu {
     return null;
   }
 
+  private region(id: HitId): HitRegion {
+    const found = this.regions.find((r) => r.id === id);
+    if (!found) throw new Error(`EscMenu region missing: ${id}`);
+    return found;
+  }
+
   private layoutRegions(): void {
     const W = EscMenu.CANVAS_W;
     const pad = 44;
-    const rowH = 108;
-    const rowGap = 16;
-    const listY = 188;
+    const rowH = 100;
+    const rowGap = 14;
+    const listY = 178;
     const rowW = W - pad * 2;
 
+    const brightH = 118;
+    const brightY = listY + (rowH + rowGap) * 2 + 8;
+
+    const skipY = brightY + brightH + 52;
+    const skipH = 72;
+    const skipGap = 14;
+    const skipBtnW = (rowW - skipGap) / 2;
+
     this.regions = [
-      {
-        id: 'axes',
-        x: pad,
-        y: listY,
-        w: rowW,
-        h: rowH,
-      },
+      { id: 'axes', x: pad, y: listY, w: rowW, h: rowH },
       {
         id: 'colliders',
         x: pad,
         y: listY + rowH + rowGap,
         w: rowW,
         h: rowH,
+      },
+      { id: 'brightness', x: pad, y: brightY, w: rowW, h: brightH },
+      { id: 'skip1m', x: pad, y: skipY, w: skipBtnW, h: skipH },
+      {
+        id: 'skip3m',
+        x: pad + skipBtnW + skipGap,
+        y: skipY,
+        w: skipBtnW,
+        h: skipH,
       },
       {
         id: 'close',
@@ -374,9 +505,9 @@ export class EscMenu {
     ctx.font = '400 22px system-ui, -apple-system, "Segoe UI", sans-serif';
     ctx.fillText('按 Esc 关闭', pad, 130);
 
-    // 选项行
+    // 显示开关
     this.drawToggleRow(
-      this.regions[0],
+      this.region('axes'),
       '坐标参考线',
       'XYZ 轴、网格与米数刻度',
       this.axesOn,
@@ -384,7 +515,7 @@ export class EscMenu {
       this.pressId === 'axes',
     );
     this.drawToggleRow(
-      this.regions[1],
+      this.region('colliders'),
       '碰撞体积白圈',
       '地面圆形碰撞范围提示',
       this.collidersOn,
@@ -392,11 +523,44 @@ export class EscMenu {
       this.pressId === 'colliders',
     );
 
+    // 全局亮度
+    this.drawBrightnessRow(
+      this.region('brightness'),
+      this.brightness,
+      this.hoverId === 'brightness' || this.draggingBrightness,
+      this.draggingBrightness,
+    );
+
+    // 时间快进
+    const skip1 = this.region('skip1m');
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '600 20px system-ui, -apple-system, "Segoe UI", sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillText('时间快进', pad, skip1.y - 18);
+
+    this.drawActionButton(
+      skip1,
+      '快进 1 分钟',
+      this.hoverId === 'skip1m',
+      this.pressId === 'skip1m',
+      'secondary',
+    );
+    this.drawActionButton(
+      this.region('skip3m'),
+      '快进 3 分钟',
+      this.hoverId === 'skip3m',
+      this.pressId === 'skip3m',
+      'secondary',
+    );
+
     // 继续游戏按钮
-    this.drawCloseButton(
-      this.regions[2],
+    this.drawActionButton(
+      this.region('close'),
+      '继续游戏',
       this.hoverId === 'close',
       this.pressId === 'close',
+      'primary',
     );
 
     this.texture.needsUpdate = true;
@@ -433,11 +597,11 @@ export class EscMenu {
     ctx.textBaseline = 'alphabetic';
     ctx.fillStyle = '#e8eef6';
     ctx.font = '600 28px system-ui, -apple-system, "Segoe UI", sans-serif';
-    ctx.fillText(title, x + 24, y + 44);
+    ctx.fillText(title, x + 24, y + 42);
 
     ctx.fillStyle = '#94a3b8';
     ctx.font = '400 20px system-ui, -apple-system, "Segoe UI", sans-serif';
-    ctx.fillText(desc, x + 24, y + 78);
+    ctx.fillText(desc, x + 24, y + 74);
 
     // 开关
     const sw = 78;
@@ -455,37 +619,125 @@ export class EscMenu {
     ctx.arc(kx + knob / 2, ky + knob / 2, knob / 2, 0, Math.PI * 2);
     ctx.fillStyle = '#e2e8f0';
     ctx.fill();
-    ctx.shadowColor = 'transparent';
   }
 
-  private drawCloseButton(
+  private drawBrightnessRow(
     region: HitRegion,
+    value: number,
+    hover: boolean,
+    active: boolean,
+  ): void {
+    const { ctx } = this;
+    const { x, y, w, h } = region;
+    const t = THREE.MathUtils.clamp(value, 0, 1);
+
+    this.roundRect(x, y, w, h, 16);
+    ctx.fillStyle =
+      hover || active ? 'rgba(28, 44, 66, 0.88)' : 'rgba(15, 23, 34, 0.72)';
+    ctx.fill();
+    ctx.strokeStyle =
+      hover || active
+        ? 'rgba(96, 165, 250, 0.45)'
+        : 'rgba(148, 163, 184, 0.14)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillStyle = '#e8eef6';
+    ctx.font = '600 28px system-ui, -apple-system, "Segoe UI", sans-serif';
+    ctx.fillText('全局亮度', x + 24, y + 38);
+
+    const pct = `${Math.round(t * 100)}%`;
+    ctx.textAlign = 'right';
+    ctx.fillStyle = '#93c5fd';
+    ctx.font = '600 24px system-ui, -apple-system, "Segoe UI", sans-serif';
+    ctx.fillText(pct, x + w - 24, y + 38);
+
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '400 18px system-ui, -apple-system, "Segoe UI", sans-serif';
+    ctx.fillText('拖动滑条调暗画面', x + 24, y + 64);
+
+    // 轨道
+    const trackX = x + EscMenu.SLIDER_PAD_X;
+    const trackW = w - EscMenu.SLIDER_PAD_X * 2;
+    const trackH = EscMenu.SLIDER_TRACK_H;
+    const trackY = y + h - 36;
+    this.roundRect(trackX, trackY, trackW, trackH, trackH / 2);
+    ctx.fillStyle = 'rgba(51, 65, 85, 0.95)';
+    ctx.fill();
+
+    // 已填充
+    const fillW = Math.max(trackH, trackW * t);
+    this.roundRect(trackX, trackY, fillW, trackH, trackH / 2);
+    const fillGrad = ctx.createLinearGradient(trackX, 0, trackX + trackW, 0);
+    fillGrad.addColorStop(0, '#1e3a5f');
+    fillGrad.addColorStop(1, '#60a5fa');
+    ctx.fillStyle = fillGrad;
+    ctx.fill();
+
+    // 滑块
+    const knobR = 14;
+    const knobX = trackX + trackW * t;
+    const knobY = trackY + trackH / 2;
+    ctx.beginPath();
+    ctx.arc(knobX, knobY, knobR, 0, Math.PI * 2);
+    ctx.fillStyle = '#e2e8f0';
+    ctx.fill();
+    ctx.strokeStyle = active ? '#93c5fd' : 'rgba(15, 23, 42, 0.45)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+
+  private drawActionButton(
+    region: HitRegion,
+    label: string,
     hover: boolean,
     pressed: boolean,
+    variant: 'primary' | 'secondary',
   ): void {
     const { ctx } = this;
     const { x, y, w, h } = region;
 
     this.roundRect(x, y, w, h, 14);
-    const grad = ctx.createLinearGradient(x, y, x, y + h);
-    if (pressed) {
-      grad.addColorStop(0, '#60a5fa');
-      grad.addColorStop(1, '#3b82f6');
-    } else if (hover) {
-      grad.addColorStop(0, '#bfdbfe');
-      grad.addColorStop(1, '#60a5fa');
+
+    if (variant === 'primary') {
+      const grad = ctx.createLinearGradient(x, y, x, y + h);
+      if (pressed) {
+        grad.addColorStop(0, '#60a5fa');
+        grad.addColorStop(1, '#3b82f6');
+      } else if (hover) {
+        grad.addColorStop(0, '#bfdbfe');
+        grad.addColorStop(1, '#60a5fa');
+      } else {
+        grad.addColorStop(0, '#93c5fd');
+        grad.addColorStop(1, '#60a5fa');
+      }
+      ctx.fillStyle = grad;
+      ctx.fill();
+      ctx.fillStyle = '#0b1220';
     } else {
-      grad.addColorStop(0, '#93c5fd');
-      grad.addColorStop(1, '#60a5fa');
+      if (pressed) {
+        ctx.fillStyle = 'rgba(37, 60, 92, 0.95)';
+      } else if (hover) {
+        ctx.fillStyle = 'rgba(32, 52, 80, 0.92)';
+      } else {
+        ctx.fillStyle = 'rgba(20, 32, 48, 0.88)';
+      }
+      ctx.fill();
+      ctx.strokeStyle = hover
+        ? 'rgba(96, 165, 250, 0.55)'
+        : 'rgba(148, 163, 184, 0.22)';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.fillStyle = '#e8eef6';
     }
-    ctx.fillStyle = grad;
-    ctx.fill();
 
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillStyle = '#0b1220';
-    ctx.font = '700 28px system-ui, -apple-system, "Segoe UI", sans-serif';
-    ctx.fillText('继续游戏', x + w / 2, y + h / 2 + 1);
+    ctx.font = '700 26px system-ui, -apple-system, "Segoe UI", sans-serif';
+    ctx.fillText(label, x + w / 2, y + h / 2 + 1);
   }
 
   private roundRect(

@@ -13,6 +13,7 @@ import { HealthBar } from './ui/HealthBar';
  * 防御塔（LoL 风格示意，非官方素材）。
  * 特征：厚重基座、分段石塔身、金属箍、顶部能量水晶。
  * 战斗：范围内锁定敌方单位，从水晶发射追踪弹。
+ * 摧毁后仅保留原有底座，隐藏底座以上结构与范围圈。
  */
 export class DefenseTower extends THREE.Group implements CombatUnit {
   /** 水平缩放 */
@@ -49,6 +50,8 @@ export class DefenseTower extends THREE.Group implements CombatUnit {
   private readonly crystal: THREE.Mesh;
   private readonly crystalLight: THREE.PointLight;
   private readonly crystalGroup: THREE.Group;
+  /** 底座以上结构（摧毁后隐藏） */
+  private readonly upperRoot: THREE.Group;
   private readonly healthBar: HealthBar;
   private readonly rangeMarker: THREE.Group;
   private elapsed = 0;
@@ -105,6 +108,11 @@ export class DefenseTower extends THREE.Group implements CombatUnit {
         metalness: 0.75,
       });
 
+    // 底座始终保留；upperRoot 为底座以上结构，摧毁后隐藏
+    this.upperRoot = new THREE.Group();
+    this.upperRoot.name = 'TowerUpper';
+    this.add(this.upperRoot);
+
     // —— 基座（多层台阶，LoL 塔底座很“沉”）——
     const baseBottom = mesh(
       new THREE.CylinderGeometry(0.55, 0.62, 0.12, 8),
@@ -132,17 +140,34 @@ export class DefenseTower extends THREE.Group implements CombatUnit {
       ring(0.4, 0.03, DefenseTower.METAL_DARK, 0.36, metal(DefenseTower.METAL_DARK)),
     );
 
+    // 底部一圈小符文石（装饰，属底座）
+    const runeMat = metal(DefenseTower.METAL);
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      const rune = new THREE.Mesh(
+        new THREE.BoxGeometry(0.08, 0.1, 0.05),
+        runeMat,
+      );
+      rune.position.set(Math.cos(a) * 0.48, 0.28, Math.sin(a) * 0.48);
+      rune.rotation.y = -a;
+      this.add(rune);
+    }
+
     // —— 下塔身（粗）——
     const lowerShaft = mesh(
       new THREE.CylinderGeometry(0.28, 0.36, 0.85, 8),
       stone(DefenseTower.STONE),
       0.36 + 0.425,
     );
-    this.add(lowerShaft);
+    this.upperRoot.add(lowerShaft);
 
     // 下段金属箍
-    this.add(ring(0.3, 0.025, DefenseTower.METAL, 0.55, metal(DefenseTower.METAL)));
-    this.add(ring(0.29, 0.022, DefenseTower.METAL, 1.05, metal(DefenseTower.METAL)));
+    this.upperRoot.add(
+      ring(0.3, 0.025, DefenseTower.METAL, 0.55, metal(DefenseTower.METAL)),
+    );
+    this.upperRoot.add(
+      ring(0.29, 0.022, DefenseTower.METAL, 1.05, metal(DefenseTower.METAL)),
+    );
 
     // —— 中段收腰 ——
     const midShaft = mesh(
@@ -150,7 +175,7 @@ export class DefenseTower extends THREE.Group implements CombatUnit {
       stone(DefenseTower.STONE_MID),
       1.21 + 0.275,
     );
-    this.add(midShaft);
+    this.upperRoot.add(midShaft);
 
     // 中段饰带
     const collar = mesh(
@@ -158,7 +183,7 @@ export class DefenseTower extends THREE.Group implements CombatUnit {
       metal(DefenseTower.METAL),
       1.55,
     );
-    this.add(collar);
+    this.upperRoot.add(collar);
 
     // —— 上塔身 ——
     const upperShaft = mesh(
@@ -166,7 +191,7 @@ export class DefenseTower extends THREE.Group implements CombatUnit {
       stone(DefenseTower.STONE),
       1.6 + 0.25,
     );
-    this.add(upperShaft);
+    this.upperRoot.add(upperShaft);
 
     // —— 顶部平台（托住水晶）——
     const crown = mesh(
@@ -174,8 +199,10 @@ export class DefenseTower extends THREE.Group implements CombatUnit {
       stone(DefenseTower.STONE_DARK),
       2.16,
     );
-    this.add(crown);
-    this.add(ring(0.33, 0.02, DefenseTower.METAL, 2.23, metal(DefenseTower.METAL)));
+    this.upperRoot.add(crown);
+    this.upperRoot.add(
+      ring(0.33, 0.02, DefenseTower.METAL, 2.23, metal(DefenseTower.METAL)),
+    );
 
     // 托架“爪”：四根斜撑，类似塔顶金属支架
     const clawMat = metal(DefenseTower.METAL_DARK);
@@ -186,7 +213,7 @@ export class DefenseTower extends THREE.Group implements CombatUnit {
       claw.position.set(Math.cos(a) * 0.22, 2.38, Math.sin(a) * 0.22);
       claw.lookAt(0, 2.7, 0);
       claw.castShadow = true;
-      this.add(claw);
+      this.upperRoot.add(claw);
     }
 
     // 短柱支撑水晶
@@ -195,12 +222,12 @@ export class DefenseTower extends THREE.Group implements CombatUnit {
       metal(DefenseTower.METAL),
       2.3,
     );
-    this.add(pedestal);
+    this.upperRoot.add(pedestal);
 
     // —— 能量水晶（LoL 塔核心识别点）——
     this.crystalGroup = new THREE.Group();
     this.crystalGroup.position.y = 2.55;
-    this.add(this.crystalGroup);
+    this.upperRoot.add(this.crystalGroup);
 
     const crystalMat = new THREE.MeshStandardMaterial({
       color: crystalColor,
@@ -235,19 +262,6 @@ export class DefenseTower extends THREE.Group implements CombatUnit {
     this.crystalLight = new THREE.PointLight(crystalColor, 1.1, 6, 2);
     this.crystalLight.position.set(0, 0, 0);
     this.crystalGroup.add(this.crystalLight);
-
-    // 底部一圈小符文石（装饰）
-    const runeMat = metal(DefenseTower.METAL);
-    for (let i = 0; i < 6; i++) {
-      const a = (i / 6) * Math.PI * 2;
-      const rune = new THREE.Mesh(
-        new THREE.BoxGeometry(0.08, 0.1, 0.05),
-        runeMat,
-      );
-      rune.position.set(Math.cos(a) * 0.48, 0.28, Math.sin(a) * 0.48);
-      rune.rotation.y = -a;
-      this.add(rune);
-    }
 
     // 塔顶血条：补偿父级非均匀 scale，约 0.55×0.05 世界单位
     this.healthBar = new HealthBar({
@@ -393,9 +407,11 @@ export class DefenseTower extends THREE.Group implements CombatUnit {
   }
 
   private onDestroyed(): void {
-    this.crystalGroup.visible = false;
+    // 只留原有底座：隐藏塔身及以上
+    this.upperRoot.visible = false;
     this.crystalLight.intensity = 0;
     this.rangeMarker.visible = false;
+    this.healthBar.visible = false;
     this.clearTarget();
   }
 

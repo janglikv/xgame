@@ -11,28 +11,69 @@ import { HealthBar } from './ui/HealthBar';
 
 type MinionAIState = 'move' | 'chase' | 'attack';
 
+/** 近战 / 远程小兵 */
+export type MinionKind = 'melee' | 'ranged';
+
+interface MinionStats {
+  /** 模型整体缩放 */
+  scale: number;
+  /** 地面圆碰撞半径（世界单位） */
+  colliderRadius: number;
+  maxHp: number;
+  attackDamage: number;
+  /** 圆心距：可出手 */
+  attackRange: number;
+  /** 无目标时索敌 */
+  aggroRange: number;
+  /** 已锁定后脱战 */
+  leashRange: number;
+  windup: number;
+  attackInterval: number;
+  moveSpeed: number;
+  /** 弹道视觉缩放 */
+  boltScale: number;
+}
+
+const MELEE_STATS: MinionStats = {
+  scale: 0.125,
+  colliderRadius: 0.12,
+  maxHp: 80,
+  attackDamage: 12,
+  attackRange: 0.55,
+  aggroRange: 1.4,
+  leashRange: 3.2,
+  windup: 0.28,
+  attackInterval: 1.15,
+  moveSpeed: 0.45,
+  boltScale: 1,
+};
+
+/** 远程：更小、更远、更高伤害 */
+const RANGED_STATS: MinionStats = {
+  scale: 0.085,
+  colliderRadius: 0.08,
+  maxHp: 80,
+  attackDamage: 22,
+  attackRange: 1.45,
+  aggroRange: 2.1,
+  leashRange: 3.8,
+  windup: 0.32,
+  attackInterval: 1.25,
+  moveSpeed: 0.45,
+  boltScale: 1.6,
+};
+
 /**
  * 极简五球小兵：身体 + 左手 + 右手 + 左脚 + 右脚。
  * AI：推进 Move / 追击 Chase / 站桩攻击 Attack（LoL 风格简化）。
+ * kind=melee 近战前排；kind=ranged 远程后排（体积小、射程远、伤害高）。
  */
 export class Minion extends THREE.Group implements CombatUnit {
-  private static readonly SCALE = 0.125;
-  /** 地面圆形碰撞半径（世界单位） */
-  static readonly COLLIDER_RADIUS = 0.12;
-  static readonly MAX_HP = 80;
   /** 目标标签：低于防御塔，小兵优先打塔 */
   static readonly COMBAT_PRIORITY = 0;
-  static readonly ATTACK_DAMAGE = 12;
-  /** 圆心距：可出手 */
-  static readonly ATTACK_RANGE = 0.55;
-  /** 无目标时索敌 */
-  static readonly AGGRO_RANGE = 1.4;
-  /** 已锁定后脱战 */
-  static readonly LEASH_RANGE = 3.2;
-  /** 攻击前摇（秒） */
-  static readonly WINDUP = 0.28;
-  /** 两次出手起始间隔（秒） */
-  static readonly ATTACK_INTERVAL = 1.15;
+  /** 近战默认碰撞半径（兼容外部引用） */
+  static readonly COLLIDER_RADIUS = MELEE_STATS.colliderRadius;
+  static readonly MAX_HP = MELEE_STATS.maxHp;
 
   private static readonly BODY = 0xf3eee6;
   private static readonly LIMB = 0xf3eee6;
@@ -51,8 +92,6 @@ export class Minion extends THREE.Group implements CombatUnit {
   private static readonly ARM_SWING = 0.08;
   /** 身体上下起伏 */
   private static readonly BODY_BOB = 0.025;
-  /** 沿面向方向推进速度（世界单位/秒） */
-  private static readonly MOVE_SPEED = 0.45;
 
   private readonly bodyRoot: THREE.Group;
   private readonly body: THREE.Mesh;
@@ -63,6 +102,7 @@ export class Minion extends THREE.Group implements CombatUnit {
   /** 法杖顶端能量球，弹道从此处发出 */
   private readonly staffOrb: THREE.Object3D;
   private readonly healthBar: HealthBar;
+  private readonly stats: MinionStats;
 
   private readonly baseLeftHand = new THREE.Vector3(0.47, 0.48, 0.1);
   private readonly baseRightHand = new THREE.Vector3(-0.52, 0.58, 0.2);
@@ -73,11 +113,12 @@ export class Minion extends THREE.Group implements CombatUnit {
   /** 相位偏移，避免阵列齐步完全同步 */
   private readonly phaseOffset: number;
 
+  readonly kind: MinionKind;
   readonly team: TeamId;
   readonly collider: CircleBody;
   readonly combatPriority = Minion.COMBAT_PRIORITY;
-  readonly maxHp = Minion.MAX_HP;
-  hp = Minion.MAX_HP;
+  readonly maxHp: number;
+  hp: number;
 
   private aiState: MinionAIState = 'move';
   private target: CombatUnit | null = null;
@@ -89,18 +130,28 @@ export class Minion extends THREE.Group implements CombatUnit {
 
   /**
    * @param team 蓝方蓝帽面朝 +X，红方红帽面朝 -X
+   * @param kind melee 近战 / ranged 远程
    */
-  constructor(x: number, z = 0, team: TeamId = x >= 0 ? 'red' : 'blue') {
+  constructor(
+    x: number,
+    z = 0,
+    team: TeamId = x >= 0 ? 'red' : 'blue',
+    kind: MinionKind = 'melee',
+  ) {
     super();
     this.team = team;
-    this.name = `Minion_${team}_${x}_${z}`;
+    this.kind = kind;
+    this.stats = kind === 'ranged' ? RANGED_STATS : MELEE_STATS;
+    this.maxHp = this.stats.maxHp;
+    this.hp = this.stats.maxHp;
+    this.name = `Minion_${kind}_${team}_${x}_${z}`;
     this.position.set(x, 0, z);
-    this.scale.setScalar(Minion.SCALE);
+    this.scale.setScalar(this.stats.scale);
     // 蓝方面朝 +X，红方面朝 -X（相向）
     this.rotation.y = team === 'red' ? -Math.PI / 2 : Math.PI / 2;
     this.phaseOffset = (x * 2.7 + z * 5.3 + Math.random()) * Math.PI;
     // scale 定好后再挂碰撞体，白圈半径才能正确补偿
-    this.collider = new CircleBody(this, Minion.COLLIDER_RADIUS);
+    this.collider = new CircleBody(this, this.stats.colliderRadius);
 
     const hatColor = team === 'red' ? Minion.HAT_RED : Minion.HAT_BLUE;
     const hatBandColor =
@@ -236,10 +287,11 @@ export class Minion extends THREE.Group implements CombatUnit {
     this.rightFoot.castShadow = true;
     this.add(this.rightFoot);
 
-    // 头顶血条：父级 scale=0.125，本地尺寸补偿到约 0.15×0.014 世界单位
+    // 头顶血条：按视觉缩放补偿，世界尺寸约 0.15×0.014
+    const s = this.stats.scale;
     this.healthBar = new HealthBar({
-      width: 0.15 / Minion.SCALE,
-      height: 0.014 / Minion.SCALE,
+      width: 0.15 / s,
+      height: 0.014 / s,
       yOffset: 1.55,
       team,
     });
@@ -286,7 +338,7 @@ export class Minion extends THREE.Group implements CombatUnit {
       this.clearCombat();
     } else {
       const leash = distXZ(this.collider, this.target.collider);
-      if (leash > Minion.LEASH_RANGE) {
+      if (leash > this.stats.leashRange) {
         this.clearCombat();
       }
     }
@@ -334,12 +386,12 @@ export class Minion extends THREE.Group implements CombatUnit {
     projectiles: ProjectileManager,
   ): void {
     // 索敌：aggro 内优先防御塔，再敌方小兵
-    const found = pickEnemyTarget(this, units, Minion.AGGRO_RANGE, {
+    const found = pickEnemyTarget(this, units, this.stats.aggroRange, {
       preferHigherPriority: true,
     });
     if (found) {
       const d = distXZ(this.collider, found.collider);
-      if (d <= Minion.ATTACK_RANGE) {
+      if (d <= this.stats.attackRange) {
         this.enterAttack(found);
         this.tickAttack(delta, units, projectiles);
         return;
@@ -359,7 +411,7 @@ export class Minion extends THREE.Group implements CombatUnit {
     projectiles: ProjectileManager,
   ): void {
     // 追击中也可切更高优先级近处目标（塔 > 小兵）
-    const better = pickEnemyTarget(this, units, Minion.AGGRO_RANGE, {
+    const better = pickEnemyTarget(this, units, this.stats.aggroRange, {
       preferHigherPriority: true,
     });
     if (better && better !== this.target) {
@@ -382,12 +434,12 @@ export class Minion extends THREE.Group implements CombatUnit {
     }
 
     const d = distXZ(this.collider, this.target.collider);
-    if (d > Minion.LEASH_RANGE) {
+    if (d > this.stats.leashRange) {
       this.clearCombat();
       this.tickMove(delta, units, projectiles);
       return;
     }
-    if (d <= Minion.ATTACK_RANGE) {
+    if (d <= this.stats.attackRange) {
       this.enterAttack(this.target);
       this.tickAttack(delta, units, projectiles);
       return;
@@ -410,13 +462,13 @@ export class Minion extends THREE.Group implements CombatUnit {
     }
 
     const d = distXZ(this.collider, this.target.collider);
-    if (d > Minion.LEASH_RANGE) {
+    if (d > this.stats.leashRange) {
       this.clearCombat();
       this.tickMove(delta, units, projectiles);
       return;
     }
     // 走出攻击距离：取消前摇，改追击（攻击态不位移）
-    if (d > Minion.ATTACK_RANGE) {
+    if (d > this.stats.attackRange) {
       this.windupElapsed = -1;
       this.enterChase(this.target);
       this.tickChase(delta, units, projectiles);
@@ -438,16 +490,19 @@ export class Minion extends THREE.Group implements CombatUnit {
     }
     this.windupElapsed += delta;
 
-    if (this.windupElapsed >= Minion.WINDUP) {
+    if (this.windupElapsed >= this.stats.windup) {
       // 前摇结束：发射锁定弹，伤害在命中时结算
       if (
         isValidTarget(this, this.target) &&
-        distXZ(this.collider, this.target.collider) <= Minion.ATTACK_RANGE
+        distXZ(this.collider, this.target.collider) <= this.stats.attackRange
       ) {
         this.fireBolt(projectiles, this.target);
       }
       this.windupElapsed = -1;
-      this.attackCd = Math.max(0, Minion.ATTACK_INTERVAL - Minion.WINDUP);
+      this.attackCd = Math.max(
+        0,
+        this.stats.attackInterval - this.stats.windup,
+      );
     }
   }
 
@@ -460,15 +515,16 @@ export class Minion extends THREE.Group implements CombatUnit {
     projectiles.fireAt(
       this.muzzleWorld,
       target,
-      Minion.ATTACK_DAMAGE,
+      this.stats.attackDamage,
       this.team,
+      this.stats.boltScale,
     );
   }
 
   /** 默认沿兵线推进（蓝 +X / 红 -X） */
   private advanceLane(delta: number): void {
     const dir = this.team === 'blue' ? 1 : -1;
-    this.position.x += dir * Minion.MOVE_SPEED * delta;
+    this.position.x += dir * this.stats.moveSpeed * delta;
     // 推线时恢复默认朝向（本地 +Z → 行军方向）
     this.rotation.y = dir > 0 ? Math.PI / 2 : -Math.PI / 2;
   }
@@ -490,7 +546,7 @@ export class Minion extends THREE.Group implements CombatUnit {
     const dz = target.collider.z - this.position.z;
     const len = Math.hypot(dx, dz);
     if (len < 1e-6) return;
-    const step = Minion.MOVE_SPEED * delta;
+    const step = this.stats.moveSpeed * delta;
     this.position.x += (dx / len) * step;
     this.position.z += (dz / len) * step;
   }

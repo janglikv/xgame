@@ -1,7 +1,13 @@
 import * as THREE from 'three';
 import { CameraController } from './controls/CameraController';
 import { MainScene } from './scenes/MainScene';
+import {
+  loadGameSettings,
+  saveGameSettings,
+  type GameSettingsSnapshot,
+} from './storage/gameSettings';
 import { EscMenu } from './ui/EscMenu';
+import { ScreenBrightness } from './ui/ScreenBrightness';
 
 function bootstrap(): void {
   const host = document.getElementById('app');
@@ -42,13 +48,46 @@ function bootstrap(): void {
     lookSpeed: 0.002,
   });
 
+  // 从本地恢复设置
+  const settings: GameSettingsSnapshot = loadGameSettings();
+  scene.setAxesVisible(settings.showAxes);
+  scene.setColliderMarkersVisible(settings.showColliderMarkers);
+
+  // 全局亮度压暗层（主场景后、设置面板前）
+  const screenBrightness = new ScreenBrightness();
+  screenBrightness.setSize(width, height);
+  applyBrightnessUi(screenBrightness, settings.brightnessUi);
+
+  const persistSettings = (patch: Partial<GameSettingsSnapshot>): void => {
+    if (patch.showAxes !== undefined) settings.showAxes = patch.showAxes;
+    if (patch.showColliderMarkers !== undefined) {
+      settings.showColliderMarkers = patch.showColliderMarkers;
+    }
+    if (patch.brightnessUi !== undefined) {
+      settings.brightnessUi = patch.brightnessUi;
+    }
+    saveGameSettings(settings);
+  };
+
   // ESC 设置面板：游戏内 HUD（正交场景 + Canvas 纹理）
   const escMenu = new EscMenu(renderer.domElement, {
-    initialAxesVisible: scene.showAxes,
-    initialColliderMarkersVisible: scene.showColliderMarkers,
-    onAxesChange: (visible) => scene.setAxesVisible(visible),
-    onColliderMarkersChange: (visible) =>
-      scene.setColliderMarkersVisible(visible),
+    initialAxesVisible: settings.showAxes,
+    initialColliderMarkersVisible: settings.showColliderMarkers,
+    initialBrightness: settings.brightnessUi,
+    onAxesChange: (visible) => {
+      scene.setAxesVisible(visible);
+      persistSettings({ showAxes: visible });
+    },
+    onColliderMarkersChange: (visible) => {
+      scene.setColliderMarkersVisible(visible);
+      persistSettings({ showColliderMarkers: visible });
+    },
+    onSkipTime: (gameSeconds, realSeconds) =>
+      scene.skipTime(gameSeconds, realSeconds),
+    onBrightnessChange: (ui01) => {
+      applyBrightnessUi(screenBrightness, ui01);
+      persistSettings({ brightnessUi: ui01 });
+    },
     onOpenChange: (open) => controls.setEnabled(!open),
   });
   escMenu.setSize(width, height);
@@ -59,6 +98,7 @@ function bootstrap(): void {
     camera.updateProjectionMatrix();
     renderer.setSize(w, h);
     scene.resize(w, h);
+    screenBrightness.setSize(w, h);
     escMenu.setSize(w, h);
   };
 
@@ -74,11 +114,22 @@ function bootstrap(): void {
     scene.update(delta);
 
     renderer.render(scene, camera);
-    // 主场景之后叠一层 UI，不清颜色缓冲
+    // 压暗世界画面，设置面板保持清晰可读
+    screenBrightness.render(renderer);
     escMenu.render(renderer);
   };
 
   tick();
+}
+
+/** 滑条 0~1 → 实际亮度区间 */
+function applyBrightnessUi(
+  screenBrightness: ScreenBrightness,
+  ui01: number,
+): void {
+  const { MIN, MAX } = ScreenBrightness;
+  const t = Number.isFinite(ui01) ? Math.min(1, Math.max(0, ui01)) : 1;
+  screenBrightness.setBrightness(MIN + t * (MAX - MIN));
 }
 
 try {
