@@ -3,18 +3,10 @@ import * as THREE from 'three';
 export interface WorldGridMaterialOptions {
   /** 底色 */
   color: number;
-  /** 1m 网格线颜色 */
+  /** 网格线颜色 */
   lineColor?: number;
-  /** 主网格线颜色（每 majorEvery 米） */
-  majorLineColor?: number;
-  /** 主网格间距（米） */
+  /** 网格间距（米），默认 0.25 */
   cellSize?: number;
-  /** 主线间隔（几个 cell 一条，默认 5） */
-  majorEvery?: number;
-  /** 细线半宽（世界米） */
-  lineWidth?: number;
-  /** 主线半宽（世界米） */
-  majorLineWidth?: number;
   roughness?: number;
   metalness?: number;
   envMapIntensity?: number;
@@ -26,17 +18,13 @@ export interface WorldGridMaterialOptions {
 
 /**
  * 世界空间米制网格材质（MeshStandardMaterial + 着色器注入）。
- * 按面法线选择可见轴向：地板画 XZ，立面画对应竖直/水平格，三块表面可对齐。
+ * 线宽约 1 屏幕像素；高密度/掠射角下自动降采样，减轻虚线/摩尔纹。
  */
 export function createWorldGridMaterial(
   options: WorldGridMaterialOptions,
 ): THREE.MeshStandardMaterial {
-  const cellSize = options.cellSize ?? 1;
-  const majorEvery = options.majorEvery ?? 5;
-  const lineWidth = options.lineWidth ?? 0.028;
-  const majorLineWidth = options.majorLineWidth ?? 0.045;
-  const lineColor = new THREE.Color(options.lineColor ?? 0x4b5568);
-  const majorLineColor = new THREE.Color(options.majorLineColor ?? 0x6b7a90);
+  const cellSize = options.cellSize ?? 0.25;
+  const lineColor = new THREE.Color(options.lineColor ?? 0x2a3038);
 
   const material = new THREE.MeshStandardMaterial({
     color: options.color,
@@ -51,11 +39,7 @@ export function createWorldGridMaterial(
 
   material.onBeforeCompile = (shader) => {
     shader.uniforms.uGridCell = { value: cellSize };
-    shader.uniforms.uGridMajorEvery = { value: majorEvery };
-    shader.uniforms.uGridLineWidth = { value: lineWidth };
-    shader.uniforms.uGridMajorWidth = { value: majorLineWidth };
     shader.uniforms.uGridLineColor = { value: lineColor };
-    shader.uniforms.uGridMajorColor = { value: majorLineColor };
 
     shader.vertexShader = shader.vertexShader
       .replace(
@@ -64,12 +48,6 @@ export function createWorldGridMaterial(
         #include <common>
         varying vec3 vWorldGridPos;
         varying vec3 vWorldGridNormal;
-        `,
-      )
-      .replace(
-        '#include <begin_vertex>',
-        /* glsl */ `
-        #include <begin_vertex>
         `,
       )
       .replace(
@@ -90,17 +68,27 @@ export function createWorldGridMaterial(
         varying vec3 vWorldGridPos;
         varying vec3 vWorldGridNormal;
         uniform float uGridCell;
-        uniform float uGridMajorEvery;
-        uniform float uGridLineWidth;
-        uniform float uGridMajorWidth;
         uniform vec3 uGridLineColor;
-        uniform vec3 uGridMajorColor;
 
-        // 单轴：靠近 cell 整数倍时为 1
-        float gridAxis( float coord, float cell, float halfWidth ) {
-          float m = abs( mod( coord + cell * 0.5, cell ) - cell * 0.5 );
-          float aa = fwidth( coord ) * 1.25;
-          return 1.0 - smoothstep( halfWidth, halfWidth + aa, m );
+        /**
+         * 单轴网格线：
+         * - fwidth 估 1px 线宽
+         * - fw 过大（一格占不到 1 像素）时淡出，避免掠射/远处出现虚线摩尔纹
+         * - 软边过滤，减轻三角面边界处 dFdx/dFdy 跳变造成的断线
+         */
+        float gridAxisPx( float coord, float cell ) {
+          float c = coord / cell;
+          float fw = max( fwidth( c ), 1e-6 );
+          // 一格在屏幕上 < ~1.2px 时逐渐不画该轴
+          float lod = 1.0 - smoothstep( 0.28, 0.72, fw );
+          if ( lod <= 0.001 ) return 0.0;
+
+          // 到最近格线的距离（周期单位，0=在线上，最大 0.5）
+          float dist = abs( fract( c - 0.5 ) - 0.5 );
+          // ~1px 半宽；略放宽外沿，减少 2x2 导数不连续造成的碎点
+          float halfW = 0.5 * fw;
+          float line = 1.0 - smoothstep( halfW * 0.25, halfW * 1.35, dist );
+          return line * lod;
         }
         `,
       )
@@ -112,33 +100,22 @@ export function createWorldGridMaterial(
         vec3 gp = vWorldGridPos;
         vec3 wn = abs( normalize( vWorldGridNormal ) );
 
-        // 细线（1m）
-        float gx = gridAxis( gp.x, uGridCell, uGridLineWidth );
-        float gy = gridAxis( gp.y, uGridCell, uGridLineWidth );
-        float gz = gridAxis( gp.z, uGridCell, uGridLineWidth );
-        // 立面不画沿法线方向的“整面填满”线
-        float wx = 1.0 - smoothstep( 0.55, 0.92, wn.x );
-        float wy = 1.0 - smoothstep( 0.55, 0.92, wn.y );
-        float wz = 1.0 - smoothstep( 0.55, 0.92, wn.z );
+        float gx = gridAxisPx( gp.x, uGridCell );
+        float gy = gridAxisPx( gp.y, uGridCell );
+        float gz = gridAxisPx( gp.z, uGridCell );
+
+        // 沿法线轴向的格线在该面上恒亮，需压掉；过渡放缓避免立面“跳断”
+        float wx = 1.0 - smoothstep( 0.45, 0.98, wn.x );
+        float wy = 1.0 - smoothstep( 0.45, 0.98, wn.y );
+        float wz = 1.0 - smoothstep( 0.45, 0.98, wn.z );
         float line = max( max( gx * wx, gy * wy ), gz * wz );
 
-        // 主线（每 majorEvery m）
-        float majorCell = uGridCell * uGridMajorEvery;
-        float mx = gridAxis( gp.x, majorCell, uGridMajorWidth );
-        float my = gridAxis( gp.y, majorCell, uGridMajorWidth );
-        float mz = gridAxis( gp.z, majorCell, uGridMajorWidth );
-        float major = max( max( mx * wx, my * wy ), mz * wz );
-
-        vec3 gridCol = mix( uGridLineColor, uGridMajorColor, clamp( major, 0.0, 1.0 ) );
-        float gridMix = max( line, major );
-        diffuseColor.rgb = mix( diffuseColor.rgb, gridCol, gridMix * 0.85 );
+        diffuseColor.rgb = mix( diffuseColor.rgb, uGridLineColor, line * 0.88 );
         `,
       );
   };
 
-  // 避免与其它 Standard 材质共用错误 program
-  material.customProgramCacheKey = () =>
-    `worldGrid_c${cellSize}_m${majorEvery}_lw${lineWidth}_mw${majorLineWidth}`;
+  material.customProgramCacheKey = () => `worldGrid1pxLod_c${cellSize}`;
 
   return material;
 }
