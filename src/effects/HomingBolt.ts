@@ -8,6 +8,10 @@ export interface HomingBoltSpawn {
   team: TeamId;
   /** 视觉与命中半径缩放，默认 1（小兵弹） */
   scale?: number;
+  /** 覆盖队伍默认弹体外壳色 */
+  color?: number;
+  /** 覆盖队伍默认自发光色 */
+  emissive?: number;
 }
 
 /**
@@ -42,8 +46,10 @@ export class HomingBolt extends THREE.Group {
     const scale = Math.max(0.1, spawn.scale ?? 1);
     this.hitRadius = HomingBolt.BODY_HIT_RADIUS * Math.min(scale, 2.5);
 
-    const color = spawn.team === 'blue' ? 0x93c5fd : 0xfca5a5;
-    const emissive = spawn.team === 'blue' ? 0x3b82f6 : 0xef4444;
+    const color =
+      spawn.color ?? (spawn.team === 'blue' ? 0x93c5fd : 0xfca5a5);
+    const emissive =
+      spawn.emissive ?? (spawn.team === 'blue' ? 0x3b82f6 : 0xef4444);
 
     this.core = new THREE.Mesh(
       new THREE.SphereGeometry((0.055 / 10) * scale, 12, 10),

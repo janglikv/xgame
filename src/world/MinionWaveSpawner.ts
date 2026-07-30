@@ -157,7 +157,7 @@ export class MinionWaveSpawner {
   private prune(): void {
     for (let i = this.minions.length - 1; i >= 0; i -= 1) {
       const minion = this.minions[i];
-      if (minion.isAlive && !minion.isOffField) continue;
+      if (!minion.isDeathComplete && !minion.isOffField) continue;
       this.parent.remove(minion);
       minion.dispose();
       this.minions.splice(i, 1);

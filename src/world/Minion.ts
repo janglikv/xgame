@@ -92,6 +92,8 @@ export class Minion extends THREE.Group implements CombatUnit {
   private static readonly ARM_SWING = 0.08;
   /** 身体上下起伏 */
   private static readonly BODY_BOB = 0.025;
+  /** 死亡动画总时长（秒）：包含倒下、停留与渐隐 */
+  private static readonly DEATH_DURATION = 1.6;
 
   private readonly bodyRoot: THREE.Group;
   private readonly body: THREE.Mesh;
@@ -112,6 +114,8 @@ export class Minion extends THREE.Group implements CombatUnit {
   private elapsed = 0;
   /** 相位偏移，避免阵列齐步完全同步 */
   private readonly phaseOffset: number;
+  private isDead = false;
+  private deathElapsed = 0;
 
   readonly kind: MinionKind;
   readonly team: TeamId;
@@ -300,15 +304,94 @@ export class Minion extends THREE.Group implements CombatUnit {
   }
 
   get isAlive(): boolean {
-    return this.hp > 0;
+    return this.hp > 0 && !this.isDead;
+  }
+
+  get isDeathComplete(): boolean {
+    return this.isDead && this.deathElapsed >= Minion.DEATH_DURATION;
   }
 
   takeDamage(amount: number): void {
     if (!this.isAlive || amount <= 0) return;
     this.hp = Math.max(0, this.hp - amount);
     this.healthBar.setHp(this.hp, this.maxHp);
-    if (!this.isAlive) {
-      this.clearCombat();
+    if (this.hp <= 0) {
+      this.triggerDeath();
+    }
+  }
+
+  private triggerDeath(): void {
+    if (this.isDead) return;
+    this.isDead = true;
+    this.healthBar.visible = false;
+    this.clearCombat();
+
+    // 遍历所有组件材质，开启 transparent 允许透明度动画
+    this.traverse((obj) => {
+      const meshObj = obj as THREE.Mesh;
+      if (meshObj.isMesh && meshObj.material) {
+        const list = Array.isArray(meshObj.material)
+          ? meshObj.material
+          : [meshObj.material];
+        for (const mat of list) {
+          mat.transparent = true;
+        }
+      }
+    });
+  }
+
+  private updateDeath(delta: number): void {
+    this.deathElapsed += delta;
+    const duration = Minion.DEATH_DURATION;
+    const fallTime = 0.45;
+    const fadeStart = 0.8;
+
+    // 1. 倒下动作（0 ~ 0.45s，带有弹性的平滑倒地姿态）
+    const tFall = Math.min(1, this.deathElapsed / fallTime);
+    const fallEase = 1 - Math.pow(1 - tFall, 2.5);
+
+    this.bodyRoot.rotation.x = -Math.PI * 0.48 * fallEase;
+    this.bodyRoot.position.y = -0.36 * fallEase;
+    this.bodyRoot.position.z = -0.32 * fallEase;
+
+    this.leftHand.position.set(
+      this.baseLeftHand.x + 0.08 * fallEase,
+      this.baseLeftHand.y * (1 - fallEase) + 0.05 * fallEase,
+      this.baseLeftHand.z - 0.18 * fallEase,
+    );
+    this.rightHand.position.set(
+      this.baseRightHand.x - 0.08 * fallEase,
+      this.baseRightHand.y * (1 - fallEase) + 0.05 * fallEase,
+      this.baseRightHand.z - 0.18 * fallEase,
+    );
+
+    this.leftFoot.position.set(
+      this.baseLeftFoot.x,
+      this.baseLeftFoot.y * (1 - fallEase),
+      this.baseLeftFoot.z - 0.1 * fallEase,
+    );
+    this.rightFoot.position.set(
+      this.baseRightFoot.x,
+      this.baseRightFoot.y * (1 - fallEase),
+      this.baseRightFoot.z - 0.1 * fallEase,
+    );
+
+    // 2. 渐隐（0.8s ~ 1.6s）
+    if (this.deathElapsed >= fadeStart) {
+      const tFade = (this.deathElapsed - fadeStart) / (duration - fadeStart);
+      const opacity = THREE.MathUtils.clamp(1.0 - tFade, 0, 1);
+
+      this.traverse((obj) => {
+        const meshObj = obj as THREE.Mesh;
+        if (meshObj.isMesh && meshObj.material) {
+          const list = Array.isArray(meshObj.material)
+            ? meshObj.material
+            : [meshObj.material];
+          for (const mat of list) {
+            mat.opacity = opacity;
+          }
+        }
+      });
     }
   }
 
@@ -326,7 +409,15 @@ export class Minion extends THREE.Group implements CombatUnit {
     units: readonly CombatUnit[],
     projectiles: ProjectileManager,
   ): void {
-    if (!this.isAlive) return;
+    if (this.isDead) {
+      this.updateDeath(delta);
+      return;
+    }
+    if (this.hp <= 0) {
+      this.triggerDeath();
+      this.updateDeath(delta);
+      return;
+    }
 
     this.elapsed += delta;
     if (this.attackCd > 0) {

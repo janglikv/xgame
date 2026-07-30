@@ -3,6 +3,7 @@ import { ProjectileManager } from '../effects/ProjectileManager';
 import { CircleBody } from '../world/collision/CircleBody';
 import { clampBodiesToFloor } from '../world/collision/clampBodiesToFloor';
 import { resolveCircleCollisions } from '../world/collision/resolveCircleCollisions';
+import type { CombatUnit } from '../world/combat/CombatUnit';
 import { createSceneLights } from '../world/createSceneLights';
 import { DefenseTower } from '../world/DefenseTower';
 import { DirtFloor } from '../world/DirtFloor';
@@ -118,9 +119,11 @@ export class MainScene extends THREE.Scene {
   /**
    * 英雄点地移动：右键落点（世界 XZ）。
    * Z 限制在兵线走廊内（考虑碰撞半径）；X 放宽到含两端平台。
+   * 会取消当前普攻锁定。
    */
   commandHeroMoveTo(x: number, z: number): void {
     if (!Number.isFinite(x) || !Number.isFinite(z)) return;
+    if (!this.missFortune.isAlive) return;
     const r = this.missFortune.collider.radius;
     const halfZ = DirtFloor.HALF_Z;
     // 走廊 + 两端八边形大致可达：水晶在 ±18 附近
@@ -128,6 +131,53 @@ export class MainScene extends THREE.Scene {
     const clampedX = THREE.MathUtils.clamp(x, -maxX + r, maxX - r);
     const clampedZ = THREE.MathUtils.clamp(z, -halfZ + r, halfZ - r);
     this.missFortune.moveTo(clampedX, clampedZ);
+  }
+
+  /** 英雄普攻：锁定敌方单位（射程内开火，外追击） */
+  commandHeroAttack(target: CombatUnit): void {
+    if (!this.missFortune.isAlive) return;
+    this.missFortune.setAttackTarget(target);
+  }
+
+  /**
+   * 在地面落点附近点选敌方单位（供右键攻击）。
+   * 优先最近圆心；点击半径 ≈ 碰撞半径 + slack。
+   */
+  pickEnemyNear(x: number, z: number, slack = 0.45): CombatUnit | null {
+    if (!Number.isFinite(x) || !Number.isFinite(z)) return null;
+    const hero = this.missFortune;
+    if (!hero.isAlive) return null;
+
+    let best: CombatUnit | null = null;
+    let bestDist = Infinity;
+
+    for (const unit of this.collectEnemyCombatUnits(hero.team)) {
+      const dx = unit.collider.x - x;
+      const dz = unit.collider.z - z;
+      const d = Math.hypot(dx, dz);
+      const pickR = unit.collider.radius + slack;
+      if (d > pickR) continue;
+      if (d < bestDist) {
+        best = unit;
+        bestDist = d;
+      }
+    }
+    return best;
+  }
+
+  /** 存活敌方：小兵 + 塔 + 水晶 */
+  private collectEnemyCombatUnits(team: CombatUnit['team']): CombatUnit[] {
+    const out: CombatUnit[] = [];
+    for (const n of this.nexusCrystals) {
+      if (n.isAlive && n.team !== team) out.push(n);
+    }
+    for (const t of this.defenseTowers) {
+      if (t.isAlive && t.team !== team) out.push(t);
+    }
+    for (const m of this.minionSpawner.activeMinions) {
+      if (m.isAlive && m.team !== team) out.push(m);
+    }
+    return out;
   }
 
   /** 开关坐标参考线（XYZ 轴 / 网格 / 刻度） */
@@ -210,15 +260,18 @@ export class MainScene extends THREE.Scene {
 
   /** 单步游戏逻辑（游戏时间 delta） */
   private tick(delta: number): void {
-    // 本帧开战前的存活单位（水晶 + 塔 + 小兵），供双方索敌
+    // 本帧开战前的存活单位（水晶 + 塔 + 小兵 + 英雄），供双方索敌
     const structures = [
       ...this.nexusCrystals.filter((n) => n.isAlive),
       ...this.defenseTowers.filter((t) => t.isAlive),
     ];
-    const combatUnits = [
+    const combatUnits: CombatUnit[] = [
       ...structures,
       ...this.minionSpawner.activeMinions.filter((m) => m.isAlive),
     ];
+    if (this.missFortune.isAlive) {
+      combatUnits.push(this.missFortune);
+    }
 
     // 基地水晶：悬浮脉动动画
     for (const nexus of this.nexusCrystals) {
@@ -230,11 +283,13 @@ export class MainScene extends THREE.Scene {
       tower.update(delta, combatUnits, this.projectiles);
     }
 
-    // 英雄点地移动（无小兵 AI）
-    this.missFortune.updateMovement(delta);
+    // 英雄：意图 → 位移 → 限速转向 → 对准后从枪口开火
+    this.missFortune.update(delta, this.projectiles);
 
-    // 小兵 AI：前摇结束只发射弹道，不直接扣血（建筑含水晶）
-    this.minionSpawner.update(delta, structures, this.projectiles);
+    // 小兵 AI：索敌建筑 + 英雄 + 互打；前摇结束只发射弹道
+    const minionHostiles: CombatUnit[] = [...structures];
+    if (this.missFortune.isAlive) minionHostiles.push(this.missFortune);
+    this.minionSpawner.update(delta, minionHostiles, this.projectiles);
 
     // 弹道追踪与命中结算（命中才 takeDamage）
     this.projectiles.update(delta);
@@ -270,7 +325,9 @@ export class MainScene extends THREE.Scene {
     return [
       ...this.nexusCrystals.map((n) => n.collider),
       ...this.defenseTowers.map((t) => t.collider),
-      ...this.minionSpawner.activeMinions.map((m) => m.collider),
+      ...this.minionSpawner.activeMinions
+        .filter((m) => m.isAlive)
+        .map((m) => m.collider),
       this.missFortune.collider,
     ];
   }

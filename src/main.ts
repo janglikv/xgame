@@ -102,13 +102,13 @@ function bootstrap(): void {
   });
   escMenu.setSize(width, height);
 
-  // 锁定视角：右键点地板 → 英雄移动
+  // 锁定视角：右键点敌 → 普攻；右键点地 → 移动
   const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
   const raycaster = new THREE.Raycaster();
   const pointerNdc = new THREE.Vector2();
   const hitPoint = new THREE.Vector3();
 
-  const onPointerDownMove = (e: PointerEvent): void => {
+  const onPointerDownCommand = (e: PointerEvent): void => {
     if (e.button !== 2) return;
     if (escMenu.isOpen || !controls.isLocked) return;
     e.preventDefault();
@@ -121,10 +121,17 @@ function bootstrap(): void {
     );
     raycaster.setFromCamera(pointerNdc, camera);
     if (!raycaster.ray.intersectPlane(groundPlane, hitPoint)) return;
-    scene.commandHeroMoveTo(hitPoint.x, hitPoint.z);
+
+    // 落点附近有敌方单位 → 普攻锁定；否则点地移动
+    const enemy = scene.pickEnemyNear(hitPoint.x, hitPoint.z);
+    if (enemy) {
+      scene.commandHeroAttack(enemy);
+    } else {
+      scene.commandHeroMoveTo(hitPoint.x, hitPoint.z);
+    }
   };
 
-  renderer.domElement.addEventListener('pointerdown', onPointerDownMove);
+  renderer.domElement.addEventListener('pointerdown', onPointerDownCommand);
 
   const onResize = (): void => {
     const { width: w, height: h } = getSize();
