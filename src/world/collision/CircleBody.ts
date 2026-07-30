@@ -5,6 +5,9 @@ import * as THREE from 'three';
  * 半径为世界单位；标记环会按 owner 的 XZ 缩放做本地补偿。
  */
 export class CircleBody {
+  /** 全局白圈可见性（新创建体也会继承） */
+  static markersVisible = true;
+
   readonly owner: THREE.Object3D;
   /** 世界空间碰撞半径（米） */
   readonly radius: number;
@@ -21,6 +24,7 @@ export class CircleBody {
     this.radius = radius;
     this.isStatic = options.isStatic ?? false;
     this.marker = createWhiteGroundRing(owner, radius);
+    this.marker.visible = CircleBody.markersVisible;
     owner.add(this.marker);
   }
 
@@ -35,6 +39,11 @@ export class CircleBody {
   setXZ(x: number, z: number): void {
     this.owner.position.x = x;
     this.owner.position.z = z;
+  }
+
+  /** 单独设置本碰撞体白圈可见性 */
+  setMarkerVisible(visible: boolean): void {
+    this.marker.visible = visible;
   }
 }
 

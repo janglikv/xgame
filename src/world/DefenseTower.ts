@@ -22,7 +22,7 @@ export class DefenseTower extends THREE.Group implements CombatUnit {
   /** 地面圆形碰撞半径（世界单位，约贴合基座） */
   static readonly COLLIDER_RADIUS = 0.42;
   static readonly MAX_HP = 520;
-  /** 索敌优先级：低于小兵，小兵优先互打再推塔 */
+  /** 目标标签：高于小兵；小兵会优先打塔，塔仍优先清兵 */
   static readonly COMBAT_PRIORITY = 1;
   /** 攻击范围（世界单位，圆心距） */
   static readonly ATTACK_RANGE = 2.0;
@@ -412,7 +412,7 @@ export class DefenseTower extends THREE.Group implements CombatUnit {
 }
 
 /**
- * 地面攻击范围：淡色填充圆 + 边缘环。
+ * 地面攻击范围：淡色填充圆 + 1px 细线边框（LineLoop，屏幕像素宽）。
  * 几何半径按父级 SCALE_XZ 反向补偿，使世界半径 = attackRange。
  */
 function createAttackRangeMarker(
@@ -434,7 +434,7 @@ function createAttackRangeMarker(
     new THREE.MeshBasicMaterial({
       color,
       transparent: true,
-      opacity: 0.07,
+      opacity: 0.03,
       depthWrite: false,
       side: THREE.DoubleSide,
     }),
@@ -446,21 +446,29 @@ function createAttackRangeMarker(
   fill.castShadow = false;
   group.add(fill);
 
-  const edge = new THREE.Mesh(
-    new THREE.RingGeometry(localR * 0.98, localR, 64),
-    new THREE.MeshBasicMaterial({
+  // 屏幕空间 1px 细线（WebGL Line 宽度在多数平台固定为 1）
+  const segments = 96;
+  const positions = new Float32Array((segments + 1) * 3);
+  for (let i = 0; i <= segments; i += 1) {
+    const a = (i / segments) * Math.PI * 2;
+    const i3 = i * 3;
+    positions[i3] = Math.cos(a) * localR;
+    positions[i3 + 1] = 0;
+    positions[i3 + 2] = Math.sin(a) * localR;
+  }
+  const edgeGeo = new THREE.BufferGeometry();
+  edgeGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  const edge = new THREE.LineLoop(
+    edgeGeo,
+    new THREE.LineBasicMaterial({
       color,
       transparent: true,
-      opacity: 0.42,
+      opacity: 0.55,
       depthWrite: false,
-      side: THREE.DoubleSide,
     }),
   );
-  edge.rotation.x = -Math.PI / 2;
   edge.position.y = yRing;
   edge.renderOrder = 2;
-  edge.receiveShadow = false;
-  edge.castShadow = false;
   group.add(edge);
 
   return group;

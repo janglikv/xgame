@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { ProjectileManager } from '../effects/ProjectileManager';
-import type { CircleBody } from '../world/collision/CircleBody';
+import { CircleBody } from '../world/collision/CircleBody';
 import { clampBodiesToFloor } from '../world/collision/clampBodiesToFloor';
 import { resolveCircleCollisions } from '../world/collision/resolveCircleCollisions';
 import { createSceneLights } from '../world/createSceneLights';
@@ -18,6 +18,9 @@ export class MainScene extends THREE.Scene {
   private readonly defenseTowers: DefenseTower[];
   private readonly minionSpawner: MinionWaveSpawner;
   private readonly projectiles: ProjectileManager;
+
+  private axesVisible = true;
+  private colliderMarkersVisible = true;
 
   constructor() {
     super();
@@ -48,6 +51,29 @@ export class MainScene extends THREE.Scene {
     this.projectiles = new ProjectileManager(this);
   }
 
+  get showAxes(): boolean {
+    return this.axesVisible;
+  }
+
+  get showColliderMarkers(): boolean {
+    return this.colliderMarkersVisible;
+  }
+
+  /** 开关坐标参考线（XYZ 轴 / 网格 / 刻度） */
+  setAxesVisible(visible: boolean): void {
+    this.axesVisible = visible;
+    this.axesGrid.visible = visible;
+  }
+
+  /** 开关所有碰撞体积白圈（含之后新生成的单位） */
+  setColliderMarkersVisible(visible: boolean): void {
+    this.colliderMarkersVisible = visible;
+    CircleBody.markersVisible = visible;
+    for (const body of this.collectColliderBodies()) {
+      body.setMarkerVisible(visible);
+    }
+  }
+
   /** 每帧更新 */
   update(delta: number): void {
     // 本帧开战前的存活单位（塔 + 小兵），供双方索敌
@@ -69,10 +95,7 @@ export class MainScene extends THREE.Scene {
     this.minionSpawner.pruneDead();
 
     // 移动后再做地面圆碰撞（死兵已 prune；死塔仍挡路）
-    const bodies: CircleBody[] = [
-      ...this.defenseTowers.map((t) => t.collider),
-      ...this.minionSpawner.activeMinions.map((m) => m.collider),
-    ];
+    const bodies = this.collectColliderBodies();
     resolveCircleCollisions(bodies);
     // 兵线两侧夹紧：圆心+半径不得超出地板 Z 范围
     clampBodiesToFloor(bodies, { halfZ: DirtFloor.HALF_Z });
@@ -90,6 +113,13 @@ export class MainScene extends THREE.Scene {
     }
     this.minionSpawner.dispose();
     this.projectiles.dispose();
+  }
+
+  private collectColliderBodies(): CircleBody[] {
+    return [
+      ...this.defenseTowers.map((t) => t.collider),
+      ...this.minionSpawner.activeMinions.map((m) => m.collider),
+    ];
   }
 }
 

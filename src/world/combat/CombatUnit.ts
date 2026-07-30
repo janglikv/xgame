@@ -5,12 +5,16 @@ export type TeamId = 'blue' | 'red';
 
 /**
  * 可参与索敌 / 受伤的战斗单位。
- * combatPriority 越小越优先被小兵选为目标（小兵 < 防御塔）。
+ * combatPriority：建筑类（防御塔）数值更大；小兵索敌时优先打高值目标。
  */
 export interface CombatUnit {
   readonly team: TeamId;
   readonly collider: CircleBody;
-  /** 索敌优先级，数值越小越优先 */
+  /**
+   * 目标优先级标签。
+   * 小兵索敌：数值越大越优先（先塔后兵）；
+   * 防御塔索敌：数值越小越优先（先兵后塔）。
+   */
   readonly combatPriority: number;
   readonly maxHp: number;
   readonly isAlive: boolean;

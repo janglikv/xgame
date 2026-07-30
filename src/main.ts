@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { CameraController } from './controls/CameraController';
 import { MainScene } from './scenes/MainScene';
+import { EscMenu } from './ui/EscMenu';
 
 function bootstrap(): void {
   const host = document.getElementById('app');
@@ -41,12 +42,24 @@ function bootstrap(): void {
     lookSpeed: 0.002,
   });
 
+  // ESC 设置面板：游戏内 HUD（正交场景 + Canvas 纹理）
+  const escMenu = new EscMenu(renderer.domElement, {
+    initialAxesVisible: scene.showAxes,
+    initialColliderMarkersVisible: scene.showColliderMarkers,
+    onAxesChange: (visible) => scene.setAxesVisible(visible),
+    onColliderMarkersChange: (visible) =>
+      scene.setColliderMarkersVisible(visible),
+    onOpenChange: (open) => controls.setEnabled(!open),
+  });
+  escMenu.setSize(width, height);
+
   const onResize = (): void => {
     const { width: w, height: h } = getSize();
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
     renderer.setSize(w, h);
     scene.resize(w, h);
+    escMenu.setSize(w, h);
   };
 
   window.addEventListener('resize', onResize);
@@ -61,6 +74,8 @@ function bootstrap(): void {
     scene.update(delta);
 
     renderer.render(scene, camera);
+    // 主场景之后叠一层 UI，不清颜色缓冲
+    escMenu.render(renderer);
   };
 
   tick();

@@ -20,6 +20,7 @@ export class Minion extends THREE.Group implements CombatUnit {
   /** 地面圆形碰撞半径（世界单位） */
   static readonly COLLIDER_RADIUS = 0.12;
   static readonly MAX_HP = 80;
+  /** 目标标签：低于防御塔，小兵优先打塔 */
   static readonly COMBAT_PRIORITY = 0;
   static readonly ATTACK_DAMAGE = 12;
   /** 圆心距：可出手 */
@@ -332,8 +333,10 @@ export class Minion extends THREE.Group implements CombatUnit {
     units: readonly CombatUnit[],
     projectiles: ProjectileManager,
   ): void {
-    // 索敌：aggro 内优先小兵再塔
-    const found = pickEnemyTarget(this, units, Minion.AGGRO_RANGE);
+    // 索敌：aggro 内优先防御塔，再敌方小兵
+    const found = pickEnemyTarget(this, units, Minion.AGGRO_RANGE, {
+      preferHigherPriority: true,
+    });
     if (found) {
       const d = distXZ(this.collider, found.collider);
       if (d <= Minion.ATTACK_RANGE) {
@@ -355,13 +358,15 @@ export class Minion extends THREE.Group implements CombatUnit {
     units: readonly CombatUnit[],
     projectiles: ProjectileManager,
   ): void {
-    // 追击中也可切更高优先级近处目标
-    const better = pickEnemyTarget(this, units, Minion.AGGRO_RANGE);
+    // 追击中也可切更高优先级近处目标（塔 > 小兵）
+    const better = pickEnemyTarget(this, units, Minion.AGGRO_RANGE, {
+      preferHigherPriority: true,
+    });
     if (better && better !== this.target) {
-      // 仅当新目标优先级更高，或同级更近时切换
+      // 仅当新目标优先级更高（数值更大），或同级更近时切换
       if (
         !this.target ||
-        better.combatPriority < this.target.combatPriority ||
+        better.combatPriority > this.target.combatPriority ||
         (better.combatPriority === this.target.combatPriority &&
           distXZ(this.collider, better.collider) + 0.05 <
             distXZ(this.collider, this.target.collider))
@@ -388,6 +393,7 @@ export class Minion extends THREE.Group implements CombatUnit {
       return;
     }
 
+    this.faceToward(this.target);
     this.animateWalk(delta);
     this.moveToward(this.target, delta);
   }
@@ -417,7 +423,8 @@ export class Minion extends THREE.Group implements CombatUnit {
       return;
     }
 
-    // 站桩：不走路
+    // 站桩攻击：始终面朝目标（含冷却等待）
+    this.faceToward(this.target);
     this.resetPose();
 
     // 冷却中干等
@@ -462,6 +469,19 @@ export class Minion extends THREE.Group implements CombatUnit {
   private advanceLane(delta: number): void {
     const dir = this.team === 'blue' ? 1 : -1;
     this.position.x += dir * Minion.MOVE_SPEED * delta;
+    // 推线时恢复默认朝向（本地 +Z → 行军方向）
+    this.rotation.y = dir > 0 ? Math.PI / 2 : -Math.PI / 2;
+  }
+
+  /**
+   * 面朝目标地面位置。
+   * 模型正面为本地 +Z：rotation.y = atan2(dx, dz)。
+   */
+  private faceToward(target: CombatUnit): void {
+    const dx = target.collider.x - this.position.x;
+    const dz = target.collider.z - this.position.z;
+    if (dx * dx + dz * dz < 1e-10) return;
+    this.rotation.y = Math.atan2(dx, dz);
   }
 
   /** 朝目标地面位置移动 */
