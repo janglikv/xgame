@@ -7,13 +7,26 @@ const GRID_COLOR = 0x4b5563;
 const TICK_COLOR = 0xd1d5db;
 const ORIGIN_COLOR = 0xffffff;
 
+/** 各轴从原点到正/负端的米数（范围 = ±extent） */
+interface AxisExtents {
+  x: number;
+  y: number;
+  z: number;
+}
+
 /**
  * 空间坐标网格：XYZ 轴 + 每米刻度点 + 三向参考网格。
  * 约定：1 世界单位 = 1 米。配置内聚在类内，不对外传参。
+ *
+ * 范围：X ∈ [-20, 20]，Y ∈ [-3, 3]，Z ∈ [-5, 5]
  */
 export class SpatialAxesGrid extends THREE.Group {
-  /** 从原点沿各轴正负方向延伸的米数（总跨度 20m） */
-  private static readonly EXTENT = 10;
+  /** X：-20 ~ 20 */
+  private static readonly EXTENT_X = 20;
+  /** Y：-3 ~ 3 */
+  private static readonly EXTENT_Y = 3;
+  /** Z：-5 ~ 5 */
+  private static readonly EXTENT_Z = 5;
   /** 刻度间隔（米） */
   private static readonly STEP = 1;
   /** 是否绘制三向网格面（XY / XZ / YZ） */
@@ -25,19 +38,23 @@ export class SpatialAxesGrid extends THREE.Group {
     super();
     this.name = 'SpatialAxesGrid';
 
-    const extent = SpatialAxesGrid.EXTENT;
+    const extents: AxisExtents = {
+      x: SpatialAxesGrid.EXTENT_X,
+      y: SpatialAxesGrid.EXTENT_Y,
+      z: SpatialAxesGrid.EXTENT_Z,
+    };
     const step = SpatialAxesGrid.STEP;
     const majorEvery = SpatialAxesGrid.MAJOR_EVERY;
 
     if (SpatialAxesGrid.SHOW_PLANES) {
-      this.add(createPlaneGrids(extent, step));
+      this.add(createPlaneGrids(extents, step));
     }
 
-    this.add(createAxisLines(extent));
-    this.add(createTickMarks(extent, step));
-    this.add(createTickPoints(extent, step));
-    this.add(createAxisLabels(extent));
-    this.add(createMeterLabels(extent, step, majorEvery));
+    this.add(createAxisLines(extents));
+    this.add(createTickMarks(extents, step));
+    this.add(createTickPoints(extents, step));
+    this.add(createAxisLabels(extents));
+    this.add(createMeterLabels(extents, step, majorEvery));
 
     // 原点高亮
     const origin = new THREE.Mesh(
@@ -49,49 +66,127 @@ export class SpatialAxesGrid extends THREE.Group {
   }
 }
 
-/** 三向半透明网格面 */
-function createPlaneGrids(extent: number, step: number): THREE.Group {
+/**
+ * 三向半透明网格面。
+ * GridHelper 默认是正方形，按平面两轴跨度缩放/裁切到矩形范围。
+ */
+function createPlaneGrids(extents: AxisExtents, step: number): THREE.Group {
   const group = new THREE.Group();
   group.name = 'PlaneGrids';
 
-  const divisions = (extent * 2) / step;
-  const size = extent * 2;
+  // XZ 水平面（地面）：X×Z
+  group.add(
+    createRectGrid({
+      sizeA: extents.x * 2,
+      sizeB: extents.z * 2,
+      step,
+      opacity: 0.35,
+      // 默认在 XZ，Y 微抬避免 z-fighting
+      position: new THREE.Vector3(0, 0.001, 0),
+      rotation: new THREE.Euler(0, 0, 0),
+      /** GridHelper 在 XZ：本地 X→世界 X，本地 Z→世界 Z；先建在 XY 再转到 XZ 不方便，直接用 */
+      plane: 'xz',
+    }),
+  );
 
-  // XZ 水平面（地面）
-  const xz = new THREE.GridHelper(size, divisions, GRID_COLOR, GRID_COLOR);
-  fadeGrid(xz, 0.35);
-  xz.position.y = 0.001;
-  group.add(xz);
+  // XY 竖直面：X×Y
+  group.add(
+    createRectGrid({
+      sizeA: extents.x * 2,
+      sizeB: extents.y * 2,
+      step,
+      opacity: 0.18,
+      position: new THREE.Vector3(0, 0, 0),
+      rotation: new THREE.Euler(0, 0, 0),
+      plane: 'xy',
+    }),
+  );
 
-  // XY 竖直面（法线沿 Z）
-  const xy = new THREE.GridHelper(size, divisions, GRID_COLOR, GRID_COLOR);
-  xy.rotation.x = Math.PI / 2;
-  fadeGrid(xy, 0.18);
-  group.add(xy);
-
-  // YZ 竖直面（法线沿 X）
-  const yz = new THREE.GridHelper(size, divisions, GRID_COLOR, GRID_COLOR);
-  yz.rotation.z = Math.PI / 2;
-  fadeGrid(yz, 0.18);
-  group.add(yz);
+  // YZ 竖直面：Y×Z
+  group.add(
+    createRectGrid({
+      sizeA: extents.y * 2,
+      sizeB: extents.z * 2,
+      step,
+      opacity: 0.18,
+      position: new THREE.Vector3(0, 0, 0),
+      rotation: new THREE.Euler(0, 0, 0),
+      plane: 'yz',
+    }),
+  );
 
   return group;
 }
 
-function fadeGrid(grid: THREE.GridHelper, opacity: number): void {
-  const materials = Array.isArray(grid.material)
-    ? grid.material
-    : [grid.material];
+function createRectGrid(options: {
+  sizeA: number;
+  sizeB: number;
+  step: number;
+  opacity: number;
+  position: THREE.Vector3;
+  rotation: THREE.Euler;
+  plane: 'xz' | 'xy' | 'yz';
+}): THREE.Group {
+  const { sizeA, sizeB, step, opacity, position, plane } = options;
+  const group = new THREE.Group();
 
-  for (const material of materials) {
-    material.transparent = true;
-    material.opacity = opacity;
-    material.depthWrite = false;
+  // 用线段手动画矩形网格，避免 GridHelper 强制正方形
+  const positions: number[] = [];
+  const halfA = sizeA / 2;
+  const halfB = sizeB / 2;
+
+  const push = (x: number, y: number, z: number): void => {
+    positions.push(x, y, z);
+  };
+
+  if (plane === 'xz') {
+    // 平行于 Z 的线（沿 X 步进）
+    for (let x = -halfA; x <= halfA + 1e-9; x += step) {
+      push(x, 0, -halfB);
+      push(x, 0, halfB);
+    }
+    // 平行于 X 的线（沿 Z 步进）
+    for (let z = -halfB; z <= halfB + 1e-9; z += step) {
+      push(-halfA, 0, z);
+      push(halfA, 0, z);
+    }
+  } else if (plane === 'xy') {
+    for (let x = -halfA; x <= halfA + 1e-9; x += step) {
+      push(x, -halfB, 0);
+      push(x, halfB, 0);
+    }
+    for (let y = -halfB; y <= halfB + 1e-9; y += step) {
+      push(-halfA, y, 0);
+      push(halfA, y, 0);
+    }
+  } else {
+    // yz：sizeA → Y，sizeB → Z
+    for (let y = -halfA; y <= halfA + 1e-9; y += step) {
+      push(0, y, -halfB);
+      push(0, y, halfB);
+    }
+    for (let z = -halfB; z <= halfB + 1e-9; z += step) {
+      push(0, -halfA, z);
+      push(0, halfA, z);
+    }
   }
+
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  const mat = new THREE.LineBasicMaterial({
+    color: GRID_COLOR,
+    transparent: true,
+    opacity,
+    depthWrite: false,
+  });
+  const lines = new THREE.LineSegments(geom, mat);
+  lines.position.copy(position);
+  group.add(lines);
+  return group;
 }
 
-/** RGB 坐标轴线段（正负双向） */
-function createAxisLines(extent: number): THREE.Group {
+/** RGB 坐标轴线段（正负双向，各轴独立长度） */
+function createAxisLines(extents: AxisExtents): THREE.Group {
   const group = new THREE.Group();
   group.name = 'AxisLines';
 
@@ -102,18 +197,18 @@ function createAxisLines(extent: number): THREE.Group {
   }> = [
     {
       color: AXIS_X,
-      from: new THREE.Vector3(-extent, 0, 0),
-      to: new THREE.Vector3(extent, 0, 0),
+      from: new THREE.Vector3(-extents.x, 0, 0),
+      to: new THREE.Vector3(extents.x, 0, 0),
     },
     {
       color: AXIS_Y,
-      from: new THREE.Vector3(0, -extent, 0),
-      to: new THREE.Vector3(0, extent, 0),
+      from: new THREE.Vector3(0, -extents.y, 0),
+      to: new THREE.Vector3(0, extents.y, 0),
     },
     {
       color: AXIS_Z,
-      from: new THREE.Vector3(0, 0, -extent),
-      to: new THREE.Vector3(0, 0, extent),
+      from: new THREE.Vector3(0, 0, -extents.z),
+      to: new THREE.Vector3(0, 0, extents.z),
     },
   ];
 
@@ -146,7 +241,7 @@ function createAxisLines(extent: number): THREE.Group {
 /**
  * 每米刻度短线：垂直于对应轴的小十字。
  */
-function createTickMarks(extent: number, step: number): THREE.Group {
+function createTickMarks(extents: AxisExtents, step: number): THREE.Group {
   const group = new THREE.Group();
   group.name = 'TickMarks';
 
@@ -164,18 +259,20 @@ function createTickMarks(extent: number, step: number): THREE.Group {
     positions.push(ax, ay, az, bx, by, bz);
   };
 
-  for (let t = -extent; t <= extent; t += step) {
-    if (t === 0) continue;
-
-    // X 轴刻度（沿 Y/Z 各画一小段）
+  for (let t = -extents.x; t <= extents.x + 1e-9; t += step) {
+    if (Math.abs(t) < 1e-9) continue;
     pushSeg(t, -half, 0, t, half, 0);
     pushSeg(t, 0, -half, t, 0, half);
+  }
 
-    // Y 轴刻度
+  for (let t = -extents.y; t <= extents.y + 1e-9; t += step) {
+    if (Math.abs(t) < 1e-9) continue;
     pushSeg(-half, t, 0, half, t, 0);
     pushSeg(0, t, -half, 0, t, half);
+  }
 
-    // Z 轴刻度
+  for (let t = -extents.z; t <= extents.z + 1e-9; t += step) {
+    if (Math.abs(t) < 1e-9) continue;
     pushSeg(-half, 0, t, half, 0, t);
     pushSeg(0, -half, t, 0, half, t);
   }
@@ -194,7 +291,7 @@ function createTickMarks(extent: number, step: number): THREE.Group {
 /**
  * 每米刻度点：三轴上的小球。
  */
-function createTickPoints(extent: number, step: number): THREE.Group {
+function createTickPoints(extents: AxisExtents, step: number): THREE.Group {
   const group = new THREE.Group();
   group.name = 'TickPoints';
 
@@ -205,17 +302,22 @@ function createTickPoints(extent: number, step: number): THREE.Group {
     z: new THREE.MeshBasicMaterial({ color: AXIS_Z }),
   };
 
-  for (let t = -extent; t <= extent; t += step) {
-    if (t === 0) continue;
-
+  for (let t = -extents.x; t <= extents.x + 1e-9; t += step) {
+    if (Math.abs(t) < 1e-9) continue;
     const px = new THREE.Mesh(sphereGeom, materials.x);
     px.position.set(t, 0, 0);
     group.add(px);
+  }
 
+  for (let t = -extents.y; t <= extents.y + 1e-9; t += step) {
+    if (Math.abs(t) < 1e-9) continue;
     const py = new THREE.Mesh(sphereGeom, materials.y);
     py.position.set(0, t, 0);
     group.add(py);
+  }
 
+  for (let t = -extents.z; t <= extents.z + 1e-9; t += step) {
+    if (Math.abs(t) < 1e-9) continue;
     const pz = new THREE.Mesh(sphereGeom, materials.z);
     pz.position.set(0, 0, t);
     group.add(pz);
@@ -225,41 +327,72 @@ function createTickPoints(extent: number, step: number): THREE.Group {
 }
 
 /** 轴端点 XYZ 标签 */
-function createAxisLabels(extent: number): THREE.Group {
+function createAxisLabels(extents: AxisExtents): THREE.Group {
   const group = new THREE.Group();
   group.name = 'AxisLabels';
 
-  const offset = extent + 0.45;
-  group.add(makeTextSprite('X', AXIS_X, new THREE.Vector3(offset, 0.15, 0), 0.55));
-  group.add(makeTextSprite('Y', AXIS_Y, new THREE.Vector3(0.15, offset, 0), 0.55));
-  group.add(makeTextSprite('Z', AXIS_Z, new THREE.Vector3(0, 0.15, offset), 0.55));
+  group.add(
+    makeTextSprite(
+      'X',
+      AXIS_X,
+      new THREE.Vector3(extents.x + 0.45, 0.15, 0),
+      0.55,
+    ),
+  );
+  group.add(
+    makeTextSprite(
+      'Y',
+      AXIS_Y,
+      new THREE.Vector3(0.15, extents.y + 0.45, 0),
+      0.55,
+    ),
+  );
+  group.add(
+    makeTextSprite(
+      'Z',
+      AXIS_Z,
+      new THREE.Vector3(0, 0.15, extents.z + 0.45),
+      0.55,
+    ),
+  );
 
   return group;
 }
 
-/** 主要米数标签（默认每 5m） */
+/** 主要米数标签（默认每 5m；短轴在端点也标） */
 function createMeterLabels(
-  extent: number,
+  extents: AxisExtents,
   step: number,
   majorEvery: number,
 ): THREE.Group {
   const group = new THREE.Group();
   group.name = 'MeterLabels';
 
-  for (let t = -extent; t <= extent; t += step) {
-    if (t === 0) continue;
-    if (Math.abs(t % majorEvery) > 1e-6) continue;
+  const shouldLabel = (t: number, extent: number): boolean => {
+    if (Math.abs(t) < 1e-9) return false;
+    // 主刻度，或轴端点（短轴端点不一定落在 majorEvery 上）
+    if (Math.abs(Math.abs(t) - extent) < 1e-9) return true;
+    return Math.abs(t % majorEvery) < 1e-6;
+  };
 
-    const label = `${t}m`;
-    // 贴在各轴外侧一点，避免压住刻度点
+  for (let t = -extents.x; t <= extents.x + 1e-9; t += step) {
+    if (!shouldLabel(t, extents.x)) continue;
     group.add(
-      makeTextSprite(label, AXIS_X, new THREE.Vector3(t, 0.22, 0.22), 0.35),
+      makeTextSprite(`${t}m`, AXIS_X, new THREE.Vector3(t, 0.22, 0.22), 0.35),
     );
+  }
+
+  for (let t = -extents.y; t <= extents.y + 1e-9; t += step) {
+    if (!shouldLabel(t, extents.y)) continue;
     group.add(
-      makeTextSprite(label, AXIS_Y, new THREE.Vector3(0.22, t, 0.22), 0.35),
+      makeTextSprite(`${t}m`, AXIS_Y, new THREE.Vector3(0.22, t, 0.22), 0.35),
     );
+  }
+
+  for (let t = -extents.z; t <= extents.z + 1e-9; t += step) {
+    if (!shouldLabel(t, extents.z)) continue;
     group.add(
-      makeTextSprite(label, AXIS_Z, new THREE.Vector3(0.22, 0.22, t), 0.35),
+      makeTextSprite(`${t}m`, AXIS_Z, new THREE.Vector3(0.22, 0.22, t), 0.35),
     );
   }
 
