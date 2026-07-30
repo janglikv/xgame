@@ -117,6 +117,9 @@ export class Minion extends THREE.Group implements CombatUnit {
   private readonly phaseOffset: number;
   private isDead = false;
   private deathElapsed = 0;
+  private staffDetached = false;
+  private readonly staffStartPos = new THREE.Vector3();
+  private readonly staffStartRot = new THREE.Euler();
 
   readonly kind: MinionKind;
   readonly team: TeamId;
@@ -328,6 +331,25 @@ export class Minion extends THREE.Group implements CombatUnit {
     this.healthBar.visible = false;
     this.clearCombat();
 
+    // 彻底解耦父子关系：将魔法杖从右手转移到 Minion 根组，物理位置在角色坐标系下自由坠落
+    if (!this.staffDetached) {
+      const worldPos = new THREE.Vector3();
+      const worldQuat = new THREE.Quaternion();
+      this.staff.getWorldPosition(worldPos);
+      this.staff.getWorldQuaternion(worldQuat);
+
+      this.rightHand.remove(this.staff);
+      this.add(this.staff);
+
+      this.worldToLocal(worldPos);
+      this.staff.position.copy(worldPos);
+      this.staff.rotation.setFromQuaternion(worldQuat);
+
+      this.staffStartPos.copy(this.staff.position);
+      this.staffStartRot.copy(this.staff.rotation);
+      this.staffDetached = true;
+    }
+
     // 遍历所有组件材质，开启 transparent 允许透明度动画
     this.traverse((obj) => {
       const meshObj = obj as THREE.Mesh;
@@ -374,17 +396,38 @@ export class Minion extends THREE.Group implements CombatUnit {
     this.leftFoot.position.copy(this.baseLeftFoot);
     this.rightFoot.position.copy(this.baseRightFoot);
 
-    // 武器脱手飞出摔落动效：向外侧明显滑动摔出，完全脱离手部并平躺在地面
-    this.staff.position.set(
-      0.48 * fallEase,
-      -0.06 - 0.42 * fallEase,
-      0.58 * fallEase,
-    );
-    this.staff.rotation.set(
-      0.45 * (1 - fallEase) + 1.57 * fallEase,
-      0.15 * (1 - fallEase) - 0.75 * fallEase,
-      0.35 * (1 - fallEase) + 1.4 * fallEase,
-    );
+    // 武器在独立坐标系下从右手高度自然坠落地表并平躺
+    if (this.staffDetached) {
+      const startX = this.staffStartPos.x;
+      const startY = this.staffStartPos.y;
+      const startZ = this.staffStartPos.z;
+
+      // 目标平躺点：在右手脱落位置旁侧，y = 0.035m（贴在地面之上）
+      const targetX = startX - 0.22;
+      const targetZ = startZ + 0.35;
+      const targetY = 0.035;
+
+      this.staff.position.x = THREE.MathUtils.lerp(startX, targetX, fallEase);
+      this.staff.position.y = THREE.MathUtils.lerp(startY, targetY, fallEase);
+      this.staff.position.z = THREE.MathUtils.lerp(startZ, targetZ, fallEase);
+
+      // 旋转平躺贴地
+      this.staff.rotation.x = THREE.MathUtils.lerp(
+        this.staffStartRot.x,
+        Math.PI / 2,
+        fallEase,
+      );
+      this.staff.rotation.y = THREE.MathUtils.lerp(
+        this.staffStartRot.y,
+        -0.4,
+        fallEase,
+      );
+      this.staff.rotation.z = THREE.MathUtils.lerp(
+        this.staffStartRot.z,
+        0.75,
+        fallEase,
+      );
+    }
 
     // 2. 渐隐（0.8s ~ 1.6s）
     if (this.deathElapsed >= fadeStart) {
@@ -663,7 +706,15 @@ export class Minion extends THREE.Group implements CombatUnit {
     this.rightFoot.position.copy(this.baseRightFoot);
     this.leftHand.position.copy(this.baseLeftHand);
     this.rightHand.position.copy(this.baseRightHand);
+
+    // 若法杖处于死亡脱离状态，重新挂回右手
+    if (this.staffDetached) {
+      this.remove(this.staff);
+      this.rightHand.add(this.staff);
+      this.staffDetached = false;
+    }
     this.staff.position.set(0, -0.06, 0);
+    this.staff.rotation.order = 'YXZ';
     this.staff.rotation.set(0.45, 0.15, 0.35);
   }
 
