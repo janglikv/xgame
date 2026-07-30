@@ -14,6 +14,13 @@ import { SpatialAxesGrid } from '../world/SpatialAxesGrid';
  * 主场景：灯光 + 地板 + 坐标辅助 + 基地水晶 + 防御塔 + AI 发兵 + 弹道战斗 + 地面圆碰撞。
  */
 export class MainScene extends THREE.Scene {
+  /** 主场景背景与远景雾化颜色 */
+  private static readonly FOG_COLOR = 0x0b0f14;
+  /** 远景雾化起始距离（米）：保持近处战斗核心区域清晰 */
+  private static readonly FOG_NEAR = 22;
+  /** 远景雾化完全遮挡距离（米）：超越此距离完全融入背景，隐去地图边界 */
+  private static readonly FOG_FAR = 45;
+
   /** 时间快进固定步长（秒），保证战斗/发兵逻辑稳定 */
   private static readonly SKIP_STEP = 1 / 30;
   /** 门牙塔相对水晶沿兵线朝中路的偏移（米） */
@@ -39,7 +46,9 @@ export class MainScene extends THREE.Scene {
   constructor() {
     super();
     this.name = 'MainScene';
-    this.background = new THREE.Color(0x0b0f14);
+    const fogColor = MainScene.FOG_COLOR;
+    this.background = new THREE.Color(fogColor);
+    this.fog = new THREE.Fog(fogColor, MainScene.FOG_NEAR, MainScene.FOG_FAR);
 
     this.add(createSceneLights());
 

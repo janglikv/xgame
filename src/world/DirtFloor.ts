@@ -1,10 +1,12 @@
 import * as THREE from 'three';
+import { createWorldGridMaterial } from './worldGridMaterial';
 
 /**
  * 灰色地板：中间矩形走廊 + 两端正八边形平台（Y = 0）+ 围墙 + 外围无限地平面。
  *
  * - 可走地图：一体 mesh；围墙为方管截面沿轮廓扫掠
  * - 无限地：超大平面，高度 = 围墙底面 WALL_Y_BOTTOM
+ * - 三者共用世界空间米制网格材质（1m 细线 + 5m 主线）
  *
  * 可走区域：
  * - 走廊：X ∈ [-HALF_X, HALF_X]，Z ∈ [-HALF_Z, HALF_Z]
@@ -62,14 +64,15 @@ export class DirtFloor extends THREE.Group {
     this.sizeX = sizeX;
     this.sizeZ = sizeZ;
 
-    // 无限大地板：贴在围墙下沉底面高度，铺满外围
+    // 无限大地板：贴在围墙下沉底面高度，铺满外围（网格略暗）
     const groundSize = DirtFloor.INFINITE_GROUND_SIZE;
-    const groundMat = new THREE.MeshStandardMaterial({
+    const groundMat = createWorldGridMaterial({
       color: 0x0e1012,
+      lineColor: 0x2a3340,
+      majorLineColor: 0x3d4a5c,
       roughness: 0.92,
       metalness: 0.05,
       envMapIntensity: 0.4,
-      // 与围墙底面共面时减轻 z-fighting
       polygonOffset: true,
       polygonOffsetFactor: 1,
       polygonOffsetUnits: 1,
@@ -83,8 +86,11 @@ export class DirtFloor extends THREE.Group {
     this.add(ground);
     this.disposables.push({ geometry: groundGeo, material: groundMat });
 
-    const floorMat = new THREE.MeshStandardMaterial({
+    // 可走地板：同世界网格，略亮以区分场内
+    const floorMat = createWorldGridMaterial({
       color: 0x1e2022,
+      lineColor: 0x4b5c70,
+      majorLineColor: 0x6b8299,
       roughness: 0.45,
       metalness: 0.2,
       envMapIntensity: 0.8,
@@ -96,9 +102,11 @@ export class DirtFloor extends THREE.Group {
     this.add(floor);
     this.disposables.push({ geometry: floor.geometry, material: floorMat });
 
-    // 围墙：方管截面沿地图外轮廓扫掠（硬边；高度翻倍并下沉一半）
-    const wallMat = new THREE.MeshStandardMaterial({
+    // 围墙：方管 + 同世界网格（立面显示竖直/水平格）
+    const wallMat = createWorldGridMaterial({
       color: 0x2a2e32,
+      lineColor: 0x5a6a7c,
+      majorLineColor: 0x7a8fa3,
       roughness: 0.55,
       metalness: 0.15,
       envMapIntensity: 0.7,
