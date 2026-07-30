@@ -374,18 +374,18 @@ export class Minion extends THREE.Group implements CombatUnit {
     this.leftFoot.position.copy(this.baseLeftFoot);
     this.rightFoot.position.copy(this.baseRightFoot);
 
-    // 武器脱手掉地动效：从右手滑动脱落，横躺掉落在地表并带有小幅弹性跳跃
+    // 武器脱手飞出摔落动效：向外侧明显滑动摔出，完全脱离手部，平躺在地面并弹跳
     const bounce =
-      tFall > 0.6 ? Math.sin(((tFall - 0.6) / 0.4) * Math.PI) * 0.04 : 0;
+      tFall > 0.5 ? Math.sin(((tFall - 0.5) / 0.5) * Math.PI) * 0.08 : 0;
     this.staff.position.set(
-      0.15 * fallEase,
-      -0.06 - 0.22 * fallEase + bounce,
-      0.18 * fallEase,
+      0.48 * fallEase,
+      -0.06 - 0.42 * fallEase + bounce,
+      0.58 * fallEase,
     );
     this.staff.rotation.set(
-      0.45 * (1 - fallEase) + 1.35 * fallEase,
-      0.15 * (1 - fallEase) - 0.3 * fallEase,
-      0.35 * (1 - fallEase) + 0.95 * fallEase,
+      0.45 * (1 - fallEase) + 1.57 * fallEase,
+      0.15 * (1 - fallEase) - 0.75 * fallEase,
+      0.35 * (1 - fallEase) + 1.4 * fallEase,
     );
 
     // 2. 渐隐（0.8s ~ 1.6s）
