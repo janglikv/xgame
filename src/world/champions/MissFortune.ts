@@ -4,7 +4,7 @@ import { CircleBody } from '../collision/CircleBody';
 /**
  * 第一个英雄：厄运小姐。
  * 独立模型（起步形态参考小兵五球+巫师帽，但与小兵代码完全分离，后续可自由改型）。
- * 无小兵 AI：仅站桩展示与地面碰撞。
+ * 无小兵 AI；锁定视角下可右键点地移动。
  */
 export class MissFortune extends THREE.Group {
   static readonly DISPLAY_NAME = '厄运小姐';
@@ -16,6 +16,49 @@ export class MissFortune extends THREE.Group {
   static readonly SCALE = 0.375;
   /** 地面圆碰撞半径（约小兵 0.12 × 3） */
   static readonly COLLIDER_RADIUS = 0.36;
+  /** 点地移动最大速度（世界单位/秒） */
+  static readonly MOVE_SPEED = 1.35;
+  /** 0→满速 / 满速→0 的目标时间（秒） */
+  static readonly MOVE_RAMP_TIME = 0.1;
+  /**
+   * 加速度 = 最大速度 / 爬升时间 → 约 0.1s 到满速。
+   */
+  static readonly MOVE_ACCEL =
+    MissFortune.MOVE_SPEED / MissFortune.MOVE_RAMP_TIME;
+  /**
+   * 减速度与加速对称 → 约 0.1s 刹停。
+   */
+  static readonly MOVE_DECEL =
+    MissFortune.MOVE_SPEED / MissFortune.MOVE_RAMP_TIME;
+  /** 转向角速度（弧度/秒），约 180° 需 ~0.25s */
+  static readonly TURN_SPEED = 12;
+  /** 到达目标判定距离 */
+  private static readonly ARRIVE_EPS = 0.04;
+  /** 速度视为静止的阈值 */
+  private static readonly STOP_SPEED = 0.05;
+
+  /** 走路周期频率（弧度/秒） */
+  private static readonly WALK_FREQ = 9.5;
+  /** 前后迈步幅度（本地 Z） */
+  private static readonly STRIDE = 0.11;
+  /** 抬脚高度 */
+  private static readonly FOOT_LIFT = 0.08;
+  /** 持枪手前后微摆 */
+  private static readonly ARM_SWING = 0.045;
+  /** 身体上下起伏 */
+  private static readonly BODY_BOB = 0.03;
+  /** 持枪手本地旋转幅度（弧度），带动枪晃 */
+  private static readonly HAND_ROLL = 0.14;
+  private static readonly HAND_PITCH = 0.1;
+  private static readonly HAND_YAW = 0.08;
+
+  /** 站立呼吸：频率（弧度/秒）与幅度 */
+  private static readonly IDLE_FREQ = 2.2;
+  private static readonly IDLE_BODY_BOB = 0.012;
+  private static readonly IDLE_BODY_SWAY = 0.018;
+  private static readonly IDLE_HAND_BOB = 0.01;
+  private static readonly IDLE_HAND_ROLL = 0.04;
+  private static readonly IDLE_HAND_PITCH = 0.03;
 
   private static readonly BODY = 0xf3eee6;
   private static readonly LIMB = 0xf3eee6;
@@ -24,6 +67,32 @@ export class MissFortune extends THREE.Group {
   private static readonly HAT_PINK_BAND = 0xbe185d;
 
   readonly collider: CircleBody;
+
+  private readonly bodyRoot: THREE.Group;
+  private readonly leftHand: THREE.Mesh;
+  private readonly rightHand: THREE.Mesh;
+  private readonly leftFoot: THREE.Mesh;
+  private readonly rightFoot: THREE.Mesh;
+
+  private readonly baseLeftHand = new THREE.Vector3(0.48, 0.62, 0.28);
+  private readonly baseRightHand = new THREE.Vector3(-0.48, 0.62, 0.28);
+  private readonly baseLeftFoot = new THREE.Vector3(0.14, 0.1, 0.02);
+  private readonly baseRightFoot = new THREE.Vector3(-0.14, 0.1, 0.02);
+
+  /** 点地移动目标（XZ）；null 表示无目标（仍可能在减速滑步） */
+  private moveTargetX: number | null = null;
+  private moveTargetZ: number | null = null;
+  /** 当前水平速度（世界 XZ） */
+  private velX = 0;
+  private velZ = 0;
+  /** 走路相位（移动时推进） */
+  private walkPhase = 0;
+  /** 站立呼吸相位（始终推进，停下时用） */
+  private idlePhase = 0;
+  /**
+   * 走路姿态权重 0=纯呼吸 1=满走；平滑过渡，避免站/走硬切。
+   */
+  private moveAnimWeight = 0;
 
   constructor(x = 0, z = 0) {
     super();
@@ -35,8 +104,8 @@ export class MissFortune extends THREE.Group {
 
     this.collider = new CircleBody(this, MissFortune.COLLIDER_RADIUS);
 
-    const bodyRoot = new THREE.Group();
-    this.add(bodyRoot);
+    this.bodyRoot = new THREE.Group();
+    this.add(this.bodyRoot);
 
     const ball = (radius: number, color: number): THREE.Mesh =>
       new THREE.Mesh(
@@ -61,7 +130,7 @@ export class MissFortune extends THREE.Group {
     body.rotation.y = -Math.PI / 2;
     body.castShadow = true;
     body.receiveShadow = true;
-    bodyRoot.add(body);
+    this.bodyRoot.add(body);
 
     // —— 粉色巫师帽 ——
     const hatGroup = new THREE.Group();
@@ -120,19 +189,19 @@ export class MissFortune extends THREE.Group {
     domeMesh.position.y = 0.01;
     domeMesh.castShadow = true;
     hatGroup.add(domeMesh);
-    bodyRoot.add(hatGroup);
+    this.bodyRoot.add(hatGroup);
 
     // —— 双手（对称举枪就绪）——
     // 手球半径 0.1；枪挂在球外侧，只贴合不穿模
-    const leftHand = ball(0.1, MissFortune.LIMB);
-    leftHand.position.set(0.48, 0.62, 0.28);
-    leftHand.castShadow = true;
-    bodyRoot.add(leftHand);
+    this.leftHand = ball(0.1, MissFortune.LIMB);
+    this.leftHand.position.copy(this.baseLeftHand);
+    this.leftHand.castShadow = true;
+    this.bodyRoot.add(this.leftHand);
 
-    const rightHand = ball(0.1, MissFortune.LIMB);
-    rightHand.position.set(-0.48, 0.62, 0.28);
-    rightHand.castShadow = true;
-    bodyRoot.add(rightHand);
+    this.rightHand = ball(0.1, MissFortune.LIMB);
+    this.rightHand.position.copy(this.baseRightHand);
+    this.rightHand.castShadow = true;
+    this.bodyRoot.add(this.rightHand);
 
     // 粉色双枪：握把贴手球，枪身朝前；左手镜像右手姿态
     // 手半径 0.1；原点≈握把顶端接触点，整体在球外
@@ -144,7 +213,7 @@ export class MissFortune extends THREE.Group {
     rightGun.position.copy(gunPos);
     rightGun.rotation.order = 'YXZ';
     rightGun.rotation.set(-0.22, 0.03, -0.15);
-    rightHand.add(rightGun);
+    this.rightHand.add(rightGun);
 
     const leftGun = createPinkGun();
     leftGun.name = 'PinkGun_Left';
@@ -152,18 +221,291 @@ export class MissFortune extends THREE.Group {
     leftGun.rotation.order = 'YXZ';
     // Y / Z 取反，镜像到左手
     leftGun.rotation.set(-0.22, -0.03, 0.15);
-    leftHand.add(leftGun);
+    this.leftHand.add(leftGun);
 
     // —— 双脚 ——
-    const leftFoot = ball(0.1, MissFortune.LIMB);
-    leftFoot.position.set(0.14, 0.1, 0.02);
-    leftFoot.castShadow = true;
-    this.add(leftFoot);
+    this.leftFoot = ball(0.1, MissFortune.LIMB);
+    this.leftFoot.position.copy(this.baseLeftFoot);
+    this.leftFoot.castShadow = true;
+    this.add(this.leftFoot);
 
-    const rightFoot = ball(0.1, MissFortune.LIMB);
-    rightFoot.position.set(-0.14, 0.1, 0.02);
-    rightFoot.castShadow = true;
-    this.add(rightFoot);
+    this.rightFoot = ball(0.1, MissFortune.LIMB);
+    this.rightFoot.position.copy(this.baseRightFoot);
+    this.rightFoot.castShadow = true;
+    this.add(this.rightFoot);
+
+    this.applyLocomotionPose(0);
+  }
+
+  /** 是否在移动（有目标或仍在减速） */
+  get isMoving(): boolean {
+    if (this.moveTargetX != null && this.moveTargetZ != null) return true;
+    return this.speed() > MissFortune.STOP_SPEED;
+  }
+
+  /** 右键点地：设置地面目标（世界 XZ） */
+  moveTo(x: number, z: number): void {
+    if (!Number.isFinite(x) || !Number.isFinite(z)) return;
+    this.moveTargetX = x;
+    this.moveTargetZ = z;
+  }
+
+  /** 取消点地目标（速度会自然刹停，不清零） */
+  stopMoving(): void {
+    this.moveTargetX = null;
+    this.moveTargetZ = null;
+  }
+
+  private speed(): number {
+    return Math.hypot(this.velX, this.velZ);
+  }
+
+  /**
+   * 每帧推进点地移动 / 站立呼吸：
+   * - 移动：加减速 + 转向 + 走路/呼吸姿态混合
+   * - 站立：轻微呼吸起伏与持枪微晃
+   * 碰撞推挤由场景在本帧末 resolve。
+   */
+  updateMovement(delta: number): void {
+    if (!(delta > 0) || !Number.isFinite(delta)) return;
+
+    // 呼吸相位始终走，切换站/走时更自然
+    this.idlePhase += delta * MissFortune.IDLE_FREQ;
+
+    let desiredVelX = 0;
+    let desiredVelZ = 0;
+    let faceX = this.velX;
+    let faceZ = this.velZ;
+
+    if (this.moveTargetX != null && this.moveTargetZ != null) {
+      const dx = this.moveTargetX - this.position.x;
+      const dz = this.moveTargetZ - this.position.z;
+      const dist = Math.hypot(dx, dz);
+
+      if (dist <= MissFortune.ARRIVE_EPS) {
+        // 贴到目标，进入刹车
+        this.position.x = this.moveTargetX;
+        this.position.z = this.moveTargetZ;
+        this.stopMoving();
+        desiredVelX = 0;
+        desiredVelZ = 0;
+      } else {
+        const inv = 1 / dist;
+        const dirX = dx * inv;
+        const dirZ = dz * inv;
+        faceX = dirX;
+        faceZ = dirZ;
+
+        // 默认冲满速；仅在进入刹车距离后按运动学收速（满速约 0.1s 刹停）
+        let desiredSpeed = MissFortune.MOVE_SPEED;
+        const spd = this.speed();
+        const brakeDist =
+          (spd * spd) / (2 * Math.max(MissFortune.MOVE_DECEL, 1e-4));
+        if (dist <= brakeDist && brakeDist > 1e-6) {
+          desiredSpeed = Math.min(
+            desiredSpeed,
+            Math.sqrt(
+              Math.max(0, 2 * MissFortune.MOVE_DECEL * dist),
+            ),
+          );
+        }
+
+        desiredVelX = dirX * desiredSpeed;
+        desiredVelZ = dirZ * desiredSpeed;
+      }
+    }
+
+    // 加速用 ACCEL，减速/改向用 DECEL
+    const curSpd = this.speed();
+    const desSpd = Math.hypot(desiredVelX, desiredVelZ);
+    const rate =
+      desSpd >= curSpd - 1e-4
+        ? MissFortune.MOVE_ACCEL
+        : MissFortune.MOVE_DECEL;
+    const maxDeltaV = rate * delta;
+    const dvx = desiredVelX - this.velX;
+    const dvz = desiredVelZ - this.velZ;
+    const dLen = Math.hypot(dvx, dvz);
+    if (dLen <= maxDeltaV || dLen < 1e-8) {
+      this.velX = desiredVelX;
+      this.velZ = desiredVelZ;
+    } else {
+      const s = maxDeltaV / dLen;
+      this.velX += dvx * s;
+      this.velZ += dvz * s;
+    }
+
+    // 积分位移，避免单帧冲过目标
+    let moveX = this.velX * delta;
+    let moveZ = this.velZ * delta;
+    if (this.moveTargetX != null && this.moveTargetZ != null) {
+      const dx = this.moveTargetX - this.position.x;
+      const dz = this.moveTargetZ - this.position.z;
+      const dist = Math.hypot(dx, dz);
+      const step = Math.hypot(moveX, moveZ);
+      if (step > dist && dist > 1e-8) {
+        const k = dist / step;
+        moveX *= k;
+        moveZ *= k;
+        this.velX *= k;
+        this.velZ *= k;
+      }
+    }
+
+    this.position.x += moveX;
+    this.position.z += moveZ;
+
+    const spd = this.speed();
+
+    // 有速度或朝目标时平滑转向（面朝期望移动方向）
+    if (Math.hypot(faceX, faceZ) > 1e-5) {
+      const desiredYaw = Math.atan2(faceX, faceZ);
+      this.rotation.y = stepAngleToward(
+        this.rotation.y,
+        desiredYaw,
+        MissFortune.TURN_SPEED * delta,
+      );
+    } else if (spd > MissFortune.STOP_SPEED) {
+      const desiredYaw = Math.atan2(this.velX, this.velZ);
+      this.rotation.y = stepAngleToward(
+        this.rotation.y,
+        desiredYaw,
+        MissFortune.TURN_SPEED * delta,
+      );
+    }
+
+    if (
+      this.moveTargetX == null &&
+      this.moveTargetZ == null &&
+      spd <= MissFortune.STOP_SPEED
+    ) {
+      this.velX = 0;
+      this.velZ = 0;
+    }
+
+    // 走路权重平滑追速度比，禁止站/走硬切
+    const speedRatio = THREE.MathUtils.clamp(
+      spd / MissFortune.MOVE_SPEED,
+      0,
+      1,
+    );
+    const weightTarget = speedRatio < 0.06 ? 0 : speedRatio;
+    const weightRate = weightTarget >= this.moveAnimWeight ? 10 : 5.5;
+    this.moveAnimWeight = stepScalarToward(
+      this.moveAnimWeight,
+      weightTarget,
+      weightRate * delta,
+    );
+
+    if (this.moveAnimWeight > 0.001) {
+      this.walkPhase +=
+        delta *
+        MissFortune.WALK_FREQ *
+        (0.55 + 0.45 * this.moveAnimWeight);
+    }
+
+    this.applyLocomotionPose(this.moveAnimWeight);
+  }
+
+  /**
+   * 统一姿态：呼吸与走路按 weight 混合后一次写入。
+   * weight=0 纯站立，weight=1 满走。
+   */
+  private applyLocomotionPose(walkWeight: number): void {
+    const w = THREE.MathUtils.clamp(walkWeight, 0, 1);
+    const breath = Math.sin(this.idlePhase);
+    const breath2 = Math.sin(this.idlePhase * 0.55 + 0.8);
+
+    // —— 站立通道 ——
+    const idleBodyY = breath * MissFortune.IDLE_BODY_BOB;
+    const idleBodyRz = breath2 * MissFortune.IDLE_BODY_SWAY;
+    const idleBodyRx = 0.03 + breath * 0.012;
+
+    const idleHandLY = this.baseLeftHand.y + breath * MissFortune.IDLE_HAND_BOB;
+    const idleHandLZ = this.baseLeftHand.z + breath2 * 0.006;
+    const idleHandRY =
+      this.baseRightHand.y + breath * MissFortune.IDLE_HAND_BOB * 0.9;
+    const idleHandRZ = this.baseRightHand.z - breath2 * 0.006;
+
+    const idleHandLRx = breath * MissFortune.IDLE_HAND_PITCH;
+    const idleHandLRy = breath2 * 0.02;
+    const idleHandLRz = breath2 * MissFortune.IDLE_HAND_ROLL;
+    const idleHandRRx = -breath * MissFortune.IDLE_HAND_PITCH * 0.85;
+    const idleHandRRy = -breath2 * 0.02;
+    const idleHandRRz = -breath2 * MissFortune.IDLE_HAND_ROLL;
+
+    // —— 走路通道 ——
+    const s = Math.sin(this.walkPhase);
+    const c = Math.cos(this.walkPhase);
+    const stepLift = Math.abs(s);
+    const amp = Math.max(w, 0.001);
+
+    const walkBodyY = stepLift * MissFortune.BODY_BOB * amp;
+    const walkBodyRz = s * 0.045 * amp;
+    const walkBodyRx = 0.03 + stepLift * 0.025 * amp;
+
+    const walkFootLY =
+      this.baseLeftFoot.y + Math.max(0, c) * MissFortune.FOOT_LIFT * amp;
+    const walkFootLZ = this.baseLeftFoot.z + s * MissFortune.STRIDE * amp;
+    const walkFootRY =
+      this.baseRightFoot.y + Math.max(0, -c) * MissFortune.FOOT_LIFT * amp;
+    const walkFootRZ = this.baseRightFoot.z - s * MissFortune.STRIDE * amp;
+
+    const walkHandLY = this.baseLeftHand.y + stepLift * 0.02 * amp;
+    const walkHandLZ = this.baseLeftHand.z - s * MissFortune.ARM_SWING * amp;
+    const walkHandRY = this.baseRightHand.y + stepLift * 0.02 * amp;
+    const walkHandRZ = this.baseRightHand.z + s * MissFortune.ARM_SWING * amp;
+
+    const walkHandLRx = c * MissFortune.HAND_PITCH * amp;
+    const walkHandLRy = -s * MissFortune.HAND_YAW * amp;
+    const walkHandLRz = s * MissFortune.HAND_ROLL * amp;
+    const walkHandRRx = -c * MissFortune.HAND_PITCH * amp;
+    const walkHandRRy = s * MissFortune.HAND_YAW * amp;
+    const walkHandRRz = -s * MissFortune.HAND_ROLL * amp;
+
+    const iw = 1 - w;
+
+    // 每帧绝对写入（含 z=0），急停加法才不会漂移/叠双重复位
+    this.bodyRoot.position.set(
+      0,
+      idleBodyY * iw + walkBodyY * w,
+      0,
+    );
+    this.bodyRoot.rotation.z = idleBodyRz * iw + walkBodyRz * w;
+    this.bodyRoot.rotation.x = idleBodyRx * iw + walkBodyRx * w;
+
+    this.leftFoot.position.set(
+      this.baseLeftFoot.x,
+      this.baseLeftFoot.y * iw + walkFootLY * w,
+      this.baseLeftFoot.z * iw + walkFootLZ * w,
+    );
+    this.rightFoot.position.set(
+      this.baseRightFoot.x,
+      this.baseRightFoot.y * iw + walkFootRY * w,
+      this.baseRightFoot.z * iw + walkFootRZ * w,
+    );
+
+    this.leftHand.position.set(
+      this.baseLeftHand.x,
+      idleHandLY * iw + walkHandLY * w,
+      idleHandLZ * iw + walkHandLZ * w,
+    );
+    this.rightHand.position.set(
+      this.baseRightHand.x,
+      idleHandRY * iw + walkHandRY * w,
+      idleHandRZ * iw + walkHandRZ * w,
+    );
+
+    this.leftHand.rotation.set(
+      idleHandLRx * iw + walkHandLRx * w,
+      idleHandLRy * iw + walkHandLRy * w,
+      idleHandLRz * iw + walkHandLRz * w,
+    );
+    this.rightHand.rotation.set(
+      idleHandRRx * iw + walkHandRRx * w,
+      idleHandRRy * iw + walkHandRRy * w,
+      idleHandRRz * iw + walkHandRRz * w,
+    );
   }
 
   dispose(): void {
@@ -180,6 +522,42 @@ export class MissFortune extends THREE.Group {
       }
     });
   }
+}
+
+/**
+ * 将 current 沿最短路径转向 target，本帧最多转 maxDelta 弧度。
+ * 返回归一化到 (-π, π] 的角度。
+ */
+function stepAngleToward(
+  current: number,
+  target: number,
+  maxDelta: number,
+): number {
+  if (!(maxDelta > 0)) return normalizeAngle(current);
+  let delta = normalizeAngle(target - current);
+  if (Math.abs(delta) <= maxDelta) {
+    return normalizeAngle(target);
+  }
+  return normalizeAngle(current + Math.sign(delta) * maxDelta);
+}
+
+/** 标量向 target 靠近，步长不超过 maxDelta */
+function stepScalarToward(
+  current: number,
+  target: number,
+  maxDelta: number,
+): number {
+  if (!(maxDelta > 0)) return current;
+  const d = target - current;
+  if (Math.abs(d) <= maxDelta) return target;
+  return current + Math.sign(d) * maxDelta;
+}
+
+function normalizeAngle(rad: number): number {
+  let a = rad;
+  while (a <= -Math.PI) a += Math.PI * 2;
+  while (a > Math.PI) a -= Math.PI * 2;
+  return a;
 }
 
 /** 身体正面可爱表情贴图（本文件私有，不共享小兵实现） */

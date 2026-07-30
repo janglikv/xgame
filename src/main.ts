@@ -47,11 +47,13 @@ function bootstrap(): void {
     moveSpeed: 1.8,
     lookSpeed: 0.002,
   });
+  controls.setFollowTarget(scene.hero);
 
   // 从本地恢复设置
   const settings: GameSettingsSnapshot = loadGameSettings();
   scene.setAxesVisible(settings.showAxes);
   scene.setColliderMarkersVisible(settings.showColliderMarkers);
+  controls.setViewMode(settings.cameraLocked ? 'locked' : 'free');
 
   // 全局亮度压暗层（主场景后、设置面板前）
   const screenBrightness = new ScreenBrightness();
@@ -66,6 +68,9 @@ function bootstrap(): void {
     if (patch.brightnessUi !== undefined) {
       settings.brightnessUi = patch.brightnessUi;
     }
+    if (patch.cameraLocked !== undefined) {
+      settings.cameraLocked = patch.cameraLocked;
+    }
     saveGameSettings(settings);
   };
 
@@ -74,6 +79,7 @@ function bootstrap(): void {
     initialAxesVisible: settings.showAxes,
     initialColliderMarkersVisible: settings.showColliderMarkers,
     initialBrightness: settings.brightnessUi,
+    initialCameraLocked: settings.cameraLocked,
     onAxesChange: (visible) => {
       scene.setAxesVisible(visible);
       persistSettings({ showAxes: visible });
@@ -88,9 +94,37 @@ function bootstrap(): void {
       applyBrightnessUi(screenBrightness, ui01);
       persistSettings({ brightnessUi: ui01 });
     },
+    onCameraLockChange: (locked) => {
+      controls.setViewMode(locked ? 'locked' : 'free');
+      persistSettings({ cameraLocked: locked });
+    },
     onOpenChange: (open) => controls.setEnabled(!open),
   });
   escMenu.setSize(width, height);
+
+  // 锁定视角：右键点地板 → 英雄移动
+  const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+  const raycaster = new THREE.Raycaster();
+  const pointerNdc = new THREE.Vector2();
+  const hitPoint = new THREE.Vector3();
+
+  const onPointerDownMove = (e: PointerEvent): void => {
+    if (e.button !== 2) return;
+    if (escMenu.isOpen || !controls.isLocked) return;
+    e.preventDefault();
+
+    const rect = renderer.domElement.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+    pointerNdc.set(
+      ((e.clientX - rect.left) / rect.width) * 2 - 1,
+      -(((e.clientY - rect.top) / rect.height) * 2 - 1),
+    );
+    raycaster.setFromCamera(pointerNdc, camera);
+    if (!raycaster.ray.intersectPlane(groundPlane, hitPoint)) return;
+    scene.commandHeroMoveTo(hitPoint.x, hitPoint.z);
+  };
+
+  renderer.domElement.addEventListener('pointerdown', onPointerDownMove);
 
   const onResize = (): void => {
     const { width: w, height: h } = getSize();
@@ -110,8 +144,9 @@ function bootstrap(): void {
     requestAnimationFrame(tick);
     const delta = clock.getDelta();
 
-    controls.update(delta);
+    // 先推进场景（英雄位移），再跟随镜头
     scene.update(delta);
+    controls.update(delta);
 
     renderer.render(scene, camera);
     // 压暗世界画面，设置面板保持清晰可读

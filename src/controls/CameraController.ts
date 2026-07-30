@@ -18,9 +18,14 @@ export interface CameraControllerOptions {
   persistInterval?: number;
 }
 
+/** 相机模式：自由漫游 / 锁定跟随英雄 */
+export type CameraViewMode = 'free' | 'locked';
+
 /**
- * 自由视角相机：WASD 水平移动 + Space/Shift 升降 + 按住左键拖拽转向。
- * 默认将位姿缓存到 localStorage，刷新后恢复。
+ * 相机控制：
+ * - 自由视角：WASD 水平移动 + Space/Shift 升降 + 按住左键拖拽转向
+ * - 锁定视角：进入时快照「相对英雄的位移 + 当前朝向」，之后随英雄平移保持该关系
+ * 自由模式默认将位姿缓存到 localStorage。
  */
 export class CameraController {
   private readonly camera: THREE.PerspectiveCamera;
@@ -40,6 +45,18 @@ export class CameraController {
   private enabled = true;
   private persistDirty = false;
   private persistElapsed = 0;
+
+  /** free = 自由漫游；locked = 跟随英雄 */
+  private viewMode: CameraViewMode = 'free';
+  private followTarget: THREE.Object3D | null = null;
+  /**
+   * 锁定时快照：相机相对目标的世界空间位移
+   * （camPos = targetPos + offset）
+   */
+  private readonly followOffset = new THREE.Vector3();
+  /** 锁定时快照：相机世界旋转（保持进入锁定时的视线方向） */
+  private readonly followQuaternion = new THREE.Quaternion();
+  private hasFollowSnapshot = false;
 
   private readonly forward = new THREE.Vector3();
   private readonly right = new THREE.Vector3();
@@ -114,8 +131,9 @@ export class CameraController {
     };
 
     this.onMouseDown = (e: MouseEvent) => {
-      if (!this.enabled) return;
-      if (e.button === 0) { // 左键
+      if (!this.enabled || this.viewMode !== 'free') return;
+      if (e.button === 0) {
+        // 左键：自由视角拖拽转向
         this.isMouseDown = true;
         this.lastMouseX = e.clientX;
         this.lastMouseY = e.clientY;
@@ -126,12 +144,14 @@ export class CameraController {
     this.onMouseUp = (e: MouseEvent) => {
       if (e.button === 0) {
         this.isMouseDown = false;
-        this.domElement.style.cursor = 'grab';
+        this.refreshCursor();
       }
     };
 
     this.onMouseMove = (e: MouseEvent) => {
-      if (!this.enabled || !this.isMouseDown) return;
+      if (!this.enabled || this.viewMode !== 'free' || !this.isMouseDown) {
+        return;
+      }
 
       const movementX = e.clientX - this.lastMouseX;
       const movementY = e.clientY - this.lastMouseY;
@@ -169,8 +189,85 @@ export class CameraController {
     this.domElement.addEventListener('contextmenu', this.onContextMenu);
     window.addEventListener('pagehide', this.onPageHide);
 
-    this.domElement.style.cursor = 'grab';
+    this.refreshCursor();
     this.domElement.tabIndex = 0;
+  }
+
+  get mode(): CameraViewMode {
+    return this.viewMode;
+  }
+
+  get isLocked(): boolean {
+    return this.viewMode === 'locked';
+  }
+
+  /**
+   * 切换自由 / 锁定视角。
+   * 进入锁定：以当前镜头相对英雄的位置与朝向为快照；
+   * 退出锁定：从当前朝向恢复自由 yaw/pitch。
+   */
+  setViewMode(mode: CameraViewMode): void {
+    if (this.viewMode === mode) return;
+    this.viewMode = mode;
+    this.clearKeys();
+    this.isMouseDown = false;
+
+    if (mode === 'locked') {
+      this.captureFollowSnapshot();
+      this.applyFollowPose();
+    } else {
+      this.hasFollowSnapshot = false;
+      this.syncAnglesFromCamera();
+      this.applyLook();
+      this.markPersistDirty();
+    }
+    this.refreshCursor();
+  }
+
+  /** 锁定视角时跟随的目标（通常为英雄） */
+  setFollowTarget(target: THREE.Object3D | null): void {
+    this.followTarget = target;
+    // 已锁定时不重拍快照，避免目标引用更新冲掉当前锁定关系
+    if (this.viewMode === 'locked' && this.hasFollowSnapshot) {
+      this.applyFollowPose();
+    }
+  }
+
+  private refreshCursor(): void {
+    if (!this.enabled) {
+      this.domElement.style.cursor = 'default';
+      return;
+    }
+    if (this.viewMode === 'locked') {
+      this.domElement.style.cursor = 'default';
+      return;
+    }
+    this.domElement.style.cursor = this.isMouseDown ? 'grabbing' : 'grab';
+  }
+
+  /**
+   * 记录进入锁定瞬间的相对位移与相机旋转。
+   * 之后英雄移动时：cam = hero + offset，quaternion 保持不变。
+   */
+  private captureFollowSnapshot(): void {
+    if (!this.followTarget) {
+      this.hasFollowSnapshot = false;
+      return;
+    }
+    this.followOffset
+      .copy(this.camera.position)
+      .sub(this.followTarget.position);
+    this.followQuaternion.copy(this.camera.quaternion);
+    this.hasFollowSnapshot = true;
+  }
+
+  /** 用快照相对关系把相机贴到目标上（位置平移，朝向锁定） */
+  private applyFollowPose(): void {
+    if (!this.followTarget || !this.hasFollowSnapshot) return;
+    this.camera.position
+      .copy(this.followTarget.position)
+      .add(this.followOffset);
+    this.camera.quaternion.copy(this.followQuaternion);
   }
 
   /** 从当前相机朝向同步 yaw / pitch */
@@ -230,7 +327,11 @@ export class CameraController {
 
   setEnabled(enabled: boolean): void {
     this.enabled = enabled;
-    if (!enabled) this.clearKeys();
+    if (!enabled) {
+      this.clearKeys();
+      this.isMouseDown = false;
+    }
+    this.refreshCursor();
   }
 
   get isEnabled(): boolean {
@@ -238,9 +339,16 @@ export class CameraController {
   }
 
   /**
-   * 每帧调用：根据按键移动相机（只改位置，朝向由鼠标控制）。
+   * 每帧调用：
+   * - 锁定：镜头跟随目标
+   * - 自由：按键移动（朝向由鼠标控制）
    */
   update(delta: number): void {
+    if (this.viewMode === 'locked') {
+      this.applyFollowPose();
+      return;
+    }
+
     if (this.persist) {
       this.persistElapsed += delta;
       this.flushPersist(false);

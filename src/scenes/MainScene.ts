@@ -35,7 +35,7 @@ export class MainScene extends THREE.Scene {
   private readonly defenseTowers: DefenseTower[];
   private readonly minionSpawner: MinionWaveSpawner;
   private readonly projectiles: ProjectileManager;
-  /** 第一个英雄：厄运小姐（独立模型，无小兵 AI） */
+  /** 第一个英雄：厄运小姐（独立模型；锁定视角下可点地移动） */
   private readonly missFortune: MissFortune;
 
   private axesVisible = true;
@@ -108,6 +108,26 @@ export class MainScene extends THREE.Scene {
 
   get showColliderMarkers(): boolean {
     return this.colliderMarkersVisible;
+  }
+
+  /** 可操控英雄（镜头跟随 / 点地移动目标） */
+  get hero(): MissFortune {
+    return this.missFortune;
+  }
+
+  /**
+   * 英雄点地移动：右键落点（世界 XZ）。
+   * Z 限制在兵线走廊内（考虑碰撞半径）；X 放宽到含两端平台。
+   */
+  commandHeroMoveTo(x: number, z: number): void {
+    if (!Number.isFinite(x) || !Number.isFinite(z)) return;
+    const r = this.missFortune.collider.radius;
+    const halfZ = DirtFloor.HALF_Z;
+    // 走廊 + 两端八边形大致可达：水晶在 ±18 附近
+    const maxX = 20;
+    const clampedX = THREE.MathUtils.clamp(x, -maxX + r, maxX - r);
+    const clampedZ = THREE.MathUtils.clamp(z, -halfZ + r, halfZ - r);
+    this.missFortune.moveTo(clampedX, clampedZ);
   }
 
   /** 开关坐标参考线（XYZ 轴 / 网格 / 刻度） */
@@ -209,6 +229,9 @@ export class MainScene extends THREE.Scene {
     for (const tower of this.defenseTowers) {
       tower.update(delta, combatUnits, this.projectiles);
     }
+
+    // 英雄点地移动（无小兵 AI）
+    this.missFortune.updateMovement(delta);
 
     // 小兵 AI：前摇结束只发射弹道，不直接扣血（建筑含水晶）
     this.minionSpawner.update(delta, structures, this.projectiles);

@@ -12,16 +12,23 @@ export interface EscMenuOptions {
   onSkipTime: (gameSeconds: number, realSeconds: number) => void;
   /** 全局亮度 0~1（1=最亮） */
   onBrightnessChange: (value: number) => void;
+  /**
+   * 视角模式：true = 锁定（跟随英雄 + 右键点地移动）；
+   * false = 自由（WASD / 左键拖拽）。
+   */
+  onCameraLockChange: (locked: boolean) => void;
   /** 面板开/关（用于暂停相机等） */
   onOpenChange?: (open: boolean) => void;
   initialAxesVisible?: boolean;
   initialColliderMarkersVisible?: boolean;
   initialBrightness?: number;
+  initialCameraLocked?: boolean;
 }
 
 type HitId =
   | 'axes'
   | 'colliders'
+  | 'cameraLock'
   | 'brightness'
   | 'skip1m'
   | 'skip3m'
@@ -72,6 +79,7 @@ export class EscMenu {
     realSeconds: number,
   ) => void;
   private readonly onBrightnessChange: (value: number) => void;
+  private readonly onCameraLockChange: (locked: boolean) => void;
   private readonly onOpenChange?: (open: boolean) => void;
 
   private readonly onKeyDown: (e: KeyboardEvent) => void;
@@ -85,6 +93,8 @@ export class EscMenu {
   private open = false;
   private axesOn: boolean;
   private collidersOn: boolean;
+  /** true = 锁定视角 */
+  private cameraLocked: boolean;
   /** 全局亮度 0~1 */
   private brightness: number;
   private hoverId: HitId | null = null;
@@ -101,9 +111,11 @@ export class EscMenu {
     this.onColliderMarkersChange = options.onColliderMarkersChange;
     this.onSkipTime = options.onSkipTime;
     this.onBrightnessChange = options.onBrightnessChange;
+    this.onCameraLockChange = options.onCameraLockChange;
     this.onOpenChange = options.onOpenChange;
     this.axesOn = options.initialAxesVisible ?? true;
     this.collidersOn = options.initialColliderMarkersVisible ?? true;
+    this.cameraLocked = options.initialCameraLocked ?? false;
     this.brightness = THREE.MathUtils.clamp(
       options.initialBrightness ?? 1,
       0,
@@ -309,6 +321,11 @@ export class EscMenu {
         this.dirty = true;
         this.onColliderMarkersChange(this.collidersOn);
         break;
+      case 'cameraLock':
+        this.cameraLocked = !this.cameraLocked;
+        this.dirty = true;
+        this.onCameraLockChange(this.cameraLocked);
+        break;
       case 'skip1m':
         // 1 分钟游戏时间，1 秒真实时间完成
         this.onSkipTime(60, 1);
@@ -338,6 +355,7 @@ export class EscMenu {
     const interactive =
       this.hoverId === 'axes' ||
       this.hoverId === 'colliders' ||
+      this.hoverId === 'cameraLock' ||
       this.hoverId === 'brightness' ||
       this.hoverId === 'skip1m' ||
       this.hoverId === 'skip3m' ||
@@ -431,7 +449,8 @@ export class EscMenu {
     const rowW = W - pad * 2;
 
     const brightH = 118;
-    const brightY = listY + (rowH + rowGap) * 2 + 8;
+    // 三行开关：坐标 / 碰撞 / 锁定视角
+    const brightY = listY + (rowH + rowGap) * 3 + 8;
 
     const skipY = brightY + brightH + 52;
     const skipH = 72;
@@ -444,6 +463,13 @@ export class EscMenu {
         id: 'colliders',
         x: pad,
         y: listY + rowH + rowGap,
+        w: rowW,
+        h: rowH,
+      },
+      {
+        id: 'cameraLock',
+        x: pad,
+        y: listY + (rowH + rowGap) * 2,
         w: rowW,
         h: rowH,
       },
@@ -521,6 +547,16 @@ export class EscMenu {
       this.collidersOn,
       this.hoverId === 'colliders',
       this.pressId === 'colliders',
+    );
+    this.drawToggleRow(
+      this.region('cameraLock'),
+      '锁定视角',
+      this.cameraLocked
+        ? '保持当前相对位置与朝向跟随 · 右键点地'
+        : '关闭后为自由视角（WASD / 拖拽）',
+      this.cameraLocked,
+      this.hoverId === 'cameraLock',
+      this.pressId === 'cameraLock',
     );
 
     // 全局亮度

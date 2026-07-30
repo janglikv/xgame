@@ -11,12 +11,18 @@ export interface GameSettingsSnapshot {
    * 实际压暗强度由 ScreenBrightness.MIN/MAX 映射。
    */
   brightnessUi: number;
+  /**
+   * true = 锁定视角（镜头跟随英雄 + 右键点地移动）；
+   * false = 自由视角（WASD / 拖拽）。
+   */
+  cameraLocked: boolean;
 }
 
 export const DEFAULT_GAME_SETTINGS: GameSettingsSnapshot = {
   showAxes: true,
   showColliderMarkers: true,
   brightnessUi: 1,
+  cameraLocked: false,
 };
 
 export function loadGameSettings(): GameSettingsSnapshot {
@@ -40,6 +46,10 @@ export function loadGameSettings(): GameSettingsSnapshot {
           ? data.brightnessUi
           : DEFAULT_GAME_SETTINGS.brightnessUi,
       ),
+      cameraLocked:
+        typeof data.cameraLocked === 'boolean'
+          ? data.cameraLocked
+          : DEFAULT_GAME_SETTINGS.cameraLocked,
     };
   } catch {
     return { ...DEFAULT_GAME_SETTINGS };
@@ -52,6 +62,7 @@ export function saveGameSettings(state: GameSettingsSnapshot): void {
       showAxes: !!state.showAxes,
       showColliderMarkers: !!state.showColliderMarkers,
       brightnessUi: clamp01(state.brightnessUi),
+      cameraLocked: !!state.cameraLocked,
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
   } catch {
