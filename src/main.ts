@@ -23,6 +23,8 @@ function bootstrap(): void {
   renderer.setSize(width, height);
   renderer.setClearColor(0x0b0f14, 1);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.domElement.style.display = 'block';
   renderer.domElement.style.width = '100%';
   renderer.domElement.style.height = '100%';

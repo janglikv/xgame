@@ -19,7 +19,6 @@ export class Minion extends THREE.Group {
   private readonly rightHand: THREE.Mesh;
   private readonly leftFoot: THREE.Mesh;
   private readonly rightFoot: THREE.Mesh;
-  private elapsed = 0;
 
   /**
    * @param team 蓝方蓝帽面朝 +X，红方红帽面朝 -X
@@ -131,41 +130,40 @@ export class Minion extends THREE.Group {
 
     this.bodyRoot.add(hatGroup);
 
-    // 2 / 3. 双手（略离身体，不贴不远）
+    // 2 / 3. 双手（小兵自身面向 +Z：左手为 +X，右手为 -X）
     this.leftHand = ball(0.1, Minion.LIMB);
-    this.leftHand.position.set(-0.54, 0.48, 0.1);
+    this.leftHand.position.set(0.47, 0.48, 0.1);
     this.leftHand.castShadow = true;
     this.bodyRoot.add(this.leftHand);
 
     this.rightHand = ball(0.1, Minion.LIMB);
-    this.rightHand.position.set(0.54, 0.48, 0.1);
+    this.rightHand.position.set(-0.47, 0.48, 0.1);
     this.rightHand.castShadow = true;
     this.bodyRoot.add(this.rightHand);
 
-    // 4 / 5. 双脚（贴地，与身体下沿略分开，左右不过分外张）
+    // 给右手配持卡通短剑
+    const sword = createCartoonShortSword();
+    // 调整剑在右手中的持握位置与朝向（向前上方斜指，向外倾斜）
+    sword.position.set(0, 0, 0.02);
+    sword.rotation.x = Math.PI / 3.2; // 向上向前方倾斜
+    sword.rotation.z = Math.PI / 8;   // 向右外侧微微倾斜
+    sword.rotation.y = -Math.PI / 6;  // 剑刃朝向
+    this.rightHand.add(sword);
+
+    // 4 / 5. 双脚（脚底精确贴合 Y = 0 地面，左脚为 +X，右脚为 -X）
     this.leftFoot = ball(0.1, Minion.LIMB);
-    this.leftFoot.position.set(-0.14, 0.12, 0.02);
+    this.leftFoot.position.set(0.14, 0.10, 0.02);
     this.leftFoot.castShadow = true;
     this.add(this.leftFoot);
 
     this.rightFoot = ball(0.1, Minion.LIMB);
-    this.rightFoot.position.set(0.14, 0.12, 0.02);
+    this.rightFoot.position.set(-0.14, 0.10, 0.02);
     this.rightFoot.castShadow = true;
     this.add(this.rightFoot);
   }
 
-  update(delta: number): void {
-    this.elapsed += delta;
-    const t = this.elapsed;
-
-    const breathe = 1 + Math.sin(t * 2.2) * 0.015;
-    this.body.scale.setScalar(breathe);
-    this.bodyRoot.position.y = Math.sin(t * 2.2) * 0.01;
-
-    this.leftHand.position.y = 0.48 + Math.sin(t * 1.8) * 0.02;
-    this.rightHand.position.y = 0.48 + Math.sin(t * 1.8 + Math.PI) * 0.02;
-    this.leftFoot.position.y = 0.12 + Math.sin(t * 2.6) * 0.012;
-    this.rightFoot.position.y = 0.12 + Math.sin(t * 2.6 + Math.PI) * 0.012;
+  update(_delta: number): void {
+    // 呼吸/浮动动画已删除，保持静态贴地状态
   }
 
   dispose(): void {
@@ -230,7 +228,7 @@ function createBodyFaceTexture(
   drawBlush(cx - eyeGap * 1.55);
   drawBlush(cx + eyeGap * 1.55);
 
-  // —— 短小弧形小眉毛 ——
+  // —— 短小弧形小眉毛（贴近眼睛，微微降低）——
   ctx.strokeStyle = darkBrown;
   ctx.lineWidth = height * 0.016;
   ctx.lineCap = 'round';
@@ -239,7 +237,7 @@ function createBodyFaceTexture(
   ctx.beginPath();
   ctx.ellipse(
     cx - eyeGap - width * 0.005,
-    eyeY - eyeRy * 1.35,
+    eyeY - eyeRy * 1.15,
     eyeRx * 0.5,
     eyeRy * 0.5,
     0,
@@ -252,7 +250,7 @@ function createBodyFaceTexture(
   ctx.beginPath();
   ctx.ellipse(
     cx + eyeGap + width * 0.005,
-    eyeY - eyeRy * 1.35,
+    eyeY - eyeRy * 1.15,
     eyeRx * 0.5,
     eyeRy * 0.5,
     0,
@@ -350,3 +348,74 @@ function createBodyFaceTexture(
   texture.needsUpdate = true;
   return texture;
 }
+
+/**
+ * 极简短剑：剑首 + 握柄 + 一字护手 + 扁平尖刃。
+ * 沿本地 +Y 伸出（剑柄在下、剑尖在上），整体尺寸适配手球半径 ~0.1。
+ */
+function createCartoonShortSword(): THREE.Group {
+  const sword = new THREE.Group();
+
+  const steel = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    roughness: 0.28,
+    metalness: 0.7,
+  });
+  const gripMat = new THREE.MeshStandardMaterial({
+    color: 0x5c3a21,
+    roughness: 0.8,
+    metalness: 0.05,
+  });
+
+  // 1. 剑首：小金属球
+  const pommel = new THREE.Mesh(new THREE.SphereGeometry(0.028, 10, 10), steel);
+  pommel.position.y = 0;
+  pommel.castShadow = true;
+  sword.add(pommel);
+
+  // 2. 握柄：棕色短圆柱
+  const handle = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.02, 0.022, 0.12, 10),
+    gripMat,
+  );
+  handle.position.y = 0.07;
+  handle.castShadow = true;
+  sword.add(handle);
+
+  // 3. 护手：简单一字横档
+  const guard = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.022, 0.036), steel);
+  guard.position.y = 0.14;
+  guard.castShadow = true;
+  sword.add(guard);
+
+  // 4. 剑身：扁平轮廓挤出（底部宽、收尖），一眼就是短剑
+  // 本地 Shape 在 XY，挤出沿 +Z；建好后绕 X 转正，使剑刃沿 +Y
+  const outline = new THREE.Shape();
+  outline.moveTo(0, 0.3); // 剑尖
+  outline.lineTo(0.038, 0.22);
+  outline.lineTo(0.042, 0.04);
+  outline.lineTo(0.04, 0); // 护手侧根部
+  outline.lineTo(-0.04, 0);
+  outline.lineTo(-0.042, 0.04);
+  outline.lineTo(-0.038, 0.22);
+  outline.closePath();
+
+  const bladeDepth = 0.012;
+  const blade = new THREE.Mesh(
+    new THREE.ExtrudeGeometry(outline, {
+      depth: bladeDepth,
+      bevelEnabled: false,
+      curveSegments: 1,
+    }),
+    steel,
+  );
+  // Extrude 原点在护手处、沿 +Y 出尖；厚度居中
+  blade.position.set(0, 0.15, -bladeDepth * 0.5);
+  blade.castShadow = true;
+  sword.add(blade);
+
+  return sword;
+}
+
+
+
