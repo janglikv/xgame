@@ -115,6 +115,9 @@ export class Minion extends THREE.Group implements CombatUnit {
   private elapsed = 0;
   /** 相位偏移，避免阵列齐步完全同步 */
   private readonly phaseOffset: number;
+  private static aliveFaceTexture: THREE.CanvasTexture | null = null;
+  private static deadFaceTexture: THREE.CanvasTexture | null = null;
+
   private isDead = false;
   private deathElapsed = 0;
   private staffDetached = false;
@@ -179,10 +182,13 @@ export class Minion extends THREE.Group implements CombatUnit {
       );
 
     // 1. 身体（略抬高，与脚保持小间距；正面画可爱表情）
+    if (!Minion.aliveFaceTexture) {
+      Minion.aliveFaceTexture = createBodyFaceTexture(Minion.BODY);
+    }
     this.body = new THREE.Mesh(
       new THREE.SphereGeometry(0.42, 24, 20),
       new THREE.MeshStandardMaterial({
-        map: createBodyFaceTexture(Minion.BODY),
+        map: Minion.aliveFaceTexture,
         roughness: 0.6,
         metalness: 0.04,
       }),
@@ -330,6 +336,14 @@ export class Minion extends THREE.Group implements CombatUnit {
     this.isDead = true;
     this.healthBar.visible = false;
     this.clearCombat();
+
+    // 切换为死亡 KO 晕眩可爱表情贴图（倒八字眉 + 黑叉眼 + 吐粉红舌）
+    if (!Minion.deadFaceTexture) {
+      Minion.deadFaceTexture = createDeadBodyFaceTexture(Minion.BODY);
+    }
+    const bodyMat = this.body.material as THREE.MeshStandardMaterial;
+    bodyMat.map = Minion.deadFaceTexture;
+    bodyMat.needsUpdate = true;
 
     // 彻底解耦父子关系：将魔法杖从右手转移到 Minion 根组，物理位置在角色坐标系下自由坠落
     if (!this.staffDetached) {
@@ -986,4 +1000,168 @@ function createMagicStaff(): { group: THREE.Group; orb: THREE.Mesh } {
   staff.add(orb);
 
   return { group: staff, orb };
+}
+
+/**
+ * 死亡 KO 萌表情贴图（完全参考用户上传图片）：
+ * - 倒八字委屈眉毛
+ * - 粗线条黑叉叉眼 (X X)
+ * - 腮红
+ * - 波浪嘴 + 吐粉红色小舌头
+ */
+function createDeadBodyFaceTexture(bodyColor: number): THREE.CanvasTexture {
+  const width = 1024;
+  const height = 512;
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('2D canvas context unavailable');
+
+  const bodyHex = `#${bodyColor.toString(16).padStart(6, '0')}`;
+  const darkColor = '#21181b';
+
+  ctx.fillStyle = bodyHex;
+  ctx.fillRect(0, 0, width, height);
+
+  const cx = width * 0.5;
+  const eyeY = height * 0.49;
+  const eyeGap = width * 0.075;
+  const eyeRy = height * 0.1;
+  const eyeRx = eyeRy;
+
+  // —— 1. 腮红 ——
+  const drawBlush = (bx: number) => {
+    const g = ctx.createRadialGradient(
+      bx,
+      height * 0.59,
+      0,
+      bx,
+      height * 0.59,
+      height * 0.08,
+    );
+    g.addColorStop(0, 'rgba(255, 120, 140, 0.55)');
+    g.addColorStop(0.5, 'rgba(255, 140, 160, 0.28)');
+    g.addColorStop(1, 'rgba(255, 180, 190, 0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.ellipse(bx, height * 0.59, eyeRx * 0.9, eyeRy * 0.55, 0, 0, Math.PI * 2);
+    ctx.fill();
+  };
+  drawBlush(cx - eyeGap * 1.55);
+  drawBlush(cx + eyeGap * 1.55);
+
+  // —— 2. 倒八字委屈眉毛（下垂弧形） ——
+  ctx.strokeStyle = darkColor;
+  ctx.lineWidth = height * 0.018;
+  ctx.lineCap = 'round';
+
+  // 左眉：从内侧向上弧弯，向外侧下垂
+  ctx.beginPath();
+  ctx.ellipse(
+    cx - eyeGap * 0.95,
+    eyeY - eyeRy * 1.15,
+    eyeRx * 0.55,
+    eyeRy * 0.45,
+    -Math.PI * 0.15,
+    Math.PI * 0.1,
+    Math.PI * 0.88,
+  );
+  ctx.stroke();
+
+  // 右眉：从内侧向上弧弯，向外侧下垂
+  ctx.beginPath();
+  ctx.ellipse(
+    cx + eyeGap * 0.95,
+    eyeY - eyeRy * 1.15,
+    eyeRx * 0.55,
+    eyeRy * 0.45,
+    Math.PI * 0.15,
+    Math.PI * 0.12,
+    Math.PI * 0.9,
+  );
+  ctx.stroke();
+
+  // —— 3. 大黑叉叉眼 (X X) ——
+  const drawCrossEye = (ex: number) => {
+    const arm = eyeRx * 0.68;
+    ctx.strokeStyle = darkColor;
+    ctx.lineWidth = height * 0.052;
+    ctx.lineCap = 'round';
+
+    ctx.beginPath();
+    ctx.moveTo(ex - arm, eyeY - arm);
+    ctx.lineTo(ex + arm, eyeY + arm);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(ex - arm, eyeY + arm);
+    ctx.lineTo(ex + arm, eyeY - arm);
+    ctx.stroke();
+  };
+
+  drawCrossEye(cx - eyeGap);
+  drawCrossEye(cx + eyeGap);
+
+  // —— 4. 吐粉红小舌头（位于嘴巴弯折下探处） ——
+  const tongueX = cx + width * 0.016;
+  const tongueY = height * 0.565;
+  const tongueRx = width * 0.016;
+  const tongueRy = height * 0.032;
+
+  ctx.fillStyle = '#ff6584';
+  ctx.strokeStyle = darkColor;
+  ctx.lineWidth = height * 0.012;
+
+  ctx.beginPath();
+  ctx.ellipse(
+    tongueX,
+    tongueY + tongueRy * 0.6,
+    tongueRx,
+    tongueRy,
+    0,
+    0,
+    Math.PI,
+  );
+  ctx.fill();
+  ctx.stroke();
+
+  // 舌头中间细线
+  ctx.strokeStyle = '#df4868';
+  ctx.lineWidth = height * 0.005;
+  ctx.beginPath();
+  ctx.moveTo(tongueX, tongueY + tongueRy * 0.1);
+  ctx.lineTo(tongueX, tongueY + tongueRy * 1.3);
+  ctx.stroke();
+
+  // —— 5. 波浪委屈嘴巴 ——
+  ctx.strokeStyle = darkColor;
+  ctx.lineWidth = height * 0.016;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+
+  ctx.beginPath();
+  ctx.moveTo(cx - eyeGap * 0.42, height * 0.57);
+  ctx.bezierCurveTo(
+    cx - eyeGap * 0.22,
+    height * 0.54,
+    cx - eyeGap * 0.08,
+    height * 0.585,
+    cx + eyeGap * 0.16,
+    height * 0.558,
+  );
+  ctx.bezierCurveTo(
+    cx + eyeGap * 0.28,
+    height * 0.54,
+    cx + eyeGap * 0.38,
+    height * 0.572,
+    cx + eyeGap * 0.44,
+    height * 0.555,
+  );
+  ctx.stroke();
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.needsUpdate = true;
+  return texture;
 }
