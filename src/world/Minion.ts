@@ -1,10 +1,37 @@
 import * as THREE from 'three';
+import type { ProjectileManager } from '../effects/ProjectileManager';
+import { CircleBody } from './collision/CircleBody';
+import type { CombatUnit, TeamId } from './combat/CombatUnit';
+import {
+  distXZ,
+  isValidTarget,
+  pickEnemyTarget,
+} from './combat/combatMath';
+import { HealthBar } from './ui/HealthBar';
+
+type MinionAIState = 'move' | 'chase' | 'attack';
 
 /**
  * 极简五球小兵：身体 + 左手 + 右手 + 左脚 + 右脚。
+ * AI：推进 Move / 追击 Chase / 站桩攻击 Attack（LoL 风格简化）。
  */
-export class Minion extends THREE.Group {
+export class Minion extends THREE.Group implements CombatUnit {
   private static readonly SCALE = 0.125;
+  /** 地面圆形碰撞半径（世界单位） */
+  static readonly COLLIDER_RADIUS = 0.12;
+  static readonly MAX_HP = 80;
+  static readonly COMBAT_PRIORITY = 0;
+  static readonly ATTACK_DAMAGE = 12;
+  /** 圆心距：可出手 */
+  static readonly ATTACK_RANGE = 0.55;
+  /** 无目标时索敌 */
+  static readonly AGGRO_RANGE = 1.4;
+  /** 已锁定后脱战 */
+  static readonly LEASH_RANGE = 3.2;
+  /** 攻击前摇（秒） */
+  static readonly WINDUP = 0.28;
+  /** 两次出手起始间隔（秒） */
+  static readonly ATTACK_INTERVAL = 1.15;
 
   private static readonly BODY = 0xf3eee6;
   private static readonly LIMB = 0xf3eee6;
@@ -13,23 +40,66 @@ export class Minion extends THREE.Group {
   private static readonly HAT_RED = 0xef4444;
   private static readonly HAT_RED_BAND = 0xb91c1c;
 
+  /** 走步周期频率（弧度/秒） */
+  private static readonly WALK_FREQ = 7.5;
+  /** 前后迈步幅度（本地 Z） */
+  private static readonly STRIDE = 0.1;
+  /** 抬脚高度 */
+  private static readonly FOOT_LIFT = 0.07;
+  /** 左手前后摆臂幅度 */
+  private static readonly ARM_SWING = 0.08;
+  /** 身体上下起伏 */
+  private static readonly BODY_BOB = 0.025;
+  /** 沿面向方向推进速度（世界单位/秒） */
+  private static readonly MOVE_SPEED = 0.45;
+
   private readonly bodyRoot: THREE.Group;
   private readonly body: THREE.Mesh;
   private readonly leftHand: THREE.Mesh;
   private readonly rightHand: THREE.Mesh;
   private readonly leftFoot: THREE.Mesh;
   private readonly rightFoot: THREE.Mesh;
+  /** 法杖顶端能量球，弹道从此处发出 */
+  private readonly staffOrb: THREE.Object3D;
+  private readonly healthBar: HealthBar;
+
+  private readonly baseLeftHand = new THREE.Vector3(0.47, 0.48, 0.1);
+  private readonly baseRightHand = new THREE.Vector3(-0.52, 0.58, 0.2);
+  private readonly baseLeftFoot = new THREE.Vector3(0.14, 0.1, 0.02);
+  private readonly baseRightFoot = new THREE.Vector3(-0.14, 0.1, 0.02);
+
+  private elapsed = 0;
+  /** 相位偏移，避免阵列齐步完全同步 */
+  private readonly phaseOffset: number;
+
+  readonly team: TeamId;
+  readonly collider: CircleBody;
+  readonly combatPriority = Minion.COMBAT_PRIORITY;
+  readonly maxHp = Minion.MAX_HP;
+  hp = Minion.MAX_HP;
+
+  private aiState: MinionAIState = 'move';
+  private target: CombatUnit | null = null;
+  /** 攻击冷却：>0 时不能开始新的前摇 */
+  private attackCd = 0;
+  /** 前摇计时；<0 表示当前不在前摇 */
+  private windupElapsed = -1;
+  private readonly muzzleWorld = new THREE.Vector3();
 
   /**
    * @param team 蓝方蓝帽面朝 +X，红方红帽面朝 -X
    */
-  constructor(x: number, z = 0, team: 'blue' | 'red' = x >= 0 ? 'red' : 'blue') {
+  constructor(x: number, z = 0, team: TeamId = x >= 0 ? 'red' : 'blue') {
     super();
+    this.team = team;
     this.name = `Minion_${team}_${x}_${z}`;
     this.position.set(x, 0, z);
     this.scale.setScalar(Minion.SCALE);
     // 蓝方面朝 +X，红方面朝 -X（相向）
     this.rotation.y = team === 'red' ? -Math.PI / 2 : Math.PI / 2;
+    this.phaseOffset = (x * 2.7 + z * 5.3 + Math.random()) * Math.PI;
+    // scale 定好后再挂碰撞体，白圈半径才能正确补偿
+    this.collider = new CircleBody(this, Minion.COLLIDER_RADIUS);
 
     const hatColor = team === 'red' ? Minion.HAT_RED : Minion.HAT_BLUE;
     const hatBandColor =
@@ -132,38 +202,321 @@ export class Minion extends THREE.Group {
 
     // 2 / 3. 双手（小兵自身面向 +Z：左手为 +X，右手为 -X）
     this.leftHand = ball(0.1, Minion.LIMB);
-    this.leftHand.position.set(0.47, 0.48, 0.1);
+    this.leftHand.position.copy(this.baseLeftHand);
     this.leftHand.castShadow = true;
     this.bodyRoot.add(this.leftHand);
 
+    // 持杖右手：略抬高并前伸，呈举杖准备姿势
     this.rightHand = ball(0.1, Minion.LIMB);
-    this.rightHand.position.set(-0.47, 0.48, 0.1);
+    this.rightHand.position.copy(this.baseRightHand);
     this.rightHand.castShadow = true;
     this.bodyRoot.add(this.rightHand);
 
-    // 给右手配持卡通短剑
-    const sword = createCartoonShortSword();
-    // 调整剑在右手中的持握位置与朝向（向前上方斜指，向外倾斜）
-    sword.position.set(0, 0, 0.02);
-    sword.rotation.x = Math.PI / 3.2; // 向上向前方倾斜
-    sword.rotation.z = Math.PI / 8;   // 向右外侧微微倾斜
-    sword.rotation.y = -Math.PI / 6;  // 剑刃朝向
-    this.rightHand.add(sword);
+    // 魔法杖：握在中下段，杖身近直立、宝珠略朝前上
+    const { group: staff, orb } = createMagicStaff();
+    staff.position.set(0, -0.06, 0);
+    staff.rotation.order = 'YXZ';
+    staff.rotation.set(
+      0.45, // 向前微倾
+      0.15, // 轻微扭转
+      0.35, // 向身体外侧打开
+    );
+    this.rightHand.add(staff);
+    this.staffOrb = orb;
 
     // 4 / 5. 双脚（脚底精确贴合 Y = 0 地面，左脚为 +X，右脚为 -X）
     this.leftFoot = ball(0.1, Minion.LIMB);
-    this.leftFoot.position.set(0.14, 0.10, 0.02);
+    this.leftFoot.position.copy(this.baseLeftFoot);
     this.leftFoot.castShadow = true;
     this.add(this.leftFoot);
 
     this.rightFoot = ball(0.1, Minion.LIMB);
-    this.rightFoot.position.set(-0.14, 0.10, 0.02);
+    this.rightFoot.position.copy(this.baseRightFoot);
     this.rightFoot.castShadow = true;
     this.add(this.rightFoot);
+
+    // 头顶血条：父级 scale=0.125，本地尺寸补偿到约 0.15×0.014 世界单位
+    this.healthBar = new HealthBar({
+      width: 0.15 / Minion.SCALE,
+      height: 0.014 / Minion.SCALE,
+      yOffset: 1.55,
+      team,
+    });
+    this.add(this.healthBar);
+    this.healthBar.setHp(this.hp, this.maxHp);
   }
 
-  update(_delta: number): void {
-    // 呼吸/浮动动画已删除，保持静态贴地状态
+  get isAlive(): boolean {
+    return this.hp > 0;
+  }
+
+  takeDamage(amount: number): void {
+    if (!this.isAlive || amount <= 0) return;
+    this.hp = Math.max(0, this.hp - amount);
+    this.healthBar.setHp(this.hp, this.maxHp);
+    if (!this.isAlive) {
+      this.clearCombat();
+    }
+  }
+
+  /** 弹道落点：身体球中心 */
+  getHitPoint(out: THREE.Vector3): THREE.Vector3 {
+    return this.body.getWorldPosition(out);
+  }
+
+  /**
+   * 战斗 AI + 动画。
+   * Move 推线；Chase 追目标；Attack 停步前摇后发射锁定弹，命中才结算伤害。
+   */
+  update(
+    delta: number,
+    units: readonly CombatUnit[],
+    projectiles: ProjectileManager,
+  ): void {
+    if (!this.isAlive) return;
+
+    this.elapsed += delta;
+    if (this.attackCd > 0) {
+      this.attackCd = Math.max(0, this.attackCd - delta);
+    }
+
+    // 目标失效则清空
+    if (!isValidTarget(this, this.target)) {
+      this.clearCombat();
+    } else {
+      const leash = distXZ(this.collider, this.target.collider);
+      if (leash > Minion.LEASH_RANGE) {
+        this.clearCombat();
+      }
+    }
+
+    switch (this.aiState) {
+      case 'move':
+        this.tickMove(delta, units, projectiles);
+        break;
+      case 'chase':
+        this.tickChase(delta, units, projectiles);
+        break;
+      case 'attack':
+        this.tickAttack(delta, units, projectiles);
+        break;
+    }
+  }
+
+  /** 是否已走出战场（越过对侧边界），可供发兵器回收 */
+  get isOffField(): boolean {
+    return this.team === 'blue' ? this.position.x > 11 : this.position.x < -11;
+  }
+
+  private clearCombat(): void {
+    this.target = null;
+    this.windupElapsed = -1;
+    this.aiState = 'move';
+  }
+
+  private enterChase(target: CombatUnit): void {
+    this.target = target;
+    this.windupElapsed = -1;
+    this.aiState = 'chase';
+  }
+
+  private enterAttack(target: CombatUnit): void {
+    this.target = target;
+    this.windupElapsed = -1;
+    this.aiState = 'attack';
+    this.resetPose();
+  }
+
+  private tickMove(
+    delta: number,
+    units: readonly CombatUnit[],
+    projectiles: ProjectileManager,
+  ): void {
+    // 索敌：aggro 内优先小兵再塔
+    const found = pickEnemyTarget(this, units, Minion.AGGRO_RANGE);
+    if (found) {
+      const d = distXZ(this.collider, found.collider);
+      if (d <= Minion.ATTACK_RANGE) {
+        this.enterAttack(found);
+        this.tickAttack(delta, units, projectiles);
+        return;
+      }
+      this.enterChase(found);
+      this.tickChase(delta, units, projectiles);
+      return;
+    }
+
+    this.animateWalk(delta);
+    this.advanceLane(delta);
+  }
+
+  private tickChase(
+    delta: number,
+    units: readonly CombatUnit[],
+    projectiles: ProjectileManager,
+  ): void {
+    // 追击中也可切更高优先级近处目标
+    const better = pickEnemyTarget(this, units, Minion.AGGRO_RANGE);
+    if (better && better !== this.target) {
+      // 仅当新目标优先级更高，或同级更近时切换
+      if (
+        !this.target ||
+        better.combatPriority < this.target.combatPriority ||
+        (better.combatPriority === this.target.combatPriority &&
+          distXZ(this.collider, better.collider) + 0.05 <
+            distXZ(this.collider, this.target.collider))
+      ) {
+        this.target = better;
+      }
+    }
+
+    if (!isValidTarget(this, this.target)) {
+      this.clearCombat();
+      this.tickMove(delta, units, projectiles);
+      return;
+    }
+
+    const d = distXZ(this.collider, this.target.collider);
+    if (d > Minion.LEASH_RANGE) {
+      this.clearCombat();
+      this.tickMove(delta, units, projectiles);
+      return;
+    }
+    if (d <= Minion.ATTACK_RANGE) {
+      this.enterAttack(this.target);
+      this.tickAttack(delta, units, projectiles);
+      return;
+    }
+
+    this.animateWalk(delta);
+    this.moveToward(this.target, delta);
+  }
+
+  private tickAttack(
+    delta: number,
+    units: readonly CombatUnit[],
+    projectiles: ProjectileManager,
+  ): void {
+    if (!isValidTarget(this, this.target)) {
+      this.clearCombat();
+      this.tickMove(delta, units, projectiles);
+      return;
+    }
+
+    const d = distXZ(this.collider, this.target.collider);
+    if (d > Minion.LEASH_RANGE) {
+      this.clearCombat();
+      this.tickMove(delta, units, projectiles);
+      return;
+    }
+    // 走出攻击距离：取消前摇，改追击（攻击态不位移）
+    if (d > Minion.ATTACK_RANGE) {
+      this.windupElapsed = -1;
+      this.enterChase(this.target);
+      this.tickChase(delta, units, projectiles);
+      return;
+    }
+
+    // 站桩：不走路
+    this.resetPose();
+
+    // 冷却中干等
+    if (this.attackCd > 0 && this.windupElapsed < 0) {
+      return;
+    }
+
+    // 开始或继续前摇
+    if (this.windupElapsed < 0) {
+      this.windupElapsed = 0;
+    }
+    this.windupElapsed += delta;
+
+    if (this.windupElapsed >= Minion.WINDUP) {
+      // 前摇结束：发射锁定弹，伤害在命中时结算
+      if (
+        isValidTarget(this, this.target) &&
+        distXZ(this.collider, this.target.collider) <= Minion.ATTACK_RANGE
+      ) {
+        this.fireBolt(projectiles, this.target);
+      }
+      this.windupElapsed = -1;
+      this.attackCd = Math.max(0, Minion.ATTACK_INTERVAL - Minion.WINDUP);
+    }
+  }
+
+  /** 从法杖能量球世界坐标发出追踪弹 */
+  private fireBolt(
+    projectiles: ProjectileManager,
+    target: CombatUnit,
+  ): void {
+    this.staffOrb.getWorldPosition(this.muzzleWorld);
+    projectiles.fireAt(
+      this.muzzleWorld,
+      target,
+      Minion.ATTACK_DAMAGE,
+      this.team,
+    );
+  }
+
+  /** 默认沿兵线推进（蓝 +X / 红 -X） */
+  private advanceLane(delta: number): void {
+    const dir = this.team === 'blue' ? 1 : -1;
+    this.position.x += dir * Minion.MOVE_SPEED * delta;
+  }
+
+  /** 朝目标地面位置移动 */
+  private moveToward(target: CombatUnit, delta: number): void {
+    const dx = target.collider.x - this.position.x;
+    const dz = target.collider.z - this.position.z;
+    const len = Math.hypot(dx, dz);
+    if (len < 1e-6) return;
+    const step = Minion.MOVE_SPEED * delta;
+    this.position.x += (dx / len) * step;
+    this.position.z += (dz / len) * step;
+  }
+
+  private resetPose(): void {
+    this.bodyRoot.position.y = 0;
+    this.bodyRoot.rotation.z = 0;
+    this.bodyRoot.rotation.x = 0.04;
+    this.leftFoot.position.copy(this.baseLeftFoot);
+    this.rightFoot.position.copy(this.baseRightFoot);
+    this.leftHand.position.copy(this.baseLeftHand);
+    this.rightHand.position.copy(this.baseRightHand);
+  }
+
+  private animateWalk(_delta: number): void {
+    const phase = this.elapsed * Minion.WALK_FREQ + this.phaseOffset;
+    const s = Math.sin(phase);
+    const c = Math.cos(phase);
+    const step = Math.abs(Math.sin(phase));
+
+    this.bodyRoot.position.y = step * Minion.BODY_BOB;
+    this.bodyRoot.rotation.z = s * 0.05;
+    this.bodyRoot.rotation.x = 0.04 + step * 0.02;
+
+    this.leftFoot.position.set(
+      this.baseLeftFoot.x,
+      this.baseLeftFoot.y + Math.max(0, c) * Minion.FOOT_LIFT,
+      this.baseLeftFoot.z + s * Minion.STRIDE,
+    );
+    this.rightFoot.position.set(
+      this.baseRightFoot.x,
+      this.baseRightFoot.y + Math.max(0, -c) * Minion.FOOT_LIFT,
+      this.baseRightFoot.z - s * Minion.STRIDE,
+    );
+
+    this.leftHand.position.set(
+      this.baseLeftHand.x,
+      this.baseLeftHand.y + step * 0.02,
+      this.baseLeftHand.z - s * Minion.ARM_SWING,
+    );
+
+    this.rightHand.position.set(
+      this.baseRightHand.x + s * 0.015,
+      this.baseRightHand.y + step * 0.018,
+      this.baseRightHand.z + s * 0.035,
+    );
   }
 
   dispose(): void {
@@ -350,72 +703,54 @@ function createBodyFaceTexture(
 }
 
 /**
- * 极简短剑：剑首 + 握柄 + 一字护手 + 扁平尖刃。
- * 沿本地 +Y 伸出（剑柄在下、剑尖在上），整体尺寸适配手球半径 ~0.1。
+ * 极简魔法杖：木杆 + 金属箍 + 顶部发光宝珠。
+ * 沿本地 +Y 伸出（握持段在中下、宝珠在上），适配手球半径 ~0.1。
  */
-function createCartoonShortSword(): THREE.Group {
-  const sword = new THREE.Group();
+function createMagicStaff(): { group: THREE.Group; orb: THREE.Mesh } {
+  const staff = new THREE.Group();
 
-  const steel = new THREE.MeshStandardMaterial({
-    color: 0xffffff,
-    roughness: 0.28,
-    metalness: 0.7,
-  });
-  const gripMat = new THREE.MeshStandardMaterial({
-    color: 0x5c3a21,
-    roughness: 0.8,
+  const wood = new THREE.MeshStandardMaterial({
+    color: 0x6b4423,
+    roughness: 0.85,
     metalness: 0.05,
   });
+  const bandMat = new THREE.MeshStandardMaterial({
+    color: 0xd4a017,
+    roughness: 0.35,
+    metalness: 0.7,
+  });
+  const orbMat = new THREE.MeshStandardMaterial({
+    color: 0xa78bfa,
+    roughness: 0.15,
+    metalness: 0.2,
+    emissive: 0x7c3aed,
+    emissiveIntensity: 0.85,
+  });
 
-  // 1. 剑首：小金属球
-  const pommel = new THREE.Mesh(new THREE.SphereGeometry(0.028, 10, 10), steel);
-  pommel.position.y = 0;
-  pommel.castShadow = true;
-  sword.add(pommel);
-
-  // 2. 握柄：棕色短圆柱
-  const handle = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.02, 0.022, 0.12, 10),
-    gripMat,
+  // 1. 木杆（下端略粗，手握中下段）
+  const shaft = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.016, 0.022, 0.42, 10),
+    wood,
   );
-  handle.position.y = 0.07;
-  handle.castShadow = true;
-  sword.add(handle);
+  shaft.position.y = 0.12;
+  shaft.castShadow = true;
+  staff.add(shaft);
 
-  // 3. 护手：简单一字横档
-  const guard = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.022, 0.036), steel);
-  guard.position.y = 0.14;
-  guard.castShadow = true;
-  sword.add(guard);
-
-  // 4. 剑身：扁平轮廓挤出（底部宽、收尖），一眼就是短剑
-  // 本地 Shape 在 XY，挤出沿 +Z；建好后绕 X 转正，使剑刃沿 +Y
-  const outline = new THREE.Shape();
-  outline.moveTo(0, 0.3); // 剑尖
-  outline.lineTo(0.038, 0.22);
-  outline.lineTo(0.042, 0.04);
-  outline.lineTo(0.04, 0); // 护手侧根部
-  outline.lineTo(-0.04, 0);
-  outline.lineTo(-0.042, 0.04);
-  outline.lineTo(-0.038, 0.22);
-  outline.closePath();
-
-  const bladeDepth = 0.012;
-  const blade = new THREE.Mesh(
-    new THREE.ExtrudeGeometry(outline, {
-      depth: bladeDepth,
-      bevelEnabled: false,
-      curveSegments: 1,
-    }),
-    steel,
+  // 2. 顶端金属箍
+  const band = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.024, 0.024, 0.028, 12),
+    bandMat,
   );
-  // Extrude 原点在护手处、沿 +Y 出尖；厚度居中
-  blade.position.set(0, 0.15, -bladeDepth * 0.5);
-  blade.castShadow = true;
-  sword.add(blade);
+  band.position.y = 0.32;
+  band.castShadow = true;
+  staff.add(band);
 
-  return sword;
+  // 3. 魔法宝珠（弹道发射点）
+  const orb = new THREE.Mesh(new THREE.SphereGeometry(0.045, 14, 12), orbMat);
+  orb.name = 'StaffOrb';
+  orb.position.y = 0.38;
+  orb.castShadow = true;
+  staff.add(orb);
+
+  return { group: staff, orb };
 }
-
-
-

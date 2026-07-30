@@ -1,14 +1,39 @@
 import * as THREE from 'three';
+import type { ProjectileManager } from '../effects/ProjectileManager';
+import { CircleBody } from './collision/CircleBody';
+import type { CombatUnit, TeamId } from './combat/CombatUnit';
+import {
+  distXZ,
+  isValidTarget,
+  pickEnemyTarget,
+} from './combat/combatMath';
+import { HealthBar } from './ui/HealthBar';
 
 /**
  * 防御塔（LoL 风格示意，非官方素材）。
  * 特征：厚重基座、分段石塔身、金属箍、顶部能量水晶。
+ * 战斗：范围内锁定敌方单位，从水晶发射追踪弹。
  */
-export class DefenseTower extends THREE.Group {
+export class DefenseTower extends THREE.Group implements CombatUnit {
   /** 水平缩放 */
   private static readonly SCALE_XZ = 0.65;
   /** 高度缩放（更矮） */
   private static readonly SCALE_Y = 0.48;
+  /** 地面圆形碰撞半径（世界单位，约贴合基座） */
+  static readonly COLLIDER_RADIUS = 0.42;
+  static readonly MAX_HP = 520;
+  /** 索敌优先级：低于小兵，小兵优先互打再推塔 */
+  static readonly COMBAT_PRIORITY = 1;
+  /** 攻击范围（世界单位，圆心距） */
+  static readonly ATTACK_RANGE = 2.0;
+  /** 单发伤害（约两发清一个小兵） */
+  static readonly ATTACK_DAMAGE = 55;
+  /** 攻击间隔（秒，含前摇）——比小兵更慢 */
+  static readonly ATTACK_INTERVAL = 1.85;
+  /** 出手前摇（秒） */
+  static readonly WINDUP = 0.22;
+  /** 塔弹视觉缩放（相对小兵弹） */
+  static readonly BOLT_SCALE = 5;
 
   // 召唤师峡谷蓝方气质配色
   private static readonly STONE = 0x5c6b7a;
@@ -24,7 +49,23 @@ export class DefenseTower extends THREE.Group {
   private readonly crystal: THREE.Mesh;
   private readonly crystalLight: THREE.PointLight;
   private readonly crystalGroup: THREE.Group;
+  private readonly healthBar: HealthBar;
+  private readonly rangeMarker: THREE.Group;
   private elapsed = 0;
+
+  /** 当前锁定目标（出范围或死亡后清空） */
+  private target: CombatUnit | null = null;
+  /** 攻击冷却：>0 时不能开始新前摇 */
+  private attackCd = 0;
+  /** 前摇计时；<0 表示不在前摇 */
+  private windupElapsed = -1;
+  private readonly muzzleWorld = new THREE.Vector3();
+
+  readonly team: TeamId;
+  readonly collider: CircleBody;
+  readonly combatPriority = DefenseTower.COMBAT_PRIORITY;
+  readonly maxHp = DefenseTower.MAX_HP;
+  hp = DefenseTower.MAX_HP;
 
   /**
    * @param x 世界 X；x > 0 为红方水晶，x < 0 为蓝方水晶
@@ -33,8 +74,9 @@ export class DefenseTower extends THREE.Group {
     super();
     this.name = `DefenseTower_${x}_${z}`;
     this.position.set(x, 0, z);
+    this.team = x > 0 ? 'red' : 'blue';
 
-    const isRed = x > 0;
+    const isRed = this.team === 'red';
     const crystalColor = isRed
       ? DefenseTower.CRYSTAL_RED
       : DefenseTower.CRYSTAL_BLUE;
@@ -46,6 +88,9 @@ export class DefenseTower extends THREE.Group {
       DefenseTower.SCALE_Y,
       DefenseTower.SCALE_XZ,
     );
+    this.collider = new CircleBody(this, DefenseTower.COLLIDER_RADIUS, {
+      isStatic: true,
+    });
 
     const stone = (color: number) =>
       new THREE.MeshStandardMaterial({
@@ -203,12 +248,73 @@ export class DefenseTower extends THREE.Group {
       rune.rotation.y = -a;
       this.add(rune);
     }
+
+    // 塔顶血条：补偿父级非均匀 scale，约 0.55×0.05 世界单位
+    this.healthBar = new HealthBar({
+      width: 0.55 / DefenseTower.SCALE_XZ,
+      height: 0.05 / DefenseTower.SCALE_Y,
+      yOffset: 3.05,
+      team: this.team,
+    });
+    this.add(this.healthBar);
+    this.healthBar.setHp(this.hp, this.maxHp);
+
+    // 攻击范围地面标记（半径补偿父级 XZ 缩放）
+    this.rangeMarker = createAttackRangeMarker(
+      this.team,
+      DefenseTower.ATTACK_RANGE,
+      DefenseTower.SCALE_XZ,
+      DefenseTower.SCALE_Y,
+    );
+    this.add(this.rangeMarker);
   }
 
-  /** 水晶轻微旋转 + 呼吸光 */
-  update(delta: number): void {
+  get isAlive(): boolean {
+    return this.hp > 0;
+  }
+
+  takeDamage(amount: number): void {
+    if (!this.isAlive || amount <= 0) return;
+    this.hp = Math.max(0, this.hp - amount);
+    this.healthBar.setHp(this.hp, this.maxHp);
+    if (!this.isAlive) {
+      this.onDestroyed();
+    }
+  }
+
+  /** 弹道落点：中段塔身中心（本地 y≈1.5，再乘高度缩放） */
+  getHitPoint(out: THREE.Vector3): THREE.Vector3 {
+    out.set(
+      this.position.x,
+      this.position.y + 1.5 * DefenseTower.SCALE_Y,
+      this.position.z,
+    );
+    return out;
+  }
+
+  /**
+   * 水晶动画 + 索敌攻击。
+   * 范围内优先小兵，锁定后持续输出直至死亡或离开范围。
+   */
+  update(
+    delta: number,
+    units: readonly CombatUnit[],
+    projectiles: ProjectileManager,
+  ): void {
+    if (!this.isAlive) return;
+
     this.elapsed += delta;
-    this.crystal.rotation.y += delta * 0.6;
+    this.animateCrystal(delta);
+
+    if (this.attackCd > 0) {
+      this.attackCd = Math.max(0, this.attackCd - delta);
+    }
+
+    this.tickCombat(delta, units, projectiles);
+  }
+
+  private animateCrystal(_delta: number): void {
+    this.crystal.rotation.y += _delta * 0.6;
     this.crystal.rotation.x = Math.sin(this.elapsed * 0.8) * 0.08;
 
     const pulse = 0.75 + Math.sin(this.elapsed * 2.4) * 0.25;
@@ -217,6 +323,80 @@ export class DefenseTower extends THREE.Group {
     mat.emissiveIntensity = 0.65 + pulse * 0.45;
 
     this.crystalGroup.position.y = 2.55 + Math.sin(this.elapsed * 1.6) * 0.03;
+  }
+
+  private tickCombat(
+    delta: number,
+    units: readonly CombatUnit[],
+    projectiles: ProjectileManager,
+  ): void {
+    // 已锁定目标：校验存活与范围
+    if (isValidTarget(this, this.target)) {
+      const d = distXZ(this.collider, this.target.collider);
+      if (d > DefenseTower.ATTACK_RANGE) {
+        this.clearTarget();
+      }
+    } else {
+      this.clearTarget();
+    }
+
+    // 无目标时重新索敌（优先小兵）
+    if (!this.target) {
+      this.target = pickEnemyTarget(
+        this,
+        units,
+        DefenseTower.ATTACK_RANGE,
+      );
+      this.windupElapsed = -1;
+    }
+
+    if (!this.target) return;
+
+    // 冷却中且不在前摇：等待
+    if (this.attackCd > 0 && this.windupElapsed < 0) {
+      return;
+    }
+
+    // 开始 / 继续前摇
+    if (this.windupElapsed < 0) {
+      this.windupElapsed = 0;
+    }
+    this.windupElapsed += delta;
+
+    if (this.windupElapsed < DefenseTower.WINDUP) return;
+
+    // 出手：从水晶世界坐标发射锁定弹
+    if (
+      isValidTarget(this, this.target) &&
+      distXZ(this.collider, this.target.collider) <= DefenseTower.ATTACK_RANGE
+    ) {
+      this.crystalGroup.getWorldPosition(this.muzzleWorld);
+      projectiles.fireAt(
+        this.muzzleWorld,
+        this.target,
+        DefenseTower.ATTACK_DAMAGE,
+        this.team,
+        DefenseTower.BOLT_SCALE,
+      );
+    }
+
+    this.windupElapsed = -1;
+    this.attackCd = Math.max(
+      0,
+      DefenseTower.ATTACK_INTERVAL - DefenseTower.WINDUP,
+    );
+  }
+
+  private clearTarget(): void {
+    this.target = null;
+    this.windupElapsed = -1;
+  }
+
+  private onDestroyed(): void {
+    this.crystalGroup.visible = false;
+    this.crystalLight.intensity = 0;
+    this.rangeMarker.visible = false;
+    this.clearTarget();
   }
 
   dispose(): void {
@@ -229,6 +409,61 @@ export class DefenseTower extends THREE.Group {
       for (const m of list) m.dispose();
     });
   }
+}
+
+/**
+ * 地面攻击范围：淡色填充圆 + 边缘环。
+ * 几何半径按父级 SCALE_XZ 反向补偿，使世界半径 = attackRange。
+ */
+function createAttackRangeMarker(
+  team: TeamId,
+  attackRange: number,
+  scaleXZ: number,
+  scaleY: number,
+): THREE.Group {
+  const group = new THREE.Group();
+  group.name = 'AttackRangeMarker';
+
+  const color = team === 'red' ? 0xef4444 : 0x3b82f6;
+  const localR = attackRange / scaleXZ;
+  const yFill = 0.018 / scaleY;
+  const yRing = 0.022 / scaleY;
+
+  const fill = new THREE.Mesh(
+    new THREE.CircleGeometry(localR, 64),
+    new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 0.07,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    }),
+  );
+  fill.rotation.x = -Math.PI / 2;
+  fill.position.y = yFill;
+  fill.renderOrder = 1;
+  fill.receiveShadow = false;
+  fill.castShadow = false;
+  group.add(fill);
+
+  const edge = new THREE.Mesh(
+    new THREE.RingGeometry(localR * 0.98, localR, 64),
+    new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 0.42,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    }),
+  );
+  edge.rotation.x = -Math.PI / 2;
+  edge.position.y = yRing;
+  edge.renderOrder = 2;
+  edge.receiveShadow = false;
+  edge.castShadow = false;
+  group.add(edge);
+
+  return group;
 }
 
 function mesh(

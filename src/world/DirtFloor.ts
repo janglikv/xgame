@@ -2,12 +2,17 @@ import * as THREE from 'three';
 
 /**
  * 纯灰色地板：水平放置在 XZ 平面上，Y = 0。
+ * 可走区域：X ∈ [-HALF_X, HALF_X]，Z ∈ [-HALF_Z, HALF_Z]。
  */
 export class DirtFloor extends THREE.Mesh {
-  /** X 方向总长度（米），±10 */
-  private static readonly SIZE_X = 20;
-  /** Z 方向总长度（米），±2 */
-  private static readonly SIZE_Z = 4;
+  /** X 方向总长度（米） */
+  static readonly SIZE_X = 20;
+  /** Z 方向总长度（米） */
+  static readonly SIZE_Z = 4;
+  /** X 半宽（米），边界 ±HALF_X */
+  static readonly HALF_X = 10;
+  /** Z 半宽（米），边界 ±HALF_Z（兵线两侧） */
+  static readonly HALF_Z = 2;
 
   private readonly mapsDispose: () => void;
 

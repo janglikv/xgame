@@ -53,6 +53,9 @@ export class CameraController {
   private readonly onMouseMove: (e: MouseEvent) => void;
   private readonly onContextMenu: (e: Event) => void;
   private readonly onPageHide: () => void;
+  /** 失焦 / 切 tab 时清空按键，避免 keyup 丢失导致“松手还在走” */
+  private readonly clearKeys: () => void;
+  private readonly onVisibilityChange: () => void;
 
   constructor(
     camera: THREE.PerspectiveCamera,
@@ -76,9 +79,22 @@ export class CameraController {
       this.applyLook();
     }
 
+    this.clearKeys = () => {
+      this.keys.clear();
+      this.isMouseDown = false;
+    };
+
+    this.onVisibilityChange = () => {
+      // 切走 tab / 最小化时浏览器常吞掉 keyup，必须主动清空
+      if (document.hidden) this.clearKeys();
+    };
+
     this.onKeyDown = (e) => {
       if (!this.enabled) return;
+      // 失焦窗口上的 keydown 不可信（例如从其它应用切回来的残留）
+      if (!document.hasFocus()) return;
 
+      // e.repeat 时 Set 幂等，无需特殊处理；用 code 而不是 key，避免布局差异
       this.keys.add(e.code);
       if (
         e.code === 'KeyW' ||
@@ -138,11 +154,15 @@ export class CameraController {
     };
 
     this.onPageHide = () => {
+      this.clearKeys();
       this.flushPersist(true);
     };
 
     window.addEventListener('keydown', this.onKeyDown);
     window.addEventListener('keyup', this.onKeyUp);
+    // 失焦时 keyup 经常丢：Cmd/Alt+Tab、点 DevTools、点浏览器外等
+    window.addEventListener('blur', this.clearKeys);
+    document.addEventListener('visibilitychange', this.onVisibilityChange);
     this.domElement.addEventListener('mousedown', this.onMouseDown);
     window.addEventListener('mouseup', this.onMouseUp);
     window.addEventListener('mousemove', this.onMouseMove);
@@ -210,10 +230,7 @@ export class CameraController {
 
   setEnabled(enabled: boolean): void {
     this.enabled = enabled;
-    if (!enabled) {
-      this.keys.clear();
-      this.isMouseDown = false;
-    }
+    if (!enabled) this.clearKeys();
   }
 
   get isEnabled(): boolean {
@@ -230,6 +247,12 @@ export class CameraController {
     }
 
     if (!this.enabled) return;
+
+    // 窗口无焦点时不移动，并丢弃可能残留的按键状态
+    if (!document.hasFocus() || document.hidden) {
+      if (this.keys.size > 0) this.clearKeys();
+      return;
+    }
 
     this.wishDir.set(0, 0, 0);
 
@@ -254,9 +277,12 @@ export class CameraController {
 
   dispose(): void {
     this.flushPersist(true);
+    this.clearKeys();
 
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('keyup', this.onKeyUp);
+    window.removeEventListener('blur', this.clearKeys);
+    document.removeEventListener('visibilitychange', this.onVisibilityChange);
     this.domElement.removeEventListener('mousedown', this.onMouseDown);
     window.removeEventListener('mouseup', this.onMouseUp);
     window.removeEventListener('mousemove', this.onMouseMove);

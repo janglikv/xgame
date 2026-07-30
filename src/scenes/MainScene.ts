@@ -1,19 +1,23 @@
 import * as THREE from 'three';
+import { ProjectileManager } from '../effects/ProjectileManager';
+import type { CircleBody } from '../world/collision/CircleBody';
+import { clampBodiesToFloor } from '../world/collision/clampBodiesToFloor';
+import { resolveCircleCollisions } from '../world/collision/resolveCircleCollisions';
 import { createSceneLights } from '../world/createSceneLights';
 import { DefenseTower } from '../world/DefenseTower';
 import { DirtFloor } from '../world/DirtFloor';
-import { Minion } from '../world/Minion';
+import { MinionWaveSpawner } from '../world/MinionWaveSpawner';
 import { SpatialAxesGrid } from '../world/SpatialAxesGrid';
 
 /**
- * 主场景：灯光 + 泥土地板 + 空间坐标辅助线 + 防御塔 + 小兵。
- * 后续关卡 / 实体可在此挂载。
+ * 主场景：灯光 + 地板 + 坐标辅助 + 防御塔 + AI 发兵 + 弹道战斗 + 地面圆碰撞。
  */
 export class MainScene extends THREE.Scene {
   private readonly floor: DirtFloor;
   private readonly axesGrid: SpatialAxesGrid;
   private readonly defenseTowers: DefenseTower[];
-  private readonly minions: Minion[];
+  private readonly minionSpawner: MinionWaveSpawner;
+  private readonly projectiles: ProjectileManager;
 
   constructor() {
     super();
@@ -39,28 +43,39 @@ export class MainScene extends THREE.Scene {
       this.add(tower);
     }
 
-    // 小兵：蓝方 x=-0.5（蓝帽），红方 x=+0.5（红帽），沿 Z 各一排
-    this.minions = [];
-    const zStart = -1.5;
-    const zEnd = 1.5;
-    const zStep = 0.35;
-    for (let z = zStart; z <= zEnd + 1e-6; z += zStep) {
-      const blue = new Minion(-0.5, z, 'blue');
-      const red = new Minion(0.5, z, 'red');
-      this.minions.push(blue, red);
-      this.add(blue);
-      this.add(red);
-    }
+    // AI 发兵 + 锁定弹道
+    this.minionSpawner = new MinionWaveSpawner(this);
+    this.projectiles = new ProjectileManager(this);
   }
 
   /** 每帧更新 */
   update(delta: number): void {
+    // 本帧开战前的存活单位（塔 + 小兵），供双方索敌
+    const combatUnits = [
+      ...this.defenseTowers.filter((t) => t.isAlive),
+      ...this.minionSpawner.activeMinions.filter((m) => m.isAlive),
+    ];
+
+    // 防御塔 AI：范围内锁定敌方，水晶发射追踪弹
     for (const tower of this.defenseTowers) {
-      tower.update(delta);
+      tower.update(delta, combatUnits, this.projectiles);
     }
-    for (const minion of this.minions) {
-      minion.update(delta);
-    }
+
+    // 小兵 AI：前摇结束只发射弹道，不直接扣血
+    this.minionSpawner.update(delta, this.defenseTowers, this.projectiles);
+
+    // 弹道追踪与命中结算（命中才 takeDamage）
+    this.projectiles.update(delta);
+    this.minionSpawner.pruneDead();
+
+    // 移动后再做地面圆碰撞（死兵已 prune；死塔仍挡路）
+    const bodies: CircleBody[] = [
+      ...this.defenseTowers.map((t) => t.collider),
+      ...this.minionSpawner.activeMinions.map((m) => m.collider),
+    ];
+    resolveCircleCollisions(bodies);
+    // 兵线两侧夹紧：圆心+半径不得超出地板 Z 范围
+    clampBodiesToFloor(bodies, { halfZ: DirtFloor.HALF_Z });
   }
 
   /** 窗口尺寸变化时由外部调用 */
@@ -73,8 +88,8 @@ export class MainScene extends THREE.Scene {
     for (const tower of this.defenseTowers) {
       tower.dispose();
     }
-    for (const minion of this.minions) {
-      minion.dispose();
-    }
+    this.minionSpawner.dispose();
+    this.projectiles.dispose();
   }
 }
+
