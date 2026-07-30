@@ -6,13 +6,25 @@ import { Minion, type MinionKind } from './Minion';
 export type MinionTeam = TeamId;
 
 /**
- * AI 发兵：双方从 x=±10 逐个出兵，每波 6 人（前 3 近战 + 后 3 远程），波次循环。
+ * AI 发兵：双方从己方基地水晶前诞生，逐个出兵。
+ * 每波 6 人（前 3 近战 + 后 3 远程），波次循环。
  */
 export class MinionWaveSpawner {
-  /** 蓝方出生点 X */
-  static readonly BLUE_SPAWN_X = -10;
-  /** 红方出生点 X */
-  static readonly RED_SPAWN_X = 10;
+  /** 蓝方水晶 X（与 NexusCrystal 一致） */
+  static readonly BLUE_NEXUS_X = -18;
+  /** 红方水晶 X */
+  static readonly RED_NEXUS_X = 18;
+  /**
+   * 相对水晶沿兵线朝中路偏移（米），避免与水晶静态碰撞体重叠。
+   * 蓝方向 +X，红方向 -X。
+   */
+  static readonly SPAWN_FORWARD = 1.15;
+  /** 蓝方出生点 X：水晶前方 */
+  static readonly BLUE_SPAWN_X =
+    MinionWaveSpawner.BLUE_NEXUS_X + MinionWaveSpawner.SPAWN_FORWARD;
+  /** 红方出生点 X：水晶前方 */
+  static readonly RED_SPAWN_X =
+    MinionWaveSpawner.RED_NEXUS_X - MinionWaveSpawner.SPAWN_FORWARD;
   /** 每波小兵数量（每方） */
   static readonly WAVE_SIZE = 6;
   /** 每波末尾远程兵数量 */
@@ -23,7 +35,7 @@ export class MinionWaveSpawner {
   static readonly WAVE_GAP = 12;
   /** 首波开局延迟（秒） */
   static readonly FIRST_WAVE_DELAY = 1.2;
-  /** 出生点 Z */
+  /** 出生点 Z（略偏侧，从水晶旁走出） */
   static readonly SPAWN_Z = -0.5;
 
   private readonly parent: Object3D;

@@ -7,17 +7,23 @@ import { createSceneLights } from '../world/createSceneLights';
 import { DefenseTower } from '../world/DefenseTower';
 import { DirtFloor } from '../world/DirtFloor';
 import { MinionWaveSpawner } from '../world/MinionWaveSpawner';
+import { NexusCrystal } from '../world/NexusCrystal';
 import { SpatialAxesGrid } from '../world/SpatialAxesGrid';
 
 /**
- * 主场景：灯光 + 地板 + 坐标辅助 + 防御塔 + AI 发兵 + 弹道战斗 + 地面圆碰撞。
+ * 主场景：灯光 + 地板 + 坐标辅助 + 基地水晶 + 防御塔 + AI 发兵 + 弹道战斗 + 地面圆碰撞。
  */
 export class MainScene extends THREE.Scene {
   /** 时间快进固定步长（秒），保证战斗/发兵逻辑稳定 */
   private static readonly SKIP_STEP = 1 / 30;
+  /** 门牙塔相对水晶沿兵线朝中路的偏移（米） */
+  private static readonly NEXUS_TOWER_FORWARD = 1.55;
+  /** 门牙塔左右半间距（米，±Z） */
+  private static readonly NEXUS_TOWER_HALF_Z = 1.15;
 
   private readonly floor: DirtFloor;
   private readonly axesGrid: SpatialAxesGrid;
+  private readonly nexusCrystals: NexusCrystal[];
   private readonly defenseTowers: DefenseTower[];
   private readonly minionSpawner: MinionWaveSpawner;
   private readonly projectiles: ProjectileManager;
@@ -43,12 +49,33 @@ export class MainScene extends THREE.Scene {
     this.axesGrid = new SpatialAxesGrid();
     this.add(this.axesGrid);
 
-    // 防御塔：±3m、±7m 对称布置
+    // 基地水晶：蓝 -18 / 红 +18（八边形平台内；小兵从此诞生）
+    const blueNexusX = MinionWaveSpawner.BLUE_NEXUS_X;
+    const redNexusX = MinionWaveSpawner.RED_NEXUS_X;
+    this.nexusCrystals = [
+      new NexusCrystal(blueNexusX),
+      new NexusCrystal(redNexusX),
+    ];
+    for (const nexus of this.nexusCrystals) {
+      this.add(nexus);
+    }
+
+    // 防御塔：
+    // - 兵线塔 ±3m、±7m
+    // - 双方水晶前各两座门牙塔（朝中路前移 + 左右张开）
+    const nexusTowerForward = MainScene.NEXUS_TOWER_FORWARD;
+    const nexusTowerHalfZ = MainScene.NEXUS_TOWER_HALF_Z;
     this.defenseTowers = [
       new DefenseTower(3),
       new DefenseTower(7),
       new DefenseTower(-3),
       new DefenseTower(-7),
+      // 蓝方门牙塔（水晶前）
+      new DefenseTower(blueNexusX + nexusTowerForward, nexusTowerHalfZ),
+      new DefenseTower(blueNexusX + nexusTowerForward, -nexusTowerHalfZ),
+      // 红方门牙塔（水晶前）
+      new DefenseTower(redNexusX - nexusTowerForward, nexusTowerHalfZ),
+      new DefenseTower(redNexusX - nexusTowerForward, -nexusTowerHalfZ),
     ];
     for (const tower of this.defenseTowers) {
       this.add(tower);
@@ -147,25 +174,34 @@ export class MainScene extends THREE.Scene {
 
   /** 单步游戏逻辑（游戏时间 delta） */
   private tick(delta: number): void {
-    // 本帧开战前的存活单位（塔 + 小兵），供双方索敌
-    const combatUnits = [
+    // 本帧开战前的存活单位（水晶 + 塔 + 小兵），供双方索敌
+    const structures = [
+      ...this.nexusCrystals.filter((n) => n.isAlive),
       ...this.defenseTowers.filter((t) => t.isAlive),
+    ];
+    const combatUnits = [
+      ...structures,
       ...this.minionSpawner.activeMinions.filter((m) => m.isAlive),
     ];
+
+    // 基地水晶：悬浮脉动动画
+    for (const nexus of this.nexusCrystals) {
+      nexus.update(delta);
+    }
 
     // 防御塔 AI：范围内锁定敌方，水晶发射追踪弹
     for (const tower of this.defenseTowers) {
       tower.update(delta, combatUnits, this.projectiles);
     }
 
-    // 小兵 AI：前摇结束只发射弹道，不直接扣血
-    this.minionSpawner.update(delta, this.defenseTowers, this.projectiles);
+    // 小兵 AI：前摇结束只发射弹道，不直接扣血（建筑含水晶）
+    this.minionSpawner.update(delta, structures, this.projectiles);
 
     // 弹道追踪与命中结算（命中才 takeDamage）
     this.projectiles.update(delta);
     this.minionSpawner.pruneDead();
 
-    // 移动后再做地面圆碰撞（死兵已 prune；死塔仍挡路）
+    // 移动后再做地面圆碰撞（死兵已 prune；死塔/死水晶仍挡路）
     const bodies = this.collectColliderBodies();
     resolveCircleCollisions(bodies);
     // 兵线两侧夹紧：圆心+半径不得超出地板 Z 范围
@@ -179,6 +215,9 @@ export class MainScene extends THREE.Scene {
 
   dispose(): void {
     this.floor.dispose();
+    for (const nexus of this.nexusCrystals) {
+      nexus.dispose();
+    }
     for (const tower of this.defenseTowers) {
       tower.dispose();
     }
@@ -188,6 +227,7 @@ export class MainScene extends THREE.Scene {
 
   private collectColliderBodies(): CircleBody[] {
     return [
+      ...this.nexusCrystals.map((n) => n.collider),
       ...this.defenseTowers.map((t) => t.collider),
       ...this.minionSpawner.activeMinions.map((m) => m.collider),
     ];

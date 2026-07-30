@@ -356,9 +356,12 @@ export class Minion extends THREE.Group implements CombatUnit {
     }
   }
 
-  /** 是否已走出战场（越过对侧边界），可供发兵器回收 */
+  /**
+   * 是否已走出战场（越过对侧基地外侧），可供发兵器回收。
+   * 边界略大于八边形平台外沿（约 ±20），保证可抵达基地水晶。
+   */
   get isOffField(): boolean {
-    return this.team === 'blue' ? this.position.x > 11 : this.position.x < -11;
+    return this.team === 'blue' ? this.position.x > 21 : this.position.x < -21;
   }
 
   private clearCombat(): void {
