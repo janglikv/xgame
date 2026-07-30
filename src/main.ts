@@ -7,7 +7,9 @@ import {
   type GameSettingsSnapshot,
 } from './storage/gameSettings';
 import { EscMenu } from './ui/EscMenu';
+import { HeroHealthBarHUD } from './ui/HeroHealthBarHUD';
 import { ScreenBrightness } from './ui/ScreenBrightness';
+import { SkillBar } from './ui/SkillBar';
 
 function bootstrap(): void {
   const host = document.getElementById('app');
@@ -125,29 +127,74 @@ function bootstrap(): void {
       scene.setTowerInvincible(invincible);
       persistSettings({ towerInvincible: invincible });
     },
-    onOpenChange: (open) => controls.setEnabled(!open),
+    onOpenChange: (open) => {
+      controls.setEnabled(!open);
+      if (open) {
+        scene.cancelSkillTargeting();
+        skillBar.setTargeting(null);
+      }
+    },
   });
   escMenu.setSize(width, height);
 
+  // 屏幕空间 2D 英雄血条 HUD (MOBA 风格，绝对悬浮于头顶 24px，不遮挡身躯与帽子)
+  const heroHealthBar = new HeroHealthBarHUD(host);
+  heroHealthBar.setSize(width, height);
+
+  // 底部技能栏 QWER（E = 枪林弹雨）
+  const skillBar = new SkillBar({
+    isInputBlocked: () => escMenu.isOpen,
+    onSkillPress: (slot) => {
+      if (slot === 'E') {
+        scene.beginHeroSkillE();
+        skillBar.setTargeting(scene.skillTargetingSlot);
+      }
+    },
+  });
+  skillBar.setSize(width, height);
+
   // 锁定视角：右键点敌 → 普攻；右键点地 → 移动
+  // 技能选点：左键确认，右键取消
   const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
   const raycaster = new THREE.Raycaster();
   const pointerNdc = new THREE.Vector2();
   const hitPoint = new THREE.Vector3();
 
-  const onPointerDownCommand = (e: PointerEvent): void => {
-    if (e.button !== 2) return;
-    if (escMenu.isOpen) return;
-    e.preventDefault();
-
+  const pickGround = (clientX: number, clientY: number): boolean => {
     const rect = renderer.domElement.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return;
+    if (rect.width <= 0 || rect.height <= 0) return false;
     pointerNdc.set(
-      ((e.clientX - rect.left) / rect.width) * 2 - 1,
-      -(((e.clientY - rect.top) / rect.height) * 2 - 1),
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -(((clientY - rect.top) / rect.height) * 2 - 1),
     );
     raycaster.setFromCamera(pointerNdc, camera);
-    if (!raycaster.ray.intersectPlane(groundPlane, hitPoint)) return;
+    return raycaster.ray.intersectPlane(groundPlane, hitPoint) != null;
+  };
+
+  const onPointerDownCommand = (e: PointerEvent): void => {
+    if (escMenu.isOpen) return;
+
+    // 技能选点：左键确认 / 右键取消
+    if (scene.isSkillTargeting) {
+      if (e.button === 2) {
+        e.preventDefault();
+        scene.cancelSkillTargeting();
+        skillBar.setTargeting(null);
+        return;
+      }
+      if (e.button === 0) {
+        e.preventDefault();
+        if (!pickGround(e.clientX, e.clientY)) return;
+        scene.confirmSkillTarget(hitPoint.x, hitPoint.z);
+        skillBar.setTargeting(null);
+        return;
+      }
+      return;
+    }
+
+    if (e.button !== 2) return;
+    e.preventDefault();
+    if (!pickGround(e.clientX, e.clientY)) return;
 
     // 落点附近有敌方单位 → 普攻锁定；否则点地移动
     const enemy = scene.pickEnemyNear(hitPoint.x, hitPoint.z);
@@ -158,7 +205,18 @@ function bootstrap(): void {
     }
   };
 
+  const onPointerMoveTargeting = (e: PointerEvent): void => {
+    if (escMenu.isOpen || !scene.isSkillTargeting) return;
+    if (!pickGround(e.clientX, e.clientY)) return;
+    scene.updateSkillTargeting(hitPoint.x, hitPoint.z);
+  };
+
   renderer.domElement.addEventListener('pointerdown', onPointerDownCommand);
+  renderer.domElement.addEventListener('pointermove', onPointerMoveTargeting);
+  // 技能选点时禁用浏览器右键菜单，避免挡住取消操作
+  renderer.domElement.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+  });
 
   const onResize = (): void => {
     const { width: w, height: h } = getSize();
@@ -168,6 +226,8 @@ function bootstrap(): void {
     scene.resize(w, h);
     screenBrightness.setSize(w, h);
     escMenu.setSize(w, h);
+    skillBar.setSize(w, h);
+    heroHealthBar.setSize(w, h);
   };
 
   window.addEventListener('resize', onResize);
@@ -183,9 +243,19 @@ function bootstrap(): void {
     scene.update(delta);
     controls.update(delta);
 
+    // 技能栏：E 冷却 / 选点高亮
+    skillBar.setCooldown(
+      'E',
+      scene.hero.eCooldownRemaining,
+      scene.hero.eCooldownTotal,
+    );
+    skillBar.setTargeting(scene.skillTargetingSlot);
+
     renderer.render(scene, camera);
     // 压暗世界画面，设置面板保持清晰可读
     screenBrightness.render(renderer);
+    heroHealthBar.update(camera, scene.hero, delta);
+    skillBar.render(renderer);
     escMenu.render(renderer);
   };
 

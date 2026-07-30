@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { GroundCastIndicator } from '../effects/GroundCastIndicator';
 import { ProjectileManager } from '../effects/ProjectileManager';
 import { CircleBody } from '../world/collision/CircleBody';
 import { clampBodiesToFloor } from '../world/collision/clampBodiesToFloor';
@@ -38,9 +39,16 @@ export class MainScene extends THREE.Scene {
   private readonly projectiles: ProjectileManager;
   /** 第一个英雄：厄运小姐（独立模型；锁定视角下可点地移动） */
   private readonly missFortune: MissFortune;
+  /** 技能地面选点指示（E 枪林弹雨） */
+  private readonly castIndicator: GroundCastIndicator;
 
   private axesVisible = true;
   private colliderMarkersVisible = true;
+  /** 当前地面技能选点：'E' | null */
+  private targetingSkill: 'E' | null = null;
+  /** 最近一次鼠标地面落点（选点中跟随英雄时用） */
+  private aimX = 0;
+  private aimZ = 0;
 
   /** 待快进的游戏时间（秒） */
   private skipGameLeft = 0;
@@ -101,6 +109,16 @@ export class MainScene extends THREE.Scene {
     // 第一个角色：厄运小姐 @ x=0（独立模型、粉帽、三倍体型，无 AI）
     this.missFortune = new MissFortune(0, 0);
     this.add(this.missFortune);
+
+    this.castIndicator = new GroundCastIndicator(
+      MissFortune.BOLT_COLOR,
+      MissFortune.BOLT_EMISSIVE,
+    );
+    this.castIndicator.configure(
+      MissFortune.E_CAST_RANGE,
+      MissFortune.E_RADIUS,
+    );
+    this.add(this.castIndicator);
   }
 
   get showAxes(): boolean {
@@ -137,6 +155,86 @@ export class MainScene extends THREE.Scene {
   commandHeroAttack(target: CombatUnit): void {
     if (!this.missFortune.isAlive) return;
     this.missFortune.setAttackTarget(target);
+  }
+
+  /** 是否处于技能地面选点状态 */
+  get isSkillTargeting(): boolean {
+    return this.targetingSkill != null;
+  }
+
+  get skillTargetingSlot(): 'E' | null {
+    return this.targetingSkill;
+  }
+
+  /** 按 E：进入/取消「枪林弹雨」选点 */
+  beginHeroSkillE(): boolean {
+    if (!this.missFortune.canCastE()) return false;
+    if (this.targetingSkill === 'E') {
+      this.cancelSkillTargeting();
+      return true;
+    }
+    this.targetingSkill = 'E';
+    this.castIndicator.configure(
+      MissFortune.E_CAST_RANGE,
+      MissFortune.E_RADIUS,
+    );
+    this.castIndicator.setActive(true);
+    // 初始贴在英雄脚下
+    this.updateSkillTargeting(
+      this.missFortune.position.x,
+      this.missFortune.position.z,
+    );
+    return true;
+  }
+
+  /** 取消技能选点 */
+  cancelSkillTargeting(): void {
+    this.targetingSkill = null;
+    this.castIndicator.setActive(false);
+  }
+
+  /**
+   * 更新选点指示位置（鼠标地面落点）。
+   * 超距时落点圈仍跟鼠标，颜色变红提示；施放时会钳到最大距离。
+   */
+  updateSkillTargeting(aimX: number, aimZ: number): void {
+    if (this.targetingSkill !== 'E') return;
+    if (!Number.isFinite(aimX) || !Number.isFinite(aimZ)) return;
+    this.aimX = aimX;
+    this.aimZ = aimZ;
+    this.refreshCastIndicator();
+  }
+
+  private refreshCastIndicator(): void {
+    if (this.targetingSkill !== 'E') return;
+    const hx = this.missFortune.position.x;
+    const hz = this.missFortune.position.z;
+    const dist = Math.hypot(this.aimX - hx, this.aimZ - hz);
+    const inRange = dist <= MissFortune.E_CAST_RANGE + 1e-4;
+    this.castIndicator.setPose(hx, hz, this.aimX, this.aimZ, inRange);
+  }
+
+  /**
+   * 确认施放当前选中技能（左键）。
+   * @returns 是否成功施放
+   */
+  confirmSkillTarget(aimX: number, aimZ: number): boolean {
+    if (this.targetingSkill !== 'E') return false;
+    const ok = this.commandHeroCastE(aimX, aimZ);
+    this.cancelSkillTargeting();
+    return ok;
+  }
+
+  /** 直接施放 E（不经选点 UI 时也可调用） */
+  commandHeroCastE(aimX: number, aimZ: number): boolean {
+    if (!this.missFortune.isAlive) return false;
+    const result = this.missFortune.castE(
+      aimX,
+      aimZ,
+      this.projectiles,
+      () => this.collectEnemyCombatUnits(this.missFortune.team),
+    );
+    return result != null;
   }
 
   /**
@@ -303,6 +401,15 @@ export class MainScene extends THREE.Scene {
     // 英雄：意图 → 位移 → 限速转向 → 对准后从枪口开火
     this.missFortune.update(delta, this.projectiles);
 
+    // 选点中：施法距离圈跟着英雄走；死亡则取消
+    if (this.targetingSkill) {
+      if (!this.missFortune.isAlive) {
+        this.cancelSkillTargeting();
+      } else {
+        this.refreshCastIndicator();
+      }
+    }
+
     // 小兵 AI：索敌建筑 + 英雄 + 互打；前摇结束只发射弹道
     const minionHostiles: CombatUnit[] = [...structures];
     if (this.missFortune.isAlive) minionHostiles.push(this.missFortune);
@@ -332,6 +439,8 @@ export class MainScene extends THREE.Scene {
     for (const tower of this.defenseTowers) {
       tower.dispose();
     }
+    this.remove(this.castIndicator);
+    this.castIndicator.dispose();
     this.remove(this.missFortune);
     this.missFortune.dispose();
     this.minionSpawner.dispose();

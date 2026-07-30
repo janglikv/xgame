@@ -1,14 +1,16 @@
 import * as THREE from 'three';
 import type { CombatUnit, TeamId } from '../world/combat/CombatUnit';
+import { BulletRain, type BulletRainSpawn } from './BulletRain';
 import { HitSpark } from './HitSpark';
 import { HomingBolt, type HomingBoltSpawn } from './HomingBolt';
 
 /**
- * 管理追踪弹与命中火花。
+ * 管理追踪弹、区域落弹（枪林弹雨）与命中火花。
  */
 export class ProjectileManager {
   private readonly parent: THREE.Object3D;
   private readonly bolts: HomingBolt[] = [];
+  private readonly rains: BulletRain[] = [];
   private readonly sparks: HitSpark[] = [];
 
   constructor(parent: THREE.Object3D) {
@@ -34,6 +36,13 @@ export class ProjectileManager {
     this.fire({ origin, target, damage, team, scale, ...extras });
   }
 
+  /** 枪林弹雨：地面圆内持续落弹 + 周期伤害 */
+  spawnBulletRain(spawn: BulletRainSpawn): void {
+    const rain = new BulletRain(spawn);
+    this.rains.push(rain);
+    this.parent.add(rain);
+  }
+
   update(delta: number): void {
     for (let i = this.bolts.length - 1; i >= 0; i -= 1) {
       const bolt = this.bolts[i];
@@ -47,6 +56,14 @@ export class ProjectileManager {
       this.parent.remove(bolt);
       bolt.dispose();
       this.bolts.splice(i, 1);
+    }
+
+    for (let i = this.rains.length - 1; i >= 0; i -= 1) {
+      const rain = this.rains[i];
+      if (rain.update(delta)) continue;
+      this.parent.remove(rain);
+      rain.dispose();
+      this.rains.splice(i, 1);
     }
 
     for (let i = this.sparks.length - 1; i >= 0; i -= 1) {
@@ -64,6 +81,11 @@ export class ProjectileManager {
       bolt.dispose();
     }
     this.bolts.length = 0;
+    for (const rain of this.rains) {
+      this.parent.remove(rain);
+      rain.dispose();
+    }
+    this.rains.length = 0;
     for (const spark of this.sparks) {
       this.parent.remove(spark);
       spark.dispose();

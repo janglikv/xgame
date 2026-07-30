@@ -38,6 +38,22 @@ export class MissFortune extends THREE.Group implements CombatUnit {
   static readonly BOLT_COLOR = 0xf9a8d4;
   static readonly BOLT_EMISSIVE = 0xec4899;
 
+  // —— E：枪林弹雨 ——
+  /** 施法距离（英雄圆心 → 落点圆心） */
+  static readonly E_CAST_RANGE = 3.4;
+  /** 落弹 / 伤害半径 */
+  static readonly E_RADIUS = 1.15;
+  /** 持续落弹时间（秒） */
+  static readonly E_DURATION = 2.2;
+  /** 视觉落弹总数 */
+  static readonly E_BOLT_COUNT = 52;
+  /** 圈内敌方每次 tick 伤害 */
+  static readonly E_DAMAGE_PER_TICK = 14;
+  /** 伤害 tick 间隔（秒） */
+  static readonly E_TICK_INTERVAL = 0.28;
+  /** 冷却（秒） */
+  static readonly E_COOLDOWN = 7;
+
   /** 点地移动最大速度（世界单位/秒） */
   static readonly MOVE_SPEED = 1.35;
   /** 0→满速 / 满速→0 的目标时间（秒） */
@@ -149,6 +165,8 @@ export class MissFortune extends THREE.Group implements CombatUnit {
   /** 子弹发射瞬间的抬手动作倒计时 */
   private shootAnimTimer = 0;
   private readonly muzzleWorld = new THREE.Vector3();
+  /** E 技能剩余冷却（秒） */
+  private eCd = 0;
   /**
    * 权威偏航角（弧度）。只由 applyFacing 推进；同步到 rotation.y。
    * 不回读 Three Euler，避免矩阵/四元数回写造成跳变。
@@ -317,7 +335,7 @@ export class MissFortune extends THREE.Group implements CombatUnit {
     this.rightFoot.castShadow = true;
     this.add(this.rightFoot);
 
-    // 头顶血条（按 SCALE 补偿，世界约 0.55×0.045）
+    // 头顶血条（改由 HeroHealthBarHUD 屏幕 2D 层精确渲染，隐藏 3D 场景杂合血条）
     const s = MissFortune.SCALE;
     this.healthBar = new HealthBar({
       width: 0.55 / s,
@@ -325,8 +343,7 @@ export class MissFortune extends THREE.Group implements CombatUnit {
       yOffset: 1.45,
       team: this.team,
     });
-    this.add(this.healthBar);
-    this.healthBar.setHp(this.hp, this.maxHp);
+    this.healthBar.visible = false;
 
     this.applyLocomotionPose(0);
   }
@@ -406,6 +423,68 @@ export class MissFortune extends THREE.Group implements CombatUnit {
     return this.attackTarget != null;
   }
 
+  /** E 技能剩余冷却（秒） */
+  get eCooldownRemaining(): number {
+    return this.eCd;
+  }
+
+  get eCooldownTotal(): number {
+    return MissFortune.E_COOLDOWN;
+  }
+
+  canCastE(): boolean {
+    return this.isAlive && this.eCd <= 0;
+  }
+
+  /**
+   * 施放 E「枪林弹雨」：落点超距时钳到最大施法距离边缘。
+   * @returns 实际落点；不可施放时返回 null
+   */
+  castE(
+    aimX: number,
+    aimZ: number,
+    projectiles: ProjectileManager,
+    getEnemyUnits: () => readonly CombatUnit[],
+  ): { x: number; z: number } | null {
+    if (!this.canCastE()) return null;
+    if (!Number.isFinite(aimX) || !Number.isFinite(aimZ)) return null;
+
+    let x = aimX;
+    let z = aimZ;
+    const dx = aimX - this.position.x;
+    const dz = aimZ - this.position.z;
+    const dist = Math.hypot(dx, dz);
+    if (dist > MissFortune.E_CAST_RANGE && dist > 1e-6) {
+      const s = MissFortune.E_CAST_RANGE / dist;
+      x = this.position.x + dx * s;
+      z = this.position.z + dz * s;
+    }
+
+    this.eCd = MissFortune.E_COOLDOWN;
+    // 朝向落点；不取消普攻，登记期望朝向
+    this.requestFacing(x - this.position.x, z - this.position.z);
+    this.shootAnimTimer = 0.32;
+    this.activeShotRight = this.nextShotRight;
+    this.nextShotRight = !this.nextShotRight;
+
+    projectiles.spawnBulletRain({
+      centerX: x,
+      centerZ: z,
+      radius: MissFortune.E_RADIUS,
+      team: this.team,
+      damagePerTick: MissFortune.E_DAMAGE_PER_TICK,
+      tickInterval: MissFortune.E_TICK_INTERVAL,
+      duration: MissFortune.E_DURATION,
+      boltCount: MissFortune.E_BOLT_COUNT,
+      color: MissFortune.BOLT_COLOR,
+      emissive: MissFortune.BOLT_EMISSIVE,
+      boltScale: MissFortune.BOLT_SCALE * 0.55,
+      getEnemyUnits,
+    });
+
+    return { x, z };
+  }
+
   /** 是否在移动（有目标或仍在减速） */
   get isMoving(): boolean {
     if (this.moveTargetX != null && this.moveTargetZ != null) return true;
@@ -455,6 +534,10 @@ export class MissFortune extends THREE.Group implements CombatUnit {
         }
       }
       return;
+    }
+
+    if (this.eCd > 0) {
+      this.eCd = Math.max(0, this.eCd - delta);
     }
 
     this.tickCombatIntent(delta);
