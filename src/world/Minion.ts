@@ -284,12 +284,12 @@ export class Minion extends THREE.Group implements CombatUnit {
     this.leftFoot = ball(0.1, Minion.LIMB);
     this.leftFoot.position.copy(this.baseLeftFoot);
     this.leftFoot.castShadow = true;
-    this.add(this.leftFoot);
+    this.bodyRoot.add(this.leftFoot);
 
     this.rightFoot = ball(0.1, Minion.LIMB);
     this.rightFoot.position.copy(this.baseRightFoot);
     this.rightFoot.castShadow = true;
-    this.add(this.rightFoot);
+    this.bodyRoot.add(this.rightFoot);
 
     // 头顶血条：按视觉缩放补偿，世界尺寸约 0.15×0.014
     const s = this.stats.scale;
@@ -346,38 +346,31 @@ export class Minion extends THREE.Group implements CombatUnit {
     const fallTime = 0.45;
     const fadeStart = 0.8;
 
-    // 1. 倒下动作（0 ~ 0.45s，带有弹性的平滑倒地姿态）
+    // 1. 倒下动作（0 ~ 0.45s，整套模型包含身体/帽/手/脚整体平滑倒地）
     const tFall = Math.min(1, this.deathElapsed / fallTime);
     const fallEase = 1 - Math.pow(1 - tFall, 2.5);
 
     const angle = Math.PI * 0.48 * fallEase;
     this.bodyRoot.rotation.x = -angle;
 
-    // 几何补偿：随着倾倒角度增加，正确抬升 bodyRoot Y 轴，确保身体球底部精准贴于地面 y = 0 以上
+    // 几何补偿：随着整体倾倒，抬升 bodyRoot Y 轴，保证身体与手脚不陷地
     this.bodyRoot.position.y = 0.38 * (1 - Math.cos(angle));
     this.bodyRoot.position.z = -0.15 * fallEase;
 
+    // 手脚在局部坐标系中保持在关节位置（自然脱力瘫软）
     this.leftHand.position.set(
-      this.baseLeftHand.x + 0.1 * fallEase,
-      this.baseLeftHand.y * (1 - fallEase) + 0.06 * fallEase,
-      this.baseLeftHand.z - 0.12 * fallEase,
+      this.baseLeftHand.x + 0.05 * fallEase,
+      this.baseLeftHand.y + 0.02 * fallEase,
+      this.baseLeftHand.z - 0.05 * fallEase,
     );
     this.rightHand.position.set(
-      this.baseRightHand.x - 0.1 * fallEase,
-      this.baseRightHand.y * (1 - fallEase) + 0.06 * fallEase,
-      this.baseRightHand.z - 0.12 * fallEase,
+      this.baseRightHand.x - 0.05 * fallEase,
+      this.baseRightHand.y + 0.02 * fallEase,
+      this.baseRightHand.z - 0.05 * fallEase,
     );
 
-    this.leftFoot.position.set(
-      this.baseLeftFoot.x,
-      this.baseLeftFoot.y * (1 - fallEase) + 0.05 * fallEase,
-      this.baseLeftFoot.z - 0.08 * fallEase,
-    );
-    this.rightFoot.position.set(
-      this.baseRightFoot.x,
-      this.baseRightFoot.y * (1 - fallEase) + 0.05 * fallEase,
-      this.baseRightFoot.z - 0.08 * fallEase,
-    );
+    this.leftFoot.position.copy(this.baseLeftFoot);
+    this.rightFoot.position.copy(this.baseRightFoot);
 
     // 2. 渐隐（0.8s ~ 1.6s）
     if (this.deathElapsed >= fadeStart) {
