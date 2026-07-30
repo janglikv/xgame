@@ -99,7 +99,18 @@ export class MinionWaveSpawner {
     this.minions.length = 0;
   }
 
+  private spawnEnabled = true;
+
+  get isSpawnEnabled(): boolean {
+    return this.spawnEnabled;
+  }
+
+  setSpawnEnabled(enabled: boolean): void {
+    this.spawnEnabled = enabled;
+  }
+
   private tickSpawn(delta: number): void {
+    if (!this.spawnEnabled) return;
     if (!this.waveActive) {
       this.waveCd -= delta;
       if (this.waveCd <= 0) {

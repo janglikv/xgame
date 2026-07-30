@@ -283,12 +283,22 @@ export class DefenseTower extends THREE.Group implements CombatUnit {
     this.add(this.rangeMarker);
   }
 
+  private invincible = false;
+
+  get isInvincible(): boolean {
+    return this.invincible;
+  }
+
+  setInvincible(invincible: boolean): void {
+    this.invincible = invincible;
+  }
+
   get isAlive(): boolean {
     return this.hp > 0;
   }
 
   takeDamage(amount: number): void {
-    if (!this.isAlive || amount <= 0) return;
+    if (this.invincible || !this.isAlive || amount <= 0) return;
     this.hp = Math.max(0, this.hp - amount);
     this.healthBar.setHp(this.hp, this.maxHp);
     if (!this.isAlive) {

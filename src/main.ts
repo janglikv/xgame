@@ -54,6 +54,9 @@ function bootstrap(): void {
   scene.setAxesVisible(settings.showAxes);
   scene.setColliderMarkersVisible(settings.showColliderMarkers);
   controls.setViewMode(settings.cameraLocked ? 'locked' : 'free');
+  scene.setHeroInvincible(settings.godMode);
+  scene.setMinionSpawnEnabled(settings.minionSpawn);
+  scene.setTowerInvincible(settings.towerInvincible);
 
   // 全局亮度压暗层（主场景后、设置面板前）
   const screenBrightness = new ScreenBrightness();
@@ -71,6 +74,15 @@ function bootstrap(): void {
     if (patch.cameraLocked !== undefined) {
       settings.cameraLocked = patch.cameraLocked;
     }
+    if (patch.godMode !== undefined) {
+      settings.godMode = patch.godMode;
+    }
+    if (patch.minionSpawn !== undefined) {
+      settings.minionSpawn = patch.minionSpawn;
+    }
+    if (patch.towerInvincible !== undefined) {
+      settings.towerInvincible = patch.towerInvincible;
+    }
     saveGameSettings(settings);
   };
 
@@ -80,6 +92,9 @@ function bootstrap(): void {
     initialColliderMarkersVisible: settings.showColliderMarkers,
     initialBrightness: settings.brightnessUi,
     initialCameraLocked: settings.cameraLocked,
+    initialGodMode: settings.godMode,
+    initialMinionSpawn: settings.minionSpawn,
+    initialTowerInvincible: settings.towerInvincible,
     onAxesChange: (visible) => {
       scene.setAxesVisible(visible);
       persistSettings({ showAxes: visible });
@@ -97,6 +112,18 @@ function bootstrap(): void {
     onCameraLockChange: (locked) => {
       controls.setViewMode(locked ? 'locked' : 'free');
       persistSettings({ cameraLocked: locked });
+    },
+    onGodModeChange: (god) => {
+      scene.setHeroInvincible(god);
+      persistSettings({ godMode: god });
+    },
+    onMinionSpawnChange: (spawn) => {
+      scene.setMinionSpawnEnabled(spawn);
+      persistSettings({ minionSpawn: spawn });
+    },
+    onTowerInvincibleChange: (invincible) => {
+      scene.setTowerInvincible(invincible);
+      persistSettings({ towerInvincible: invincible });
     },
     onOpenChange: (open) => controls.setEnabled(!open),
   });
@@ -149,7 +176,8 @@ function bootstrap(): void {
 
   const tick = (): void => {
     requestAnimationFrame(tick);
-    const delta = clock.getDelta();
+    // 钳制单帧游戏时间，避免切 tab 后大 delta 在一帧内跑完转身（视觉突变）
+    const delta = Math.min(clock.getDelta(), 1 / 20);
 
     // 先推进场景（英雄位移），再跟随镜头
     scene.update(delta);

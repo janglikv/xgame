@@ -32,8 +32,8 @@ export class MissFortune extends THREE.Group implements CombatUnit {
   static readonly ATTACK_INTERVAL = 0.85;
   /** 出手前摇（秒） */
   static readonly WINDUP = 0.14;
-  /** 粉色子弹视觉缩放 */
-  static readonly BOLT_SCALE = 2.4;
+  /** 粉色子弹视觉缩放（已翻 4 倍） */
+  static readonly BOLT_SCALE = 9.6;
   /** 粉色弹道色 */
   static readonly BOLT_COLOR = 0xf9a8d4;
   static readonly BOLT_EMISSIVE = 0xec4899;
@@ -52,11 +52,18 @@ export class MissFortune extends THREE.Group implements CombatUnit {
    */
   static readonly MOVE_DECEL =
     MissFortune.MOVE_SPEED / MissFortune.MOVE_RAMP_TIME;
-  /** 转向角速度（弧度/秒），约 180° 需 ~0.25s；全角色唯一限速 */
-  static readonly TURN_SPEED = 12;
+  /**
+   * 最坏情况（转 180°）时长（秒）。
+   * 更小角度按时长 ∝ 夹角 / π 缩放；过程为 ease-in-out 非线性。
+   */
+  static readonly TURN_TIME = 0.3;
+  /**
+   * 期望朝向相对当前转身目标偏移超过此值时，从当前 yaw 重新规划转身。
+   * （约 25°，避免追移动目标时每帧重置导致卡在缓动起点）
+   */
+  private static readonly TURN_RETARGET = (25 * Math.PI) / 180;
   /**
    * 开火朝向容差（弧度）：实际朝向与目标夹角 ≤ 此值才推进前摇/出弹。
-   * ~12°，避免侧身开枪。
    */
   static readonly FIRE_CONE = (12 * Math.PI) / 180;
   /** 到达目标判定距离 */
@@ -138,22 +145,43 @@ export class MissFortune extends THREE.Group implements CombatUnit {
   private windupElapsed = -1;
   /** 双枪交替：true=下一发右手 */
   private nextShotRight = true;
+  private activeShotRight = true;
+  /** 子弹发射瞬间的抬手动作倒计时 */
+  private shootAnimTimer = 0;
   private readonly muzzleWorld = new THREE.Vector3();
   /**
-   * 本帧期望朝向（世界 XZ 方向，未归一化亦可）。
-   * 仅 requestFacing 写入；仅 applyFacing 读取并清空。
-   * rotation.y 禁止在其它路径赋值（构造初始化除外）。
+   * 权威偏航角（弧度）。只由 applyFacing 推进；同步到 rotation.y。
+   * 不回读 Three Euler，避免矩阵/四元数回写造成跳变。
    */
-  private faceIntentX: number | null = null;
-  private faceIntentZ: number | null = null;
+  private yaw = Math.PI / 2;
+  /**
+   * 期望偏航角（弧度）。仅 requestFacing / 移动意图写入；
+   * applyFacing 只逼近、不突变赋值。
+   */
+  private desiredYaw = Math.PI / 2;
+  /** 本段转身起点 / 终点（最短弧） */
+  private turnFromYaw = Math.PI / 2;
+  private turnToYaw = Math.PI / 2;
+  /** 本段转身已用时间 / 总时长 */
+  private turnElapsed = 0;
+  private turnDuration = 0;
+  private turnActive = false;
+
+  private spawnX: number;
+  private spawnZ: number;
+  private respawnTimer = 0;
 
   constructor(x = 0, z = 0) {
     super();
     this.name = MissFortune.DISPLAY_NAME;
+    this.spawnX = x;
+    this.spawnZ = z;
     this.position.set(x, 0, z);
     this.scale.setScalar(MissFortune.SCALE);
     // 面朝 +X（本地 +Z → 世界 +X）
-    this.rotation.y = Math.PI / 2;
+    this.yaw = Math.PI / 2;
+    this.desiredYaw = this.yaw;
+    this.rotation.set(0, this.yaw, 0);
 
     this.collider = new CircleBody(this, MissFortune.COLLIDER_RADIUS);
 
@@ -303,17 +331,44 @@ export class MissFortune extends THREE.Group implements CombatUnit {
     this.applyLocomotionPose(0);
   }
 
+  private invincible = false;
+
+  get isInvincible(): boolean {
+    return this.invincible;
+  }
+
+  setInvincible(invincible: boolean): void {
+    this.invincible = invincible;
+  }
+
   get isAlive(): boolean {
     return this.hp > 0;
   }
 
   takeDamage(amount: number): void {
-    if (!this.isAlive || amount <= 0) return;
+    if (this.invincible || !this.isAlive || amount <= 0) return;
     this.hp = Math.max(0, this.hp - amount);
     this.healthBar.setHp(this.hp, this.maxHp);
     if (!this.isAlive) {
       this.clearAttackTarget();
+      this.stopMoving();
+      this.respawnTimer = 5;
+      this.visible = false;
     }
+  }
+
+  respawn(): void {
+    this.hp = MissFortune.MAX_HP;
+    this.healthBar.setHp(this.hp, this.maxHp);
+    this.position.set(this.spawnX, 0, this.spawnZ);
+    this.clearAttackTarget();
+    this.stopMoving();
+    this.velX = 0;
+    this.velZ = 0;
+    this.yaw = Math.PI / 2;
+    this.desiredYaw = this.yaw;
+    this.rotation.set(0, this.yaw, 0);
+    this.visible = true;
   }
 
   /** 弹道落点：身体球中心 */
@@ -329,6 +384,11 @@ export class MissFortune extends THREE.Group implements CombatUnit {
     if (!this.isAlive || !isValidTarget(this, target)) return;
     this.attackTarget = target;
     this.windupElapsed = -1;
+    // 只登记期望朝向，不改 yaw（由后续 applyFacing 限速转向）
+    this.requestFacing(
+      target.collider.x - this.position.x,
+      target.collider.z - this.position.z,
+    );
     const d = distXZ(this.collider, target.collider);
     if (d > MissFortune.ATTACK_RANGE) {
       this.chaseTo(target.collider.x, target.collider.z);
@@ -386,6 +446,17 @@ export class MissFortune extends THREE.Group implements CombatUnit {
    */
   update(delta: number, projectiles: ProjectileManager): void {
     if (!(delta > 0) || !Number.isFinite(delta)) return;
+
+    if (!this.isAlive) {
+      if (this.respawnTimer > 0) {
+        this.respawnTimer = Math.max(0, this.respawnTimer - delta);
+        if (this.respawnTimer <= 0) {
+          this.respawn();
+        }
+      }
+      return;
+    }
+
     this.tickCombatIntent(delta);
     this.tickMovement(delta);
     this.tickCombatFire(delta, projectiles);
@@ -566,15 +637,16 @@ export class MissFortune extends THREE.Group implements CombatUnit {
 
     const spd = this.speed();
 
-    // —— 朝向：攻击意图优先，否则移动方向，否则速度方向 ——
-    // 唯一写 rotation.y 的路径（构造初始化除外）
-    if (this.faceIntentX == null || this.faceIntentZ == null) {
+    // —— 朝向意图：攻击已在 tickCombatIntent 写过 desiredYaw 则不再覆盖 ——
+    // 无攻击时：移动方向 > 速度方向；都没有则保持当前 desiredYaw（不甩头）
+    if (!this.hasAttackTarget) {
       if (moveFaceX != null && moveFaceZ != null) {
         this.requestFacing(moveFaceX, moveFaceZ);
       } else if (spd > MissFortune.STOP_SPEED) {
         this.requestFacing(this.velX, this.velZ);
       }
     }
+    // 唯一推进 yaw / rotation.y 的出口
     this.applyFacing(delta);
 
     if (
@@ -607,41 +679,98 @@ export class MissFortune extends THREE.Group implements CombatUnit {
         (0.55 + 0.45 * this.moveAnimWeight);
     }
 
-    this.applyLocomotionPose(this.moveAnimWeight);
+    this.applyLocomotionPose(this.moveAnimWeight, delta);
   }
 
   /**
-   * 登记本帧期望朝向（世界 XZ）。不写 rotation.y。
-   * 攻击意图会覆盖移动意图（同帧后写优先，故战斗在移动前 request）。
+   * 登记期望朝向（世界 XZ → yaw）。只改 desiredYaw，绝不写 rotation。
    */
   private requestFacing(dx: number, dz: number): void {
     if (dx * dx + dz * dz < 1e-10) return;
-    this.faceIntentX = dx;
-    this.faceIntentZ = dz;
+    this.desiredYaw = Math.atan2(dx, dz);
   }
 
   /**
-   * 全角色唯一转向出口：按 TURN_SPEED 限速逼近 faceIntent。
+   * 开始一段从 from → to 的转身（时长按夹角相对 180° 缩放）。
    */
-  private applyFacing(delta: number): void {
-    if (this.faceIntentX == null || this.faceIntentZ == null) return;
-    const desiredYaw = Math.atan2(this.faceIntentX, this.faceIntentZ);
-    this.faceIntentX = null;
-    this.faceIntentZ = null;
-    this.rotation.y = stepAngleToward(
-      this.rotation.y,
-      desiredYaw,
-      MissFortune.TURN_SPEED * delta,
+  private beginTurn(from: number, to: number): void {
+    this.turnFromYaw = normalizeAngle(from);
+    this.turnToYaw = normalizeAngle(to);
+    this.turnElapsed = 0;
+    const ang = Math.abs(normalizeAngle(this.turnToYaw - this.turnFromYaw));
+    this.turnDuration = Math.max(
+      1e-4,
+      MissFortune.TURN_TIME * (ang / Math.PI),
     );
+    this.turnActive = ang > 1e-5;
+    if (!this.turnActive) {
+      this.yaw = this.turnToYaw;
+    }
   }
 
-  /** 实际朝向与目标夹角是否在开火锥内 */
+  /**
+   * 全角色唯一转向出口：
+   * 沿最短弧做 ease-in-out 插值，180° 约 TURN_TIME，过程非线性。
+   */
+  private applyFacing(delta: number): void {
+    if (!(delta > 0) || !Number.isFinite(delta)) return;
+    const dt = Math.min(delta, 0.05);
+    const target = this.desiredYaw;
+    const absErr = Math.abs(normalizeAngle(target - this.yaw));
+
+    if (absErr < 1e-5) {
+      this.yaw = normalizeAngle(target);
+      this.turnActive = false;
+      this.turnDuration = 0;
+      this.syncYawToRotation();
+      return;
+    }
+
+    if (!this.turnActive || this.turnDuration <= 0) {
+      this.beginTurn(this.yaw, target);
+    } else {
+      const shift = Math.abs(normalizeAngle(target - this.turnToYaw));
+      if (shift > MissFortune.TURN_RETARGET) {
+        // 大幅改向：从当前朝向重新规划
+        this.beginTurn(this.yaw, target);
+      } else if (shift > 1e-5) {
+        // 小幅追踪（移动中的敌人）：只改终点，保持缓动进度，避免跳变
+        this.turnToYaw = normalizeAngle(target);
+      }
+    }
+
+    if (!this.turnActive) {
+      this.syncYawToRotation();
+      return;
+    }
+
+    this.turnElapsed += dt;
+    const tLin = Math.min(1, this.turnElapsed / this.turnDuration);
+    const t = easeInOutCubic(tLin);
+    this.yaw = lerpAngle(this.turnFromYaw, this.turnToYaw, t);
+
+    if (tLin >= 1) {
+      this.yaw = this.turnToYaw;
+      this.turnActive = false;
+      // 若终点已偏期望，下帧 beginTurn 接上
+    }
+
+    this.syncYawToRotation();
+  }
+
+  private syncYawToRotation(): void {
+    this.rotation.x = 0;
+    this.rotation.y = this.yaw;
+    this.rotation.z = 0;
+  }
+
+  /** 实际朝向与目标夹角是否在开火锥内（用权威 yaw，不读 Euler） */
   private isFacingWithinCone(target: CombatUnit): boolean {
     const dx = target.collider.x - this.position.x;
     const dz = target.collider.z - this.position.z;
     if (dx * dx + dz * dz < 1e-10) return true;
-    const desiredYaw = Math.atan2(dx, dz);
-    const err = Math.abs(normalizeAngle(desiredYaw - this.rotation.y));
+    const want = Math.atan2(dx, dz);
+    const err = Math.abs(normalizeAngle(want - this.yaw));
     return err <= MissFortune.FIRE_CONE;
   }
 
@@ -651,6 +780,8 @@ export class MissFortune extends THREE.Group implements CombatUnit {
     target: CombatUnit,
   ): void {
     const muzzle = this.nextShotRight ? this.rightMuzzle : this.leftMuzzle;
+    this.activeShotRight = this.nextShotRight;
+    this.shootAnimTimer = 0.28;
     this.nextShotRight = !this.nextShotRight;
     muzzle.getWorldPosition(this.muzzleWorld);
     projectiles.fireAt(
@@ -670,7 +801,7 @@ export class MissFortune extends THREE.Group implements CombatUnit {
    * 统一姿态：呼吸与走路按 weight 混合后一次写入。
    * weight=0 纯站立，weight=1 满走。
    */
-  private applyLocomotionPose(walkWeight: number): void {
+  private applyLocomotionPose(walkWeight: number, delta = 0): void {
     const w = THREE.MathUtils.clamp(walkWeight, 0, 1);
     const breath = Math.sin(this.idlePhase);
     const breath2 = Math.sin(this.idlePhase * 0.55 + 0.8);
@@ -765,6 +896,25 @@ export class MissFortune extends THREE.Group implements CombatUnit {
       idleHandRRy * iw + walkHandRRy * w,
       idleHandRRz * iw + walkHandRRz * w,
     );
+
+    // —— 子弹发射瞬间的手部圆心上扬姿态叠加 ——
+    if (this.shootAnimTimer > 0) {
+      this.shootAnimTimer = Math.max(0, this.shootAnimTimer - delta);
+    }
+
+    if (this.shootAnimTimer > 0.001) {
+      // 0.25s 内的进度 p: 1 -> 0
+      const p = this.shootAnimTimer / 0.25;
+      // 前 35% 快速冲顶上扬，后 65% 平滑回落
+      const intensity = p > 0.65 ? (1 - p) / 0.35 : p / 0.65;
+      const isRight = this.activeShotRight;
+
+      const mainHand = isRight ? this.rightHand : this.leftHand;
+
+      // 仅调整手的旋转角度（圆心上扬），保持手的位置 position 不变
+      mainHand.rotation.x -= 1.0 * intensity;
+      mainHand.rotation.y += (isRight ? -0.15 : 0.15) * intensity;
+    }
   }
 
   dispose(): void {
@@ -783,23 +933,6 @@ export class MissFortune extends THREE.Group implements CombatUnit {
   }
 }
 
-/**
- * 将 current 沿最短路径转向 target，本帧最多转 maxDelta 弧度。
- * 返回归一化到 (-π, π] 的角度。
- */
-function stepAngleToward(
-  current: number,
-  target: number,
-  maxDelta: number,
-): number {
-  if (!(maxDelta > 0)) return normalizeAngle(current);
-  let delta = normalizeAngle(target - current);
-  if (Math.abs(delta) <= maxDelta) {
-    return normalizeAngle(target);
-  }
-  return normalizeAngle(current + Math.sign(delta) * maxDelta);
-}
-
 /** 标量向 target 靠近，步长不超过 maxDelta */
 function stepScalarToward(
   current: number,
@@ -810,6 +943,18 @@ function stepScalarToward(
   const d = target - current;
   if (Math.abs(d) <= maxDelta) return target;
   return current + Math.sign(d) * maxDelta;
+}
+
+/** 最短弧角度插值，t∈[0,1] */
+function lerpAngle(from: number, to: number, t: number): number {
+  const d = normalizeAngle(to - from);
+  return normalizeAngle(from + d * t);
+}
+
+/** ease-in-out cubic：慢起 → 快中 → 慢收 */
+function easeInOutCubic(t: number): number {
+  const x = THREE.MathUtils.clamp(t, 0, 1);
+  return x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
 }
 
 function normalizeAngle(rad: number): number {

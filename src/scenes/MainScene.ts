@@ -195,6 +195,23 @@ export class MainScene extends THREE.Scene {
     }
   }
 
+  /** 开关英雄无敌 */
+  setHeroInvincible(invincible: boolean): void {
+    this.missFortune.setInvincible(invincible);
+  }
+
+  /** 开关双方小兵刷出 */
+  setMinionSpawnEnabled(enabled: boolean): void {
+    this.minionSpawner.setSpawnEnabled(enabled);
+  }
+
+  /** 开关防御塔无敌 */
+  setTowerInvincible(invincible: boolean): void {
+    for (const tower of this.defenseTowers) {
+      tower.setInvincible(invincible);
+    }
+  }
+
   /**
    * 在真实时间 realSeconds 内平滑推进 gameSeconds 游戏时间（可叠加）。
    * 例：快进 1 分钟 → skipTime(60, 1)；快进 3 分钟 → skipTime(180, 3)。

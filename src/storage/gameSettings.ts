@@ -16,6 +16,12 @@ export interface GameSettingsSnapshot {
    * false = 自由视角（WASD / 拖拽）。
    */
   cameraLocked: boolean;
+  /** 英雄无敌 */
+  godMode: boolean;
+  /** 自动出兵 */
+  minionSpawn: boolean;
+  /** 防御塔无敌 */
+  towerInvincible: boolean;
 }
 
 export const DEFAULT_GAME_SETTINGS: GameSettingsSnapshot = {
@@ -23,6 +29,9 @@ export const DEFAULT_GAME_SETTINGS: GameSettingsSnapshot = {
   showColliderMarkers: true,
   brightnessUi: 1,
   cameraLocked: false,
+  godMode: false,
+  minionSpawn: true,
+  towerInvincible: false,
 };
 
 export function loadGameSettings(): GameSettingsSnapshot {
@@ -50,6 +59,18 @@ export function loadGameSettings(): GameSettingsSnapshot {
         typeof data.cameraLocked === 'boolean'
           ? data.cameraLocked
           : DEFAULT_GAME_SETTINGS.cameraLocked,
+      godMode:
+        typeof data.godMode === 'boolean'
+          ? data.godMode
+          : DEFAULT_GAME_SETTINGS.godMode,
+      minionSpawn:
+        typeof data.minionSpawn === 'boolean'
+          ? data.minionSpawn
+          : DEFAULT_GAME_SETTINGS.minionSpawn,
+      towerInvincible:
+        typeof data.towerInvincible === 'boolean'
+          ? data.towerInvincible
+          : DEFAULT_GAME_SETTINGS.towerInvincible,
     };
   } catch {
     return { ...DEFAULT_GAME_SETTINGS };
@@ -63,6 +84,9 @@ export function saveGameSettings(state: GameSettingsSnapshot): void {
       showColliderMarkers: !!state.showColliderMarkers,
       brightnessUi: clamp01(state.brightnessUi),
       cameraLocked: !!state.cameraLocked,
+      godMode: !!state.godMode,
+      minionSpawn: !!state.minionSpawn,
+      towerInvincible: !!state.towerInvincible,
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
   } catch {

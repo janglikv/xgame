@@ -18,7 +18,8 @@ export interface HomingBoltSpawn {
  * 锁定追踪弹道：飞向目标当前位置，命中碰撞半径后才结算伤害。
  */
 export class HomingBolt extends THREE.Group {
-  static readonly SPEED = 0.5;
+  /** 弹道飞行速度（已翻 4 倍） */
+  static readonly SPEED = 2.0;
   /** 与身体落点的命中半径（世界单位，scale=1） */
   static readonly BODY_HIT_RADIUS = 0.08;
   /** 更慢弹速，略放宽寿命避免中途超时 */
@@ -34,6 +35,8 @@ export class HomingBolt extends THREE.Group {
   private _alive = true;
   private _didHit = false;
   private readonly aim = new THREE.Vector3();
+  private readonly targetLastPos = new THREE.Vector3();
+  private hasValidPos = false;
 
   constructor(spawn: HomingBoltSpawn) {
     super();
@@ -44,7 +47,8 @@ export class HomingBolt extends THREE.Group {
     this.position.copy(spawn.origin);
 
     const scale = Math.max(0.1, spawn.scale ?? 1);
-    this.hitRadius = HomingBolt.BODY_HIT_RADIUS * Math.min(scale, 2.5);
+    // 物理命中检测半径：保持在合理的小范围内（约 0.12m），避免因视觉放大导致刚发射就判定命中并蒸发
+    this.hitRadius = HomingBolt.BODY_HIT_RADIUS * Math.min(scale, 1.5);
 
     const color =
       spawn.color ?? (spawn.team === 'blue' ? 0x93c5fd : 0xfca5a5);
@@ -96,14 +100,12 @@ export class HomingBolt extends THREE.Group {
       return false;
     }
 
-    // 目标已死：弹道消散，不造成伤害
-    if (!this.target.isAlive) {
-      this.kill();
-      return false;
+    // 只要目标存在/存活就更新最新坐标；如果目标已被清理，继续飞向最后记录的位置
+    if (this.target.isAlive || !this.hasValidPos) {
+      this.target.getHitPoint(this.targetLastPos);
+      this.hasValidPos = true;
     }
-
-    // 锁定目标身体落点（小兵身体球 / 塔身中段）
-    this.target.getHitPoint(this.aim);
+    this.aim.copy(this.targetLastPos);
 
     const dx = this.aim.x - this.position.x;
     const dy = this.aim.y - this.position.y;

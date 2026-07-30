@@ -17,18 +17,30 @@ export interface EscMenuOptions {
    * false = 自由（WASD / 左键拖拽）。
    */
   onCameraLockChange: (locked: boolean) => void;
+  /** 英雄无敌开关回调 */
+  onGodModeChange?: (invincible: boolean) => void;
+  /** 自动出兵开关回调 */
+  onMinionSpawnChange?: (enabled: boolean) => void;
+  /** 防御塔无敌开关回调 */
+  onTowerInvincibleChange?: (invincible: boolean) => void;
   /** 面板开/关（用于暂停相机等） */
   onOpenChange?: (open: boolean) => void;
   initialAxesVisible?: boolean;
   initialColliderMarkersVisible?: boolean;
   initialBrightness?: number;
   initialCameraLocked?: boolean;
+  initialGodMode?: boolean;
+  initialMinionSpawn?: boolean;
+  initialTowerInvincible?: boolean;
 }
 
 type HitId =
   | 'axes'
   | 'colliders'
   | 'cameraLock'
+  | 'godMode'
+  | 'minionSpawn'
+  | 'towerInvincible'
   | 'brightness'
   | 'skip1m'
   | 'skip3m'
@@ -50,9 +62,9 @@ interface HitRegion {
  */
 export class EscMenu {
   private static readonly CANVAS_W = 720;
-  private static readonly CANVAS_H = 1120;
+  private static readonly CANVAS_H = 1420;
   /** 面板在 UI 空间中的高度（屏幕高度为 2 时） */
-  private static readonly PANEL_H = 1.28;
+  private static readonly PANEL_H = 1.48;
   private static readonly PANEL_ASPECT =
     EscMenu.CANVAS_W / EscMenu.CANVAS_H;
 
@@ -80,6 +92,9 @@ export class EscMenu {
   ) => void;
   private readonly onBrightnessChange: (value: number) => void;
   private readonly onCameraLockChange: (locked: boolean) => void;
+  private readonly onGodModeChange?: (invincible: boolean) => void;
+  private readonly onMinionSpawnChange?: (enabled: boolean) => void;
+  private readonly onTowerInvincibleChange?: (invincible: boolean) => void;
   private readonly onOpenChange?: (open: boolean) => void;
 
   private readonly onKeyDown: (e: KeyboardEvent) => void;
@@ -95,6 +110,9 @@ export class EscMenu {
   private collidersOn: boolean;
   /** true = 锁定视角 */
   private cameraLocked: boolean;
+  private godModeOn: boolean;
+  private minionSpawnOn: boolean;
+  private towerInvincibleOn: boolean;
   /** 全局亮度 0~1 */
   private brightness: number;
   private hoverId: HitId | null = null;
@@ -112,10 +130,16 @@ export class EscMenu {
     this.onSkipTime = options.onSkipTime;
     this.onBrightnessChange = options.onBrightnessChange;
     this.onCameraLockChange = options.onCameraLockChange;
+    this.onGodModeChange = options.onGodModeChange;
+    this.onMinionSpawnChange = options.onMinionSpawnChange;
+    this.onTowerInvincibleChange = options.onTowerInvincibleChange;
     this.onOpenChange = options.onOpenChange;
     this.axesOn = options.initialAxesVisible ?? true;
     this.collidersOn = options.initialColliderMarkersVisible ?? true;
     this.cameraLocked = options.initialCameraLocked ?? false;
+    this.godModeOn = options.initialGodMode ?? false;
+    this.minionSpawnOn = options.initialMinionSpawn ?? true;
+    this.towerInvincibleOn = options.initialTowerInvincible ?? false;
     this.brightness = THREE.MathUtils.clamp(
       options.initialBrightness ?? 1,
       0,
@@ -326,13 +350,30 @@ export class EscMenu {
         this.dirty = true;
         this.onCameraLockChange(this.cameraLocked);
         break;
+      case 'godMode':
+        this.godModeOn = !this.godModeOn;
+        this.dirty = true;
+        this.onGodModeChange?.(this.godModeOn);
+        break;
+      case 'minionSpawn':
+        this.minionSpawnOn = !this.minionSpawnOn;
+        this.dirty = true;
+        this.onMinionSpawnChange?.(this.minionSpawnOn);
+        break;
+      case 'towerInvincible':
+        this.towerInvincibleOn = !this.towerInvincibleOn;
+        this.dirty = true;
+        this.onTowerInvincibleChange?.(this.towerInvincibleOn);
+        break;
       case 'skip1m':
         // 1 分钟游戏时间，1 秒真实时间完成
         this.onSkipTime(60, 1);
+        this.setOpen(false);
         break;
       case 'skip3m':
         // 3 分钟游戏时间，3 秒真实时间完成
         this.onSkipTime(180, 3);
+        this.setOpen(false);
         break;
       case 'brightness':
         // 拖动中处理，点击不切换
@@ -356,6 +397,9 @@ export class EscMenu {
       this.hoverId === 'axes' ||
       this.hoverId === 'colliders' ||
       this.hoverId === 'cameraLock' ||
+      this.hoverId === 'godMode' ||
+      this.hoverId === 'minionSpawn' ||
+      this.hoverId === 'towerInvincible' ||
       this.hoverId === 'brightness' ||
       this.hoverId === 'skip1m' ||
       this.hoverId === 'skip3m' ||
@@ -443,17 +487,17 @@ export class EscMenu {
   private layoutRegions(): void {
     const W = EscMenu.CANVAS_W;
     const pad = 44;
-    const rowH = 100;
-    const rowGap = 14;
-    const listY = 178;
+    const rowH = 88;
+    const rowGap = 12;
+    const listY = 160;
     const rowW = W - pad * 2;
 
-    const brightH = 118;
-    // 三行开关：坐标 / 碰撞 / 锁定视角
-    const brightY = listY + (rowH + rowGap) * 3 + 8;
+    const brightH = 110;
+    // 六行开关：坐标 / 碰撞 / 锁定视角 / 英雄无敌 / 自动出兵 / 防御塔无敌
+    const brightY = listY + (rowH + rowGap) * 6 + 6;
 
-    const skipY = brightY + brightH + 52;
-    const skipH = 72;
+    const skipY = brightY + brightH + 46;
+    const skipH = 68;
     const skipGap = 14;
     const skipBtnW = (rowW - skipGap) / 2;
 
@@ -462,7 +506,7 @@ export class EscMenu {
       {
         id: 'colliders',
         x: pad,
-        y: listY + rowH + rowGap,
+        y: listY + (rowH + rowGap) * 1,
         w: rowW,
         h: rowH,
       },
@@ -470,6 +514,27 @@ export class EscMenu {
         id: 'cameraLock',
         x: pad,
         y: listY + (rowH + rowGap) * 2,
+        w: rowW,
+        h: rowH,
+      },
+      {
+        id: 'godMode',
+        x: pad,
+        y: listY + (rowH + rowGap) * 3,
+        w: rowW,
+        h: rowH,
+      },
+      {
+        id: 'minionSpawn',
+        x: pad,
+        y: listY + (rowH + rowGap) * 4,
+        w: rowW,
+        h: rowH,
+      },
+      {
+        id: 'towerInvincible',
+        x: pad,
+        y: listY + (rowH + rowGap) * 5,
         w: rowW,
         h: rowH,
       },
@@ -485,9 +550,9 @@ export class EscMenu {
       {
         id: 'close',
         x: pad,
-        y: EscMenu.CANVAS_H - pad - 72,
+        y: EscMenu.CANVAS_H - pad - 68,
         w: rowW,
-        h: 72,
+        h: 68,
       },
     ];
   }
@@ -557,6 +622,30 @@ export class EscMenu {
       this.cameraLocked,
       this.hoverId === 'cameraLock',
       this.pressId === 'cameraLock',
+    );
+    this.drawToggleRow(
+      this.region('godMode'),
+      '英雄无敌',
+      '受到攻击与敌方技能时不扣除血量',
+      this.godModeOn,
+      this.hoverId === 'godMode',
+      this.pressId === 'godMode',
+    );
+    this.drawToggleRow(
+      this.region('minionSpawn'),
+      '自动出兵',
+      '双方基地按波次定时刷新小兵',
+      this.minionSpawnOn,
+      this.hoverId === 'minionSpawn',
+      this.pressId === 'minionSpawn',
+    );
+    this.drawToggleRow(
+      this.region('towerInvincible'),
+      '防御塔无敌',
+      '防御塔受小兵与英雄攻击时不扣除血量',
+      this.towerInvincibleOn,
+      this.hoverId === 'towerInvincible',
+      this.pressId === 'towerInvincible',
     );
 
     // 全局亮度
