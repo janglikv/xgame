@@ -1,7 +1,10 @@
 import * as THREE from 'three';
 
 /**
- * 灰色地板：中间矩形走廊 + 两端正八边形平台，均在 XZ 平面、Y = 0。
+ * 灰色地板：中间矩形走廊 + 两端正八边形平台（Y = 0）+ 围墙 + 外围无限地平面。
+ *
+ * - 可走地图：一体 mesh；围墙为方管截面沿轮廓扫掠
+ * - 无限地：超大平面，高度 = 围墙底面 WALL_Y_BOTTOM
  *
  * 可走区域：
  * - 走廊：X ∈ [-HALF_X, HALF_X]，Z ∈ [-HALF_Z, HALF_Z]
@@ -30,10 +33,25 @@ export class DirtFloor extends THREE.Group {
   static readonly OCT_RADIUS =
     DirtFloor.OCT_SIDE / (2 * Math.sin(Math.PI / 8));
 
+  /** 管道截面水平厚度（米）；整管在轮廓外侧 */
+  static readonly WALL_SECTION = 0.36;
+  /** 管道截面高度（米）= 原方形边长翻倍 */
+  static readonly WALL_HEIGHT = DirtFloor.WALL_SECTION * 2;
+  /** 管道底面 Y：下沉为高度的 3/4 */
+  static readonly WALL_Y_BOTTOM = -DirtFloor.WALL_HEIGHT * 0.75;
+  /**
+   * 外围“无限”地平面边长（米）。
+   * 实际用超大平面近似无限；高度与围墙底面 WALL_Y_BOTTOM 对齐。
+   */
+  static readonly INFINITE_GROUND_SIZE = 4000;
+
   readonly sizeX: number;
   readonly sizeZ: number;
 
-  private readonly meshes: THREE.Mesh[] = [];
+  private readonly disposables: Array<{
+    geometry: THREE.BufferGeometry;
+    material: THREE.Material | THREE.Material[];
+  }> = [];
 
   constructor() {
     super();
@@ -44,137 +62,362 @@ export class DirtFloor extends THREE.Group {
     this.sizeX = sizeX;
     this.sizeZ = sizeZ;
 
-    const material = new THREE.MeshStandardMaterial({
+    // 无限大地板：贴在围墙下沉底面高度，铺满外围
+    const groundSize = DirtFloor.INFINITE_GROUND_SIZE;
+    const groundMat = new THREE.MeshStandardMaterial({
+      color: 0x0e1012,
+      roughness: 0.92,
+      metalness: 0.05,
+      envMapIntensity: 0.4,
+      // 与围墙底面共面时减轻 z-fighting
+      polygonOffset: true,
+      polygonOffsetFactor: 1,
+      polygonOffsetUnits: 1,
+    });
+    const groundGeo = new THREE.PlaneGeometry(groundSize, groundSize);
+    const ground = new THREE.Mesh(groundGeo, groundMat);
+    ground.name = 'InfiniteGround';
+    ground.rotation.x = -Math.PI / 2;
+    ground.position.y = DirtFloor.WALL_Y_BOTTOM;
+    ground.receiveShadow = true;
+    this.add(ground);
+    this.disposables.push({ geometry: groundGeo, material: groundMat });
+
+    const floorMat = new THREE.MeshStandardMaterial({
       color: 0x1e2022,
       roughness: 0.45,
       metalness: 0.2,
       envMapIntensity: 0.8,
     });
 
-    // 中间矩形走廊
-    const corridor = new THREE.Mesh(
-      new THREE.PlaneGeometry(sizeX, sizeZ),
-      material,
-    );
-    corridor.name = 'DirtFloorCorridor';
-    corridor.rotation.x = -Math.PI / 2;
-    corridor.position.y = 0;
-    corridor.receiveShadow = true;
-    this.add(corridor);
-    this.meshes.push(corridor);
+    const floor = new THREE.Mesh(createUnifiedFloorGeometry(), floorMat);
+    floor.name = 'DirtFloorSurface';
+    floor.receiveShadow = true;
+    this.add(floor);
+    this.disposables.push({ geometry: floor.geometry, material: floorMat });
 
-    // 两端八边形：一平边贴合走廊端线（平边平行于 Z，朝向 ±X）
-    const octSide = DirtFloor.OCT_SIDE;
-    const apothem = DirtFloor.OCT_APOTHEM;
-    const halfX = DirtFloor.HALF_X;
-
-    // +X 端：内侧平边在 x = +HALF_X，中心再往外偏移 apothem
-    this.add(
-      this.createOctPlatform(
-        material,
-        halfX + apothem,
-        0,
-        octSide,
-        'DirtFloorOctPosX',
-      ),
+    // 围墙：方管截面沿地图外轮廓扫掠（硬边；高度翻倍并下沉一半）
+    const wallMat = new THREE.MeshStandardMaterial({
+      color: 0x2a2e32,
+      roughness: 0.55,
+      metalness: 0.15,
+      envMapIntensity: 0.7,
+      flatShading: true,
+    });
+    const wallGeo = createSquarePipeGeometry(
+      getFloorOutline(),
+      DirtFloor.WALL_SECTION,
+      DirtFloor.WALL_HEIGHT,
+      DirtFloor.WALL_Y_BOTTOM,
     );
-    // -X 端
-    this.add(
-      this.createOctPlatform(
-        material,
-        -halfX - apothem,
-        0,
-        octSide,
-        'DirtFloorOctNegX',
-      ),
-    );
-  }
-
-  /**
-   * 在 XZ 平面上创建正八边形平台（Y 朝上）。
-   * 顶点角从 +X 起偏 22.5°，使左右两侧为平边。
-   */
-  private createOctPlatform(
-    material: THREE.Material,
-    centerX: number,
-    centerZ: number,
-    side: number,
-    name: string,
-  ): THREE.Mesh {
-    const geo = createOctagonGeometryXZ(side);
-    const mesh = new THREE.Mesh(geo, material);
-    mesh.name = name;
-    mesh.position.set(centerX, 0, centerZ);
-    mesh.receiveShadow = true;
-    this.meshes.push(mesh);
-    return mesh;
+    const wall = new THREE.Mesh(wallGeo, wallMat);
+    wall.name = 'DirtFloorWall';
+    wall.castShadow = true;
+    wall.receiveShadow = true;
+    this.add(wall);
+    this.disposables.push({ geometry: wallGeo, material: wallMat });
   }
 
   dispose(): void {
-    const disposedMats = new Set<THREE.Material>();
-    for (const mesh of this.meshes) {
-      mesh.geometry.dispose();
-      const { material } = mesh;
-      if (Array.isArray(material)) {
-        for (const m of material) {
-          if (!disposedMats.has(m)) {
-            m.dispose();
-            disposedMats.add(m);
-          }
+    const seen = new Set<THREE.Material | THREE.BufferGeometry>();
+    for (const { geometry, material } of this.disposables) {
+      if (!seen.has(geometry)) {
+        geometry.dispose();
+        seen.add(geometry);
+      }
+      const list = Array.isArray(material) ? material : [material];
+      for (const m of list) {
+        if (!seen.has(m)) {
+          m.dispose();
+          seen.add(m);
         }
-      } else if (!disposedMats.has(material)) {
-        material.dispose();
-        disposedMats.add(material);
       }
     }
-    this.meshes.length = 0;
+    this.disposables.length = 0;
     this.clear();
   }
 }
 
+/** 世界 XZ 轮廓点（俯视顺时针，不闭合重复） */
+type OutlinePoint = { x: number; z: number };
+
 /**
- * 水平正八边形（XZ 平面，法线 +Y）。
- * 边长 = side；角点从 +X 起偏 22.5°，使平边朝 ±X。
- * 贴合走廊时，±X 平边长度 = side，Z 范围恰为 ±side/2。
+ * 走廊 + 两端八边形的外轮廓顶点（与地板几何共用同一套顶点顺序）。
  */
-function createOctagonGeometryXZ(side: number): THREE.BufferGeometry {
-  const radius = side / (2 * Math.sin(Math.PI / 8));
-  const sides = 8;
+function getFloorOutline(): OutlinePoint[] {
+  const halfX = DirtFloor.HALF_X;
+  const halfZ = DirtFloor.HALF_Z;
+  const R = DirtFloor.OCT_RADIUS;
+  const ap = DirtFloor.OCT_APOTHEM;
+  const negCx = -halfX - ap;
+  const posCx = halfX + ap;
+
+  const oct = (cx: number, angle: number): OutlinePoint => ({
+    x: cx + R * Math.cos(angle),
+    z: R * Math.sin(angle),
+  });
+
+  const pts: OutlinePoint[] = [];
+
+  // 1) -X 八边形外侧：底接合 → 顶接合
+  for (let i = 0; i <= 7; i++) {
+    const angle = -Math.PI / 8 - (i * Math.PI) / 4;
+    pts.push(oct(negCx, angle));
+  }
+
+  // 2) 走廊顶边 → +X 顶接合
+  pts.push({ x: halfX, z: halfZ });
+
+  // 3) +X 八边形外侧（跳过已写入的顶接合）
+  for (let i = 1; i <= 7; i++) {
+    const angle = (7 * Math.PI) / 8 - (i * Math.PI) / 4;
+    pts.push(oct(posCx, angle));
+  }
+
+  // 4) 走廊底边由扫掠闭合时接回 pts[0]
+  return pts;
+}
+
+/**
+ * 走廊 + 两端八边形的外轮廓，三角化为单片水平面（法线 +Y）。
+ */
+function createUnifiedFloorGeometry(): THREE.BufferGeometry {
+  const outline = getFloorOutline();
+  const halfX = DirtFloor.HALF_X;
+  const ap = DirtFloor.OCT_APOTHEM;
+  const R = DirtFloor.OCT_RADIUS;
+
+  const shape = new THREE.Shape();
+  shape.moveTo(outline[0]!.x, outline[0]!.z);
+  for (let i = 1; i < outline.length; i++) {
+    shape.lineTo(outline[i]!.x, outline[i]!.z);
+  }
+  shape.lineTo(outline[0]!.x, outline[0]!.z);
+  shape.closePath();
+
+  const geo = new THREE.ShapeGeometry(shape);
+  geo.rotateX(-Math.PI / 2);
+
+  const pos = geo.attributes.position;
+  if (pos) {
+    const uvs = new Float32Array(pos.count * 2);
+    const xMin = -halfX - 2 * ap;
+    const xMax = halfX + 2 * ap;
+    const zMin = -R;
+    const zMax = R;
+    const xSpan = xMax - xMin;
+    const zSpan = zMax - zMin;
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i);
+      const z = pos.getZ(i);
+      uvs[i * 2] = (x - xMin) / xSpan;
+      uvs[i * 2 + 1] = (z - zMin) / zSpan;
+    }
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  }
+
+  geo.computeVertexNormals();
+  return geo;
+}
+
+/**
+ * 矩形截面沿闭合折线扫掠成一体方管。
+ *
+ * - 截面四角硬边：四面各自独立顶点 + 面法线，避免平滑成圆柱
+ * - 中心线外扩 thickness/2，内侧面贴齐地图外轮廓
+ * - yBottom 可下沉，顶面 = yBottom + height
+ */
+function createSquarePipeGeometry(
+  pathPts: readonly OutlinePoint[],
+  thickness: number,
+  height: number,
+  yBottom: number,
+): THREE.BufferGeometry {
+  const n = pathPts.length;
+  if (n < 3) {
+    return new THREE.BufferGeometry();
+  }
+
+  const half = thickness * 0.5;
+  const yTop = yBottom + height;
+  const centerline = offsetPolylineOutward(pathPts, half);
+  const outN = polylineOutwardNormals(centerline);
+
+  // 每站截面四角（世界坐标）：底内 / 底外 / 顶外 / 顶内
+  const ring: Array<{
+    bi: THREE.Vector3;
+    bo: THREE.Vector3;
+    to: THREE.Vector3;
+    ti: THREE.Vector3;
+  }> = [];
+
+  for (let i = 0; i < n; i++) {
+    const p = centerline[i]!;
+    const nx = outN[i]!.x;
+    const nz = outN[i]!.z;
+    const ix = p.x - nx * half;
+    const iz = p.z - nz * half;
+    const ox = p.x + nx * half;
+    const oz = p.z + nz * half;
+    ring.push({
+      bi: new THREE.Vector3(ix, yBottom, iz),
+      bo: new THREE.Vector3(ox, yBottom, oz),
+      to: new THREE.Vector3(ox, yTop, oz),
+      ti: new THREE.Vector3(ix, yTop, iz),
+    });
+  }
 
   const positions: number[] = [];
-  positions.push(0, 0, 0);
-  // 8 个角点：22.5° + i·45°（平边朝 ±X）
-  for (let i = 0; i < sides; i++) {
-    const angle = Math.PI / 8 + (i * Math.PI) / 4;
-    positions.push(radius * Math.cos(angle), 0, radius * Math.sin(angle));
-  }
-
-  // 绕序保证法线 +Y
-  const indices: number[] = [];
-  for (let i = 0; i < sides; i++) {
-    const a = 1 + i;
-    const b = 1 + ((i + 1) % sides);
-    indices.push(0, b, a);
-  }
-
-  const vertexCount = sides + 1;
   const normals: number[] = [];
-  for (let i = 0; i < vertexCount; i++) {
-    normals.push(0, 1, 0);
-  }
-
   const uvs: number[] = [];
-  const denom = radius * 2;
-  for (let i = 0; i < vertexCount; i++) {
-    const x = positions[i * 3]!;
-    const z = positions[i * 3 + 2]!;
-    uvs.push(x / denom + 0.5, z / denom + 0.5);
+
+  /** 硬边四边形：每角独立顶点，整面同一法线 */
+  const addFace = (
+    a: THREE.Vector3,
+    b: THREE.Vector3,
+    c: THREE.Vector3,
+    d: THREE.Vector3,
+    normal: THREE.Vector3,
+    u0: number,
+    u1: number,
+  ): void => {
+    const nx = normal.x;
+    const ny = normal.y;
+    const nz = normal.z;
+    // a-b-c
+    positions.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
+    normals.push(nx, ny, nz, nx, ny, nz, nx, ny, nz);
+    uvs.push(u0, 0, u1, 0, u1, 1);
+    // a-c-d
+    positions.push(a.x, a.y, a.z, c.x, c.y, c.z, d.x, d.y, d.z);
+    normals.push(nx, ny, nz, nx, ny, nz, nx, ny, nz);
+    uvs.push(u0, 0, u1, 1, u0, 1);
+  };
+
+  let arc = 0;
+  let perimeter = 0;
+  for (let i = 0; i < n; i++) {
+    const a = centerline[i]!;
+    const b = centerline[(i + 1) % n]!;
+    perimeter += Math.hypot(b.x - a.x, b.z - a.z);
+  }
+  perimeter = Math.max(perimeter, 1e-6);
+
+  const nOut = new THREE.Vector3();
+  const nIn = new THREE.Vector3();
+  const nUp = new THREE.Vector3(0, 1, 0);
+  const nDown = new THREE.Vector3(0, -1, 0);
+
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    const a = centerline[i]!;
+    const b = centerline[j]!;
+    const segLen = Math.hypot(b.x - a.x, b.z - a.z);
+    const u0 = arc / perimeter;
+    const u1 = (arc + segLen) / perimeter;
+    arc += segLen;
+
+    // 该段水平外侧法线（直边平面，保证侧面是平的）
+    if (segLen > 1e-8) {
+      nOut.set(-(b.z - a.z) / segLen, 0, (b.x - a.x) / segLen);
+    } else {
+      nOut.set(outN[i]!.x, 0, outN[i]!.z);
+    }
+    nIn.copy(nOut).multiplyScalar(-1);
+
+    const ri = ring[i]!;
+    const rj = ring[j]!;
+
+    // 外侧面（硬边方管外壁）
+    addFace(ri.bo, rj.bo, rj.to, ri.to, nOut, u0, u1);
+    // 顶面
+    addFace(ri.to, rj.to, rj.ti, ri.ti, nUp, u0, u1);
+    // 内侧面
+    addFace(ri.ti, rj.ti, rj.bi, ri.bi, nIn, u0, u1);
+    // 底面
+    addFace(ri.bi, rj.bi, rj.bo, ri.bo, nDown, u0, u1);
   }
 
   const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute(
+    'position',
+    new THREE.Float32BufferAttribute(positions, 3),
+  );
   geo.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
   geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
-  geo.setIndex(indices);
   return geo;
+}
+
+/**
+ * 闭合折线各顶点外扩 `dist`（miter）。
+ * 轮廓俯视顺时针：外侧 = 前进方向左侧法线 (-dz, dx)。
+ */
+function offsetPolylineOutward(
+  pts: readonly OutlinePoint[],
+  dist: number,
+): OutlinePoint[] {
+  const n = pts.length;
+  const out: OutlinePoint[] = [];
+  const normals = polylineOutwardNormals(pts);
+  for (let i = 0; i < n; i++) {
+    const p = pts[i]!;
+    const prev = pts[(i - 1 + n) % n]!;
+    const next = pts[(i + 1) % n]!;
+
+    const e1x = p.x - prev.x;
+    const e1z = p.z - prev.z;
+    const e2x = next.x - p.x;
+    const e2z = next.z - p.z;
+    const l1 = Math.hypot(e1x, e1z) || 1;
+    const l2 = Math.hypot(e2x, e2z) || 1;
+    // 边单位外侧法线
+    const n1x = -(e1z / l1);
+    const n1z = e1x / l1;
+    const n2x = -(e2z / l2);
+    const n2z = e2x / l2;
+
+    let bx = n1x + n2x;
+    let bz = n1z + n2z;
+    const bl = Math.hypot(bx, bz);
+    if (bl < 1e-8) {
+      const nn = normals[i]!;
+      out.push({ x: p.x + nn.x * dist, z: p.z + nn.z * dist });
+      continue;
+    }
+    bx /= bl;
+    bz /= bl;
+    // miter 长度：dist / cos(半角)
+    const cos = Math.max(0.2, n1x * bx + n1z * bz);
+    const miter = dist / cos;
+    out.push({ x: p.x + bx * miter, z: p.z + bz * miter });
+  }
+  return out;
+}
+
+/** 各顶点处外侧单位法线（相邻边法线平均后归一化） */
+function polylineOutwardNormals(
+  pts: readonly OutlinePoint[],
+): OutlinePoint[] {
+  const n = pts.length;
+  const out: OutlinePoint[] = [];
+  for (let i = 0; i < n; i++) {
+    const prev = pts[(i - 1 + n) % n]!;
+    const curr = pts[i]!;
+    const next = pts[(i + 1) % n]!;
+
+    const e1x = curr.x - prev.x;
+    const e1z = curr.z - prev.z;
+    const e2x = next.x - curr.x;
+    const e2z = next.z - curr.z;
+    const l1 = Math.hypot(e1x, e1z) || 1;
+    const l2 = Math.hypot(e2x, e2z) || 1;
+
+    let nx = -(e1z / l1) - e2z / l2;
+    let nz = e1x / l1 + e2x / l2;
+    const nl = Math.hypot(nx, nz) || 1;
+    nx /= nl;
+    nz /= nl;
+    out.push({ x: nx, z: nz });
+  }
+  return out;
 }
