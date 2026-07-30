@@ -19,8 +19,7 @@ export interface CameraControllerOptions {
 }
 
 /**
- * 自由视角相机：WASD 水平移动 + Space/Shift 升降 + 鼠标控制朝向。
- * 点击画布锁定指针后，移动鼠标转向。
+ * 自由视角相机：WASD 水平移动 + Space/Shift 升降 + 按住左键拖拽转向。
  * 默认将位姿缓存到 localStorage，刷新后恢复。
  */
 export class CameraController {
@@ -35,10 +34,10 @@ export class CameraController {
   private readonly keys = new Set<string>();
   private yaw = 0;
   private pitch = 0;
-  private pointerLocked = false;
+  private isMouseDown = false;
+  private lastMouseX = 0;
+  private lastMouseY = 0;
   private enabled = true;
-  /** 浏览器禁止立刻重新 requestPointerLock，需冷却 */
-  private lockCooldownUntil = 0;
   private persistDirty = false;
   private persistElapsed = 0;
 
@@ -49,9 +48,9 @@ export class CameraController {
 
   private readonly onKeyDown: (e: KeyboardEvent) => void;
   private readonly onKeyUp: (e: KeyboardEvent) => void;
-  private readonly onClick: () => void;
+  private readonly onMouseDown: (e: MouseEvent) => void;
+  private readonly onMouseUp: (e: MouseEvent) => void;
   private readonly onMouseMove: (e: MouseEvent) => void;
-  private readonly onPointerLockChange: () => void;
   private readonly onContextMenu: (e: Event) => void;
   private readonly onPageHide: () => void;
 
@@ -79,8 +78,6 @@ export class CameraController {
 
     this.onKeyDown = (e) => {
       if (!this.enabled) return;
-      // 属性面板快捷键不计入移动
-      if (e.code === 'Tab') return;
 
       this.keys.add(e.code);
       if (
@@ -100,15 +97,33 @@ export class CameraController {
       this.keys.delete(e.code);
     };
 
-    this.onClick = () => {
-      void this.tryRequestPointerLock();
+    this.onMouseDown = (e: MouseEvent) => {
+      if (!this.enabled) return;
+      if (e.button === 0) { // 左键
+        this.isMouseDown = true;
+        this.lastMouseX = e.clientX;
+        this.lastMouseY = e.clientY;
+        this.domElement.style.cursor = 'grabbing';
+      }
     };
 
-    this.onMouseMove = (e) => {
-      if (!this.enabled || !this.pointerLocked) return;
+    this.onMouseUp = (e: MouseEvent) => {
+      if (e.button === 0) {
+        this.isMouseDown = false;
+        this.domElement.style.cursor = 'grab';
+      }
+    };
 
-      this.yaw -= e.movementX * this.lookSpeed;
-      this.pitch -= e.movementY * this.lookSpeed;
+    this.onMouseMove = (e: MouseEvent) => {
+      if (!this.enabled || !this.isMouseDown) return;
+
+      const movementX = e.clientX - this.lastMouseX;
+      const movementY = e.clientY - this.lastMouseY;
+      this.lastMouseX = e.clientX;
+      this.lastMouseY = e.clientY;
+
+      this.yaw -= movementX * this.lookSpeed;
+      this.pitch -= movementY * this.lookSpeed;
       this.pitch = THREE.MathUtils.clamp(
         this.pitch,
         -this.pitchLimit,
@@ -116,17 +131,6 @@ export class CameraController {
       );
       this.applyLook();
       this.markPersistDirty();
-    };
-
-    this.onPointerLockChange = () => {
-      const locked = document.pointerLockElement === this.domElement;
-      const wasLocked = this.pointerLocked;
-      this.pointerLocked = locked;
-      this.domElement.style.cursor = locked ? 'none' : 'crosshair';
-
-      if (wasLocked && !locked) {
-        this.keys.clear();
-      }
     };
 
     this.onContextMenu = (e) => {
@@ -139,13 +143,13 @@ export class CameraController {
 
     window.addEventListener('keydown', this.onKeyDown);
     window.addEventListener('keyup', this.onKeyUp);
-    this.domElement.addEventListener('click', this.onClick);
-    document.addEventListener('mousemove', this.onMouseMove);
-    document.addEventListener('pointerlockchange', this.onPointerLockChange);
+    this.domElement.addEventListener('mousedown', this.onMouseDown);
+    window.addEventListener('mouseup', this.onMouseUp);
+    window.addEventListener('mousemove', this.onMouseMove);
     this.domElement.addEventListener('contextmenu', this.onContextMenu);
     window.addEventListener('pagehide', this.onPageHide);
 
-    this.domElement.style.cursor = 'crosshair';
+    this.domElement.style.cursor = 'grab';
     this.domElement.tabIndex = 0;
   }
 
@@ -204,50 +208,16 @@ export class CameraController {
     this.persistElapsed = 0;
   }
 
-  /**
-   * 请求指针锁定。必须在用户手势（click 等）的调用栈中触发。
-   * 若浏览器拒绝（刚退出锁定过近），静默失败，下次点击可再试。
-   */
-  async requestPointerLock(): Promise<boolean> {
-    if (!this.enabled || this.pointerLocked) return this.pointerLocked;
-    if (performance.now() < this.lockCooldownUntil) return false;
-    if (document.pointerLockElement) return false;
-
-    try {
-      const result = this.domElement.requestPointerLock();
-      // 新规范返回 Promise；旧浏览器可能返回 undefined
-      if (result != null && typeof (result as Promise<void>).then === 'function') {
-        await result;
-      }
-      return document.pointerLockElement === this.domElement;
-    } catch {
-      // SecurityError：刚退出锁定后过早请求，短冷却后允许再点
-      this.lockCooldownUntil = performance.now() + 250;
-      return false;
-    }
-  }
-
-  private async tryRequestPointerLock(): Promise<void> {
-    await this.requestPointerLock();
-  }
-
-  /**
-   * 启用 / 禁用输入（暂停时关闭移动与视角）。
-   * 不释放指针锁定，便于暂停结束后立刻继续控镜头。
-   */
   setEnabled(enabled: boolean): void {
     this.enabled = enabled;
     if (!enabled) {
       this.keys.clear();
+      this.isMouseDown = false;
     }
   }
 
   get isEnabled(): boolean {
     return this.enabled;
-  }
-
-  get isPointerLocked(): boolean {
-    return this.pointerLocked;
   }
 
   /**
@@ -287,14 +257,10 @@ export class CameraController {
 
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('keyup', this.onKeyUp);
-    this.domElement.removeEventListener('click', this.onClick);
-    document.removeEventListener('mousemove', this.onMouseMove);
-    document.removeEventListener('pointerlockchange', this.onPointerLockChange);
+    this.domElement.removeEventListener('mousedown', this.onMouseDown);
+    window.removeEventListener('mouseup', this.onMouseUp);
+    window.removeEventListener('mousemove', this.onMouseMove);
     this.domElement.removeEventListener('contextmenu', this.onContextMenu);
     window.removeEventListener('pagehide', this.onPageHide);
-
-    if (document.pointerLockElement === this.domElement) {
-      document.exitPointerLock();
-    }
   }
 }
