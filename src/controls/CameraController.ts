@@ -18,6 +18,20 @@ export interface CameraControllerOptions {
   persistInterval?: number;
 }
 
+export interface CameraParams {
+  x: number;
+  y: number;
+  z: number;
+  pitchDeg: number;
+  yawDeg: number;
+  fov: number;
+  near: number;
+  far: number;
+  moveSpeed: number;
+  lookSpeed: number;
+  mode: CameraViewMode;
+}
+
 /** 相机模式：自由漫游 / 锁定跟随英雄 */
 export type CameraViewMode = 'free' | 'locked';
 
@@ -28,6 +42,13 @@ export type CameraViewMode = 'free' | 'locked';
  * 自由模式默认将位姿缓存到 localStorage。
  */
 export class CameraController {
+  /** 预设固定相机相对位移 (X: -0.4, Y: 3.7, Z: 1.5) */
+  public static readonly FIXED_POS_OFFSET = new THREE.Vector3(-0.4, 3.7, 1.5);
+  /** 预设固定相机俯仰角 Pitch: -66.0° */
+  public static readonly FIXED_PITCH_RAD = (-66.0 * Math.PI) / 180;
+  /** 预设固定相机偏航角 Yaw: -34.0° */
+  public static readonly FIXED_YAW_RAD = (-34.0 * Math.PI) / 180;
+
   private readonly camera: THREE.PerspectiveCamera;
   private readonly domElement: HTMLElement;
   private readonly moveSpeed: number;
@@ -39,6 +60,7 @@ export class CameraController {
   private readonly keys = new Set<string>();
   private yaw = 0;
   private pitch = 0;
+  private fixedCamera = false;
   private isMouseDown = false;
   private lastMouseX = 0;
   private lastMouseY = 0;
@@ -201,6 +223,47 @@ export class CameraController {
     return this.viewMode === 'locked';
   }
 
+  get isFixed(): boolean {
+    return this.fixedCamera;
+  }
+
+  /**
+   * 设置固定相机预设视角 (X: -0.4, Y: 3.7, Z: 1.5, Pitch: -66.0°, Yaw: -34.0°)。
+   * 打开后会自动启用锁定跟随模式。
+   */
+  setFixedCamera(fixed: boolean): void {
+    this.fixedCamera = fixed;
+    if (fixed) {
+      this.pitch = CameraController.FIXED_PITCH_RAD;
+      this.yaw = CameraController.FIXED_YAW_RAD;
+      this.applyLook();
+      this.followOffset.copy(CameraController.FIXED_POS_OFFSET);
+      this.followQuaternion.copy(this.camera.quaternion);
+      this.hasFollowSnapshot = true;
+      if (this.viewMode !== 'locked') {
+        this.setViewMode('locked');
+      } else {
+        this.applyFollowPose();
+      }
+    }
+  }
+
+  getParams(): CameraParams {
+    return {
+      x: this.camera.position.x,
+      y: this.camera.position.y,
+      z: this.camera.position.z,
+      pitchDeg: (this.pitch * 180) / Math.PI,
+      yawDeg: (this.yaw * 180) / Math.PI,
+      fov: this.camera.fov,
+      near: this.camera.near,
+      far: this.camera.far,
+      moveSpeed: this.moveSpeed,
+      lookSpeed: this.lookSpeed,
+      mode: this.viewMode,
+    };
+  }
+
   /**
    * 切换自由 / 锁定视角。
    * 进入锁定：以当前镜头相对英雄的位置与朝向为快照；
@@ -213,9 +276,14 @@ export class CameraController {
     this.isMouseDown = false;
 
     if (mode === 'locked') {
-      this.captureFollowSnapshot();
-      this.applyFollowPose();
+      if (this.fixedCamera) {
+        this.setFixedCamera(true);
+      } else {
+        this.captureFollowSnapshot();
+        this.applyFollowPose();
+      }
     } else {
+      this.fixedCamera = false;
       this.hasFollowSnapshot = false;
       this.syncAnglesFromCamera();
       this.applyLook();

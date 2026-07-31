@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import type { CameraParams } from '../controls/CameraController';
 
 export interface EscMenuOptions {
   /** 坐标参考线开关回调 */
@@ -17,6 +18,8 @@ export interface EscMenuOptions {
    * false = 自由（WASD 移镜头 / 左键拖拽）。
    */
   onCameraLockChange: (locked: boolean) => void;
+  /** 固定相机开关回调 */
+  onFixedCameraChange?: (fixed: boolean) => void;
   /** 英雄无敌开关回调 */
   onGodModeChange?: (invincible: boolean) => void;
   /** 自动出兵开关回调 */
@@ -25,10 +28,14 @@ export interface EscMenuOptions {
   onTowerInvincibleChange?: (invincible: boolean) => void;
   /** 面板开/关（用于暂停相机等） */
   onOpenChange?: (open: boolean) => void;
+  /** 获取当前相机实时参数 */
+  getCameraParams?: () => CameraParams;
+
   initialAxesVisible?: boolean;
   initialColliderMarkersVisible?: boolean;
   initialBrightness?: number;
   initialCameraLocked?: boolean;
+  initialFixedCamera?: boolean;
   initialGodMode?: boolean;
   initialMinionSpawn?: boolean;
   initialTowerInvincible?: boolean;
@@ -38,6 +45,7 @@ type HitId =
   | 'axes'
   | 'colliders'
   | 'cameraLock'
+  | 'fixedCamera'
   | 'godMode'
   | 'minionSpawn'
   | 'towerInvincible'
@@ -58,13 +66,13 @@ interface HitRegion {
 
 /**
  * ESC 设置面板：Three.js 正交 HUD + Canvas 纹理绘制。
- * 与主场景同 canvas 叠加渲染，交互走 raycast / UV 命中。
+ * 紧凑型双栏高科技面板（1800x1200）。
  */
 export class EscMenu {
-  private static readonly CANVAS_W = 720;
-  private static readonly CANVAS_H = 1420;
+  private static readonly CANVAS_W = 1800;
+  private static readonly CANVAS_H = 1200;
   /** 面板在 UI 空间中的高度（屏幕高度为 2 时） */
-  private static readonly PANEL_H = 1.48;
+  private static readonly PANEL_H = 1.52;
   private static readonly PANEL_ASPECT =
     EscMenu.CANVAS_W / EscMenu.CANVAS_H;
 
@@ -92,10 +100,12 @@ export class EscMenu {
   ) => void;
   private readonly onBrightnessChange: (value: number) => void;
   private readonly onCameraLockChange: (locked: boolean) => void;
+  private readonly onFixedCameraChange?: (fixed: boolean) => void;
   private readonly onGodModeChange?: (invincible: boolean) => void;
   private readonly onMinionSpawnChange?: (enabled: boolean) => void;
   private readonly onTowerInvincibleChange?: (invincible: boolean) => void;
   private readonly onOpenChange?: (open: boolean) => void;
+  private readonly getCameraParams?: () => CameraParams;
 
   private readonly onKeyDown: (e: KeyboardEvent) => void;
   private readonly onPointerDown: (e: PointerEvent) => void;
@@ -110,6 +120,8 @@ export class EscMenu {
   private collidersOn: boolean;
   /** true = 锁定视角 */
   private cameraLocked: boolean;
+  /** true = 固定相机视角 */
+  private fixedCameraOn: boolean;
   private godModeOn: boolean;
   private minionSpawnOn: boolean;
   private towerInvincibleOn: boolean;
@@ -130,13 +142,16 @@ export class EscMenu {
     this.onSkipTime = options.onSkipTime;
     this.onBrightnessChange = options.onBrightnessChange;
     this.onCameraLockChange = options.onCameraLockChange;
+    this.onFixedCameraChange = options.onFixedCameraChange;
     this.onGodModeChange = options.onGodModeChange;
     this.onMinionSpawnChange = options.onMinionSpawnChange;
     this.onTowerInvincibleChange = options.onTowerInvincibleChange;
     this.onOpenChange = options.onOpenChange;
+    this.getCameraParams = options.getCameraParams;
     this.axesOn = options.initialAxesVisible ?? true;
     this.collidersOn = options.initialColliderMarkersVisible ?? true;
     this.cameraLocked = options.initialCameraLocked ?? false;
+    this.fixedCameraOn = options.initialFixedCamera ?? false;
     this.godModeOn = options.initialGodMode ?? false;
     this.minionSpawnOn = options.initialMinionSpawn ?? true;
     this.towerInvincibleOn = options.initialTowerInvincible ?? false;
@@ -155,7 +170,7 @@ export class EscMenu {
       new THREE.MeshBasicMaterial({
         color: 0x060a10,
         transparent: true,
-        opacity: 0.62,
+        opacity: 0.68,
         depthTest: false,
         depthWrite: false,
       }),
@@ -218,7 +233,7 @@ export class EscMenu {
         try {
           this.domElement.setPointerCapture(e.pointerId);
         } catch {
-          // ignore capture failures (rare non-primary pointers)
+          // ignore capture failures
         }
         this.applyBrightnessFromPointer(e.clientX, e.clientY);
       }
@@ -285,7 +300,6 @@ export class EscMenu {
     this.draggingBrightness = false;
     this.dirty = true;
     if (!open) {
-      // 交还给相机控制器自己的 cursor
       this.domElement.style.cursor = 'grab';
     } else {
       this.updateCursor();
@@ -303,14 +317,14 @@ export class EscMenu {
     this.uiCamera.bottom = -1;
     this.uiCamera.updateProjectionMatrix();
 
-    // 遮罩铺满当前视口
     this.dimMesh.scale.set(aspect, 1, 1);
   }
 
-  /** 在主场景之后调用：不清色，只清深度后叠 HUD */
   render(renderer: THREE.WebGLRenderer): void {
     if (!this.open) return;
-    if (this.dirty) this.redraw();
+    if (this.dirty || this.getCameraParams) {
+      this.redraw();
+    }
 
     const prevAutoClear = renderer.autoClear;
     renderer.autoClear = false;
@@ -347,8 +361,21 @@ export class EscMenu {
         break;
       case 'cameraLock':
         this.cameraLocked = !this.cameraLocked;
+        if (!this.cameraLocked) {
+          this.fixedCameraOn = false;
+          this.onFixedCameraChange?.(false);
+        }
         this.dirty = true;
         this.onCameraLockChange(this.cameraLocked);
+        break;
+      case 'fixedCamera':
+        this.fixedCameraOn = !this.fixedCameraOn;
+        if (this.fixedCameraOn) {
+          this.cameraLocked = true;
+          this.onCameraLockChange(true);
+        }
+        this.dirty = true;
+        this.onFixedCameraChange?.(this.fixedCameraOn);
         break;
       case 'godMode':
         this.godModeOn = !this.godModeOn;
@@ -366,17 +393,14 @@ export class EscMenu {
         this.onTowerInvincibleChange?.(this.towerInvincibleOn);
         break;
       case 'skip1m':
-        // 1 分钟游戏时间，1 秒真实时间完成
         this.onSkipTime(60, 1);
         this.setOpen(false);
         break;
       case 'skip3m':
-        // 3 分钟游戏时间，3 秒真实时间完成
         this.onSkipTime(180, 3);
         this.setOpen(false);
         break;
       case 'brightness':
-        // 拖动中处理，点击不切换
         break;
       case 'close':
       case 'dim':
@@ -397,6 +421,7 @@ export class EscMenu {
       this.hoverId === 'axes' ||
       this.hoverId === 'colliders' ||
       this.hoverId === 'cameraLock' ||
+      this.hoverId === 'fixedCamera' ||
       this.hoverId === 'godMode' ||
       this.hoverId === 'minionSpawn' ||
       this.hoverId === 'towerInvincible' ||
@@ -421,7 +446,6 @@ export class EscMenu {
     this.onBrightnessChange(this.brightness);
   }
 
-  /** 屏幕坐标 → 面板 canvas 像素；点不在面板上返回 null */
   private clientToCanvas(
     clientX: number,
     clientY: number,
@@ -452,7 +476,6 @@ export class EscMenu {
     this.pointerNdc.set(x, y);
     this.raycaster.setFromCamera(this.pointerNdc, this.uiCamera);
 
-    // 先测面板
     const panelHits = this.raycaster.intersectObject(this.panelMesh, false);
     if (panelHits.length > 0) {
       const uv = panelHits[0].uv;
@@ -472,7 +495,6 @@ export class EscMenu {
       return null;
     }
 
-    // 点在遮罩上（关闭）
     const dimHits = this.raycaster.intersectObject(this.dimMesh, false);
     if (dimHits.length > 0) return 'dim';
     return null;
@@ -486,63 +508,78 @@ export class EscMenu {
 
   private layoutRegions(): void {
     const W = EscMenu.CANVAS_W;
-    const pad = 44;
-    const rowH = 88;
-    const rowGap = 12;
-    const listY = 160;
-    const rowW = W - pad * 2;
+    const pad = 48;
+    const gap = 36;
+    const colW = (W - pad * 2 - gap) / 2; // 834
+    const leftX = pad; // 48
+    const rightX = pad + colW + gap; // 918
 
-    const brightH = 110;
-    // 六行开关：坐标 / 碰撞 / 锁定视角 / 英雄无敌 / 自动出兵 / 防御塔无敌
-    const brightY = listY + (rowH + rowGap) * 6 + 6;
+    // 左栏：7 个紧凑开关
+    const rowH = 64;
+    const rowGap = 8;
+    const listY = 120;
 
-    const skipY = brightY + brightH + 46;
-    const skipH = 68;
-    const skipGap = 14;
-    const skipBtnW = (rowW - skipGap) / 2;
+    // 右栏
+    const brightY = 362;
+    const brightH = 104;
+
+    const skipY = 504;
+    const skipH = 64;
+    const skipGap = 16;
+    const skipBtnW = (colW - skipGap) / 2;
+
+    const closeH = 72;
+    const closeY = EscMenu.CANVAS_H - pad - closeH;
 
     this.regions = [
-      { id: 'axes', x: pad, y: listY, w: rowW, h: rowH },
+      { id: 'axes', x: leftX, y: listY, w: colW, h: rowH },
       {
         id: 'colliders',
-        x: pad,
+        x: leftX,
         y: listY + (rowH + rowGap) * 1,
-        w: rowW,
+        w: colW,
         h: rowH,
       },
       {
         id: 'cameraLock',
-        x: pad,
+        x: leftX,
         y: listY + (rowH + rowGap) * 2,
-        w: rowW,
+        w: colW,
+        h: rowH,
+      },
+      {
+        id: 'fixedCamera',
+        x: leftX,
+        y: listY + (rowH + rowGap) * 3,
+        w: colW,
         h: rowH,
       },
       {
         id: 'godMode',
-        x: pad,
-        y: listY + (rowH + rowGap) * 3,
-        w: rowW,
+        x: leftX,
+        y: listY + (rowH + rowGap) * 4,
+        w: colW,
         h: rowH,
       },
       {
         id: 'minionSpawn',
-        x: pad,
-        y: listY + (rowH + rowGap) * 4,
-        w: rowW,
+        x: leftX,
+        y: listY + (rowH + rowGap) * 5,
+        w: colW,
         h: rowH,
       },
       {
         id: 'towerInvincible',
-        x: pad,
-        y: listY + (rowH + rowGap) * 5,
-        w: rowW,
+        x: leftX,
+        y: listY + (rowH + rowGap) * 6,
+        w: colW,
         h: rowH,
       },
-      { id: 'brightness', x: pad, y: brightY, w: rowW, h: brightH },
-      { id: 'skip1m', x: pad, y: skipY, w: skipBtnW, h: skipH },
+      { id: 'brightness', x: rightX, y: brightY, w: colW, h: brightH },
+      { id: 'skip1m', x: rightX, y: skipY, w: skipBtnW, h: skipH },
       {
         id: 'skip3m',
-        x: pad + skipBtnW + skipGap,
+        x: rightX + skipBtnW + skipGap,
         y: skipY,
         w: skipBtnW,
         h: skipH,
@@ -550,9 +587,9 @@ export class EscMenu {
       {
         id: 'close',
         x: pad,
-        y: EscMenu.CANVAS_H - pad - 68,
-        w: rowW,
-        h: 68,
+        y: closeY,
+        w: W - pad * 2,
+        h: closeH,
       },
     ];
   }
@@ -561,42 +598,39 @@ export class EscMenu {
     const { ctx } = this;
     const W = EscMenu.CANVAS_W;
     const H = EscMenu.CANVAS_H;
-    const pad = 44;
+    const pad = 48;
 
     ctx.clearRect(0, 0, W, H);
 
-    // 面板底板
-    this.roundRect(pad * 0.35, pad * 0.35, W - pad * 0.7, H - pad * 0.7, 28);
+    this.roundRect(pad * 0.3, pad * 0.3, W - pad * 0.6, H - pad * 0.6, 28);
     const bg = ctx.createLinearGradient(0, 0, 0, H);
-    bg.addColorStop(0, 'rgba(30, 40, 56, 0.97)');
-    bg.addColorStop(1, 'rgba(12, 16, 24, 0.98)');
+    bg.addColorStop(0, 'rgba(24, 34, 50, 0.97)');
+    bg.addColorStop(1, 'rgba(10, 14, 22, 0.98)');
     ctx.fillStyle = bg;
     ctx.fill();
 
-    // 边框高光
-    ctx.strokeStyle = 'rgba(148, 163, 184, 0.28)';
+    ctx.strokeStyle = 'rgba(148, 163, 184, 0.36)';
     ctx.lineWidth = 2;
     ctx.stroke();
 
-    // 顶部分割光带
-    const shine = ctx.createLinearGradient(0, 20, 0, 90);
-    shine.addColorStop(0, 'rgba(96, 165, 250, 0.12)');
+    const shine = ctx.createLinearGradient(0, 15, 0, 80);
+    shine.addColorStop(0, 'rgba(96, 165, 250, 0.18)');
     shine.addColorStop(1, 'rgba(96, 165, 250, 0)');
     ctx.fillStyle = shine;
-    ctx.fillRect(pad * 0.35 + 2, pad * 0.35 + 2, W - pad * 0.7 - 4, 70);
+    ctx.fillRect(pad * 0.3 + 2, pad * 0.3 + 2, W - pad * 0.6 - 4, 70);
 
-    // 标题
     ctx.textAlign = 'left';
     ctx.textBaseline = 'alphabetic';
-    ctx.fillStyle = '#e8eef6';
-    ctx.font = '700 42px system-ui, -apple-system, "Segoe UI", sans-serif';
-    ctx.fillText('设置', pad, 92);
+    ctx.fillStyle = '#f8fafc';
+    ctx.font = '700 40px system-ui, -apple-system, "Segoe UI", sans-serif';
+    ctx.fillText('系统设置', pad, 76);
 
+    ctx.textAlign = 'right';
     ctx.fillStyle = '#94a3b8';
-    ctx.font = '400 22px system-ui, -apple-system, "Segoe UI", sans-serif';
-    ctx.fillText('按 Esc 关闭', pad, 130);
+    ctx.font = '400 20px system-ui, -apple-system, "Segoe UI", sans-serif';
+    ctx.fillText('按 Esc 关闭', W - pad, 76);
 
-    // 显示开关
+    // 左栏 7 个紧凑开关
     this.drawToggleRow(
       this.region('axes'),
       '坐标参考线',
@@ -624,6 +658,14 @@ export class EscMenu {
       this.pressId === 'cameraLock',
     );
     this.drawToggleRow(
+      this.region('fixedCamera'),
+      '固定相机',
+      '锁定并预设俯视角 (Pitch -66°, Yaw -34°)',
+      this.fixedCameraOn,
+      this.hoverId === 'fixedCamera',
+      this.pressId === 'fixedCamera',
+    );
+    this.drawToggleRow(
       this.region('godMode'),
       '英雄无敌',
       '受到攻击与敌方技能时不扣除血量',
@@ -648,7 +690,13 @@ export class EscMenu {
       this.pressId === 'towerInvincible',
     );
 
-    // 全局亮度
+    // 右栏 1：相机实时参数仪表卡片
+    const gap = 36;
+    const colW = (W - pad * 2 - gap) / 2;
+    const rightX = pad + colW + gap;
+    this.drawCameraParamsSection(rightX, 120, colW);
+
+    // 右栏 2：全局亮度
     this.drawBrightnessRow(
       this.region('brightness'),
       this.brightness,
@@ -656,13 +704,13 @@ export class EscMenu {
       this.draggingBrightness,
     );
 
-    // 时间快进
+    // 右栏 3：时间快进
     const skip1 = this.region('skip1m');
     ctx.fillStyle = '#94a3b8';
     ctx.font = '600 20px system-ui, -apple-system, "Segoe UI", sans-serif';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'alphabetic';
-    ctx.fillText('时间快进', pad, skip1.y - 18);
+    ctx.fillText('时间快进 (TIME WARP)', rightX, skip1.y - 14);
 
     this.drawActionButton(
       skip1,
@@ -679,10 +727,10 @@ export class EscMenu {
       'secondary',
     );
 
-    // 继续游戏按钮
+    // 底部全宽：继续游戏按钮
     this.drawActionButton(
       this.region('close'),
-      '继续游戏',
+      '继续游戏 (RESUME)',
       this.hoverId === 'close',
       this.pressId === 'close',
       'primary',
@@ -690,6 +738,101 @@ export class EscMenu {
 
     this.texture.needsUpdate = true;
     this.dirty = false;
+  }
+
+  private drawCameraParamsSection(
+    startX: number,
+    startY: number,
+    width: number,
+  ): void {
+    const { ctx } = this;
+    const cardY = startY + 24;
+    const cardH = 196;
+
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '600 20px system-ui, -apple-system, "Segoe UI", sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillText('相机实效参数 (CAMERA REALTIME DATA)', startX, startY + 12);
+
+    this.roundRect(startX, cardY, width, cardH, 16);
+    const bgGrad = ctx.createLinearGradient(startX, cardY, startX, cardY + cardH);
+    bgGrad.addColorStop(0, 'rgba(15, 23, 42, 0.88)');
+    bgGrad.addColorStop(1, 'rgba(10, 16, 28, 0.93)');
+    ctx.fillStyle = bgGrad;
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(96, 165, 250, 0.32)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    const p = this.getCameraParams?.() ?? {
+      x: -0.4,
+      y: 3.7,
+      z: 1.5,
+      pitchDeg: -66.0,
+      yawDeg: -34.0,
+      fov: 55,
+      near: 0.1,
+      far: 1000,
+      moveSpeed: 1.8,
+      lookSpeed: 0.002,
+      mode: 'locked',
+    };
+
+    const cellW = (width - 20 - 12) / 2;
+    const cellH = (cardH - 20 - 10) / 2;
+
+    const items = [
+      {
+        title: '位置 (POS X / Y / Z)',
+        value: `X: ${p.x.toFixed(1)}   Y: ${p.y.toFixed(1)}   Z: ${p.z.toFixed(1)}`,
+        col: 0,
+        row: 0,
+        highlight: false,
+      },
+      {
+        title: '视角 (PITCH / YAW)',
+        value: `俯仰 ${p.pitchDeg.toFixed(1)}°   偏航 ${p.yawDeg.toFixed(1)}°`,
+        col: 1,
+        row: 0,
+        highlight: false,
+      },
+      {
+        title: '视场与深度范围 (FOV & DEPTH)',
+        value: `FOV: ${p.fov}°   范围: ${p.near}m - ${p.far}m`,
+        col: 0,
+        row: 1,
+        highlight: false,
+      },
+      {
+        title: '视角模式与控制速度',
+        value: `${p.mode === 'locked' ? (this.fixedCameraOn ? '🔒 固定相机' : '🔒 锁定跟随') : '✈️ 自由漫游'}   移速: ${p.moveSpeed.toFixed(1)} m/s`,
+        col: 1,
+        row: 1,
+        highlight: true,
+      },
+    ];
+
+    for (const item of items) {
+      const cx = startX + 10 + item.col * (cellW + 12);
+      const cy = cardY + 10 + item.row * (cellH + 10);
+
+      this.roundRect(cx, cy, cellW, cellH, 12);
+      ctx.fillStyle = item.highlight
+        ? 'rgba(30, 48, 76, 0.65)'
+        : 'rgba(20, 30, 48, 0.50)';
+      ctx.fill();
+
+      ctx.fillStyle = '#64748b';
+      ctx.font = '600 15px system-ui, -apple-system, "Segoe UI", sans-serif';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'alphabetic';
+      ctx.fillText(item.title, cx + 14, cy + 26);
+
+      ctx.fillStyle = item.highlight ? '#93c5fd' : '#e2e8f0';
+      ctx.font = '600 20px monospace, system-ui, sans-serif';
+      ctx.fillText(item.value, cx + 14, cy + 56);
+    }
   }
 
   private drawToggleRow(
@@ -703,7 +846,7 @@ export class EscMenu {
     const { ctx } = this;
     const { x, y, w, h } = region;
 
-    this.roundRect(x, y, w, h, 16);
+    this.roundRect(x, y, w, h, 14);
     if (hover || pressed) {
       ctx.fillStyle = pressed
         ? 'rgba(30, 48, 72, 0.92)'
@@ -715,30 +858,29 @@ export class EscMenu {
     ctx.strokeStyle = hover
       ? 'rgba(96, 165, 250, 0.45)'
       : 'rgba(148, 163, 184, 0.14)';
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 1.5;
     ctx.stroke();
 
     ctx.textAlign = 'left';
     ctx.textBaseline = 'alphabetic';
     ctx.fillStyle = '#e8eef6';
-    ctx.font = '600 28px system-ui, -apple-system, "Segoe UI", sans-serif';
-    ctx.fillText(title, x + 24, y + 42);
+    ctx.font = '600 22px system-ui, -apple-system, "Segoe UI", sans-serif';
+    ctx.fillText(title, x + 20, y + 30);
 
     ctx.fillStyle = '#94a3b8';
-    ctx.font = '400 20px system-ui, -apple-system, "Segoe UI", sans-serif';
-    ctx.fillText(desc, x + 24, y + 74);
+    ctx.font = '400 16px system-ui, -apple-system, "Segoe UI", sans-serif';
+    ctx.fillText(desc, x + 20, y + 52);
 
-    // 开关
-    const sw = 78;
-    const sh = 42;
-    const sx = x + w - 24 - sw;
+    const sw = 66;
+    const sh = 34;
+    const sx = x + w - 20 - sw;
     const sy = y + (h - sh) / 2;
     this.roundRect(sx, sy, sw, sh, sh / 2);
     ctx.fillStyle = on ? '#3b82f6' : '#334155';
     ctx.fill();
 
-    const knob = 32;
-    const kx = on ? sx + sw - 5 - knob : sx + 5;
+    const knob = 26;
+    const kx = on ? sx + sw - 4 - knob : sx + 4;
     const ky = sy + (sh - knob) / 2;
     ctx.beginPath();
     ctx.arc(kx + knob / 2, ky + knob / 2, knob / 2, 0, Math.PI * 2);
@@ -756,7 +898,7 @@ export class EscMenu {
     const { x, y, w, h } = region;
     const t = THREE.MathUtils.clamp(value, 0, 1);
 
-    this.roundRect(x, y, w, h, 16);
+    this.roundRect(x, y, w, h, 14);
     ctx.fillStyle =
       hover || active ? 'rgba(28, 44, 66, 0.88)' : 'rgba(15, 23, 34, 0.72)';
     ctx.fill();
@@ -764,36 +906,34 @@ export class EscMenu {
       hover || active
         ? 'rgba(96, 165, 250, 0.45)'
         : 'rgba(148, 163, 184, 0.14)';
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 1.5;
     ctx.stroke();
 
     ctx.textAlign = 'left';
     ctx.textBaseline = 'alphabetic';
     ctx.fillStyle = '#e8eef6';
-    ctx.font = '600 28px system-ui, -apple-system, "Segoe UI", sans-serif';
-    ctx.fillText('全局亮度', x + 24, y + 38);
+    ctx.font = '600 22px system-ui, -apple-system, "Segoe UI", sans-serif';
+    ctx.fillText('全局画面亮度', x + 20, y + 34);
 
     const pct = `${Math.round(t * 100)}%`;
     ctx.textAlign = 'right';
     ctx.fillStyle = '#93c5fd';
-    ctx.font = '600 24px system-ui, -apple-system, "Segoe UI", sans-serif';
-    ctx.fillText(pct, x + w - 24, y + 38);
+    ctx.font = '600 22px system-ui, -apple-system, "Segoe UI", sans-serif';
+    ctx.fillText(pct, x + w - 20, y + 34);
 
     ctx.textAlign = 'left';
     ctx.fillStyle = '#94a3b8';
-    ctx.font = '400 18px system-ui, -apple-system, "Segoe UI", sans-serif';
-    ctx.fillText('拖动滑条调暗画面', x + 24, y + 64);
+    ctx.font = '400 16px system-ui, -apple-system, "Segoe UI", sans-serif';
+    ctx.fillText('拖动滑条实时调暗 / 调亮画面', x + 20, y + 58);
 
-    // 轨道
     const trackX = x + EscMenu.SLIDER_PAD_X;
     const trackW = w - EscMenu.SLIDER_PAD_X * 2;
     const trackH = EscMenu.SLIDER_TRACK_H;
-    const trackY = y + h - 36;
+    const trackY = y + h - 24;
     this.roundRect(trackX, trackY, trackW, trackH, trackH / 2);
     ctx.fillStyle = 'rgba(51, 65, 85, 0.95)';
     ctx.fill();
 
-    // 已填充
     const fillW = Math.max(trackH, trackW * t);
     this.roundRect(trackX, trackY, fillW, trackH, trackH / 2);
     const fillGrad = ctx.createLinearGradient(trackX, 0, trackX + trackW, 0);
@@ -802,8 +942,7 @@ export class EscMenu {
     ctx.fillStyle = fillGrad;
     ctx.fill();
 
-    // 滑块
-    const knobR = 14;
+    const knobR = 13;
     const knobX = trackX + trackW * t;
     const knobY = trackY + trackH / 2;
     ctx.beginPath();
@@ -811,7 +950,7 @@ export class EscMenu {
     ctx.fillStyle = '#e2e8f0';
     ctx.fill();
     ctx.strokeStyle = active ? '#93c5fd' : 'rgba(15, 23, 42, 0.45)';
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 1.5;
     ctx.stroke();
   }
 
@@ -854,15 +993,15 @@ export class EscMenu {
       ctx.strokeStyle = hover
         ? 'rgba(96, 165, 250, 0.55)'
         : 'rgba(148, 163, 184, 0.22)';
-      ctx.lineWidth = 2;
+      ctx.lineWidth = 1.5;
       ctx.stroke();
       ctx.fillStyle = '#e8eef6';
     }
 
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.font = '700 26px system-ui, -apple-system, "Segoe UI", sans-serif';
-    ctx.fillText(label, x + w / 2, y + h / 2 + 1);
+    ctx.font = '700 24px system-ui, -apple-system, "Segoe UI", sans-serif';
+    ctx.fillText(label, x + w / 2, y + h / 2 + 0.5);
   }
 
   private roundRect(

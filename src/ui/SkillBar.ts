@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 
-export type SkillSlotId = 'Q' | 'E' | 'R' | 'F';
+export type SkillSlotId = 'Q' | 'W' | 'E' | 'R';
 
 export interface SkillBarOptions {
   /**
@@ -25,13 +25,13 @@ interface SlotState {
   label: string;
 }
 
-const SLOTS: SkillSlotId[] = ['Q', 'E', 'R', 'F'];
+const SLOTS: SkillSlotId[] = ['Q', 'W', 'E', 'R'];
 
 const KEY_TO_SLOT: Record<string, SkillSlotId> = {
   KeyQ: 'Q',
+  KeyW: 'W',
   KeyE: 'E',
   KeyR: 'R',
-  KeyF: 'F',
 };
 
 const DEFAULT_SLOT: SlotState = {
@@ -43,19 +43,20 @@ const DEFAULT_SLOT: SlotState = {
 };
 
 /**
- * 左下角技能栏：Q / E / R / F，下方为英雄血条。
- * 与主场景同 canvas 叠加渲染（正交 HUD + Canvas 纹理）。
+ * 底部中央技能栏：Q / W / E / R，下方为英雄血条。
+ * 技能方框 size x0.8 (56px)，保持 12px 内边距。
  */
 export class SkillBar {
-  private static readonly CANVAS_W = 560;
-  private static readonly CANVAS_H = 168;
+  /** 245px 内容宽 + 12px * 2 Padding = 269px */
+  private static readonly CANVAS_W = 269;
+  /** 76px 内容高 + 12px * 2 Padding = 100px */
+  private static readonly CANVAS_H = 100;
   /** 面板在 UI 空间中的宽度（屏幕高度为 2 时） */
-  private static readonly PANEL_W = 0.92;
+  private static readonly PANEL_W = 0.54;
   private static readonly PANEL_ASPECT =
     SkillBar.CANVAS_W / SkillBar.CANVAS_H;
-  /** 相对屏幕底部 / 左侧的边距（UI 空间，高度 2） */
-  private static readonly BOTTOM_OFFSET = 0.06;
-  private static readonly LEFT_OFFSET = 0.06;
+  /** 相对屏幕底部的边距（UI 空间，高度 2） */
+  private static readonly BOTTOM_OFFSET = 0;
 
   private readonly uiScene = new THREE.Scene();
   private readonly uiCamera: THREE.OrthographicCamera;
@@ -76,13 +77,13 @@ export class SkillBar {
   private readonly pressed = new Set<SkillSlotId>();
   private readonly slots: Record<SkillSlotId, SlotState> = {
     Q: { ...DEFAULT_SLOT },
+    W: { ...DEFAULT_SLOT },
     E: {
       ...DEFAULT_SLOT,
       ready: true,
       label: '弹雨',
     },
     R: { ...DEFAULT_SLOT },
-    F: { ...DEFAULT_SLOT },
   };
   private dirty = true;
   private viewW = 1;
@@ -169,7 +170,6 @@ export class SkillBar {
       Math.abs(s.cdRemaining - r) < 0.02 &&
       Math.abs(s.cdTotal - t) < 1e-4
     ) {
-      // 冷却显示按 0.1s 刷新，避免每帧全量 redraw
       if (r > 0 && Math.floor(s.cdRemaining * 10) === Math.floor(r * 10)) {
         s.cdRemaining = r;
         return;
@@ -221,17 +221,15 @@ export class SkillBar {
     this.layoutPanel();
   }
 
-  /** 将面板锚在屏幕左下角（随宽高比更新） */
+  /** 将面板锚在屏幕底部中央 */
   private layoutPanel(): void {
-    const aspect = this.viewW / this.viewH;
     const panelW = SkillBar.PANEL_W;
     const panelH = panelW / SkillBar.PANEL_ASPECT;
-    const x = -aspect + SkillBar.LEFT_OFFSET + panelW / 2;
+    const x = 0;
     const y = -1 + SkillBar.BOTTOM_OFFSET + panelH / 2;
     this.panelMesh.position.set(x, y, 0);
   }
 
-  /** 主场景 / 亮度层之后调用：不清色，只清深度后叠 HUD */
   render(renderer: THREE.WebGLRenderer): void {
     if (this.dirty) this.redraw();
 
@@ -259,47 +257,53 @@ export class SkillBar {
 
     ctx.clearRect(0, 0, W, H);
 
-    // 半透明底板
-    this.roundRect(8, 8, W - 16, H - 16, 18);
+    // 背景板
+    this.roundRect(0, 0, W, H, 12);
     const bg = ctx.createLinearGradient(0, 0, 0, H);
-    bg.addColorStop(0, 'rgba(22, 32, 48, 0.82)');
-    bg.addColorStop(1, 'rgba(10, 14, 22, 0.9)');
+    bg.addColorStop(0, 'rgba(20, 30, 46, 0.88)');
+    bg.addColorStop(1, 'rgba(10, 14, 22, 0.94)');
     ctx.fillStyle = bg;
     ctx.fill();
-    ctx.strokeStyle = 'rgba(148, 163, 184, 0.22)';
-    ctx.lineWidth = 2;
+    ctx.strokeStyle = 'rgba(148, 163, 184, 0.32)';
+    ctx.lineWidth = 1.5;
     ctx.stroke();
 
-    const gap = 14;
-    const slotSize = 78;
-    const totalSlotsW = SLOTS.length * slotSize + (SLOTS.length - 1) * gap;
-    let x = (W - totalSlotsW) / 2;
-    // 技能槽靠上，下方留给血条
-    const y = 18;
+    const padding = 12;
+    const gap = 7;
+    /** 技能方框尺寸从 70px x 0.8 缩小至 56px */
+    const slotSize = 56;
+    const totalSlotsW = SLOTS.length * slotSize + (SLOTS.length - 1) * gap; // 245
+    let x = padding; // 12
+    const y = padding; // 12
 
     for (const slot of SLOTS) {
       this.drawSlot(x, y, slotSize, slot);
       x += slotSize + gap;
     }
 
-    this.drawHeroHpBar(W, H);
+    this.drawHeroHpBar(W, H, totalSlotsW, padding);
 
     this.texture.needsUpdate = true;
     this.dirty = false;
   }
 
-  /** 技能栏下方的英雄血条 + 数值 */
-  private drawHeroHpBar(W: number, H: number): void {
+  /** 技能栏下方的英雄血条 */
+  private drawHeroHpBar(
+    W: number,
+    H: number,
+    totalSlotsW: number,
+    padding: number,
+  ): void {
     const { ctx } = this;
-    const barW = 360;
-    const barH = 18;
-    const barX = (W - barW) / 2;
-    const barY = H - 38;
+    const barW = totalSlotsW; // 245
+    const barH = 14;
+    const barX = padding; // 12
+    const barY = H - padding - barH; // 100 - 12 - 14 = 74
     const ratio = THREE.MathUtils.clamp(this.hp / this.maxHp, 0, 1);
 
     // 外框
-    this.roundRect(barX, barY, barW, barH, 6);
-    ctx.fillStyle = 'rgba(8, 12, 20, 0.92)';
+    this.roundRect(barX, barY, barW, barH, 4);
+    ctx.fillStyle = 'rgba(8, 12, 20, 0.95)';
     ctx.fill();
     ctx.strokeStyle = 'rgba(148, 163, 184, 0.4)';
     ctx.lineWidth = 1.5;
@@ -311,7 +315,7 @@ export class SkillBar {
     const fillW = Math.max(0, Math.round(innerW * ratio));
 
     if (fillW > 0) {
-      this.roundRect(barX + inset, barY + inset, fillW, innerH, 4);
+      this.roundRect(barX + inset, barY + inset, fillW, innerH, 2);
       const grad = ctx.createLinearGradient(
         barX,
         barY,
@@ -356,7 +360,7 @@ export class SkillBar {
     // 数值
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.font = '700 12px system-ui, -apple-system, "Segoe UI", sans-serif';
+    ctx.font = '700 10px system-ui, -apple-system, "Segoe UI", sans-serif';
     ctx.fillStyle = '#f1f5f9';
     ctx.shadowColor = 'rgba(0, 0, 0, 0.75)';
     ctx.shadowBlur = 3;
@@ -373,7 +377,7 @@ export class SkillBar {
     const onCd = state.cdRemaining > 0.02;
 
     // 外框
-    this.roundRect(x, y, size, size, 12);
+    this.roundRect(x, y, size, size, 7);
     if (targeting) {
       ctx.fillStyle = 'rgba(88, 40, 72, 0.95)';
     } else if (pressed) {
@@ -387,12 +391,12 @@ export class SkillBar {
       : pressed
         ? 'rgba(96, 165, 250, 0.85)'
         : 'rgba(148, 163, 184, 0.35)';
-    ctx.lineWidth = 2.5;
+    ctx.lineWidth = 1.5;
     ctx.stroke();
 
     // 内槽
-    const inset = 8;
-    this.roundRect(x + inset, y + inset, size - inset * 2, size - inset * 2, 8);
+    const inset = 4;
+    this.roundRect(x + inset, y + inset, size - inset * 2, size - inset * 2, 4);
     const inner = ctx.createLinearGradient(0, y, 0, y + size);
     if (targeting) {
       inner.addColorStop(0, 'rgba(120, 40, 90, 0.7)');
@@ -410,25 +414,25 @@ export class SkillBar {
     ctx.fillStyle = inner;
     ctx.fill();
     ctx.strokeStyle = 'rgba(71, 85, 105, 0.4)';
-    ctx.lineWidth = 1.5;
+    ctx.lineWidth = 1;
     ctx.stroke();
 
     const cx = x + size / 2;
-    const cy = y + size / 2 - 4;
+    const cy = y + size / 2 - 2;
 
     if (state.ready && state.label) {
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillStyle = targeting ? '#fbcfe8' : '#f9a8d4';
-      ctx.font = '700 16px system-ui, -apple-system, "Segoe UI", sans-serif';
+      ctx.font = '700 12px system-ui, -apple-system, "Segoe UI", sans-serif';
       ctx.fillText(state.label, cx, cy);
     } else {
       // 空技能占位十字
       ctx.strokeStyle = pressed
         ? 'rgba(147, 197, 253, 0.35)'
         : 'rgba(100, 116, 139, 0.28)';
-      ctx.lineWidth = 2;
-      const arm = 10;
+      ctx.lineWidth = 1.5;
+      const arm = 6;
       ctx.beginPath();
       ctx.moveTo(cx - arm, cy);
       ctx.lineTo(cx + arm, cy);
@@ -449,10 +453,9 @@ export class SkillBar {
         y + inset,
         size - inset * 2,
         size - inset * 2,
-        8,
+        4,
       );
       ctx.clip();
-      // 从下往上消退
       const coverH = (size - inset * 2) * frac;
       ctx.fillStyle = 'rgba(8, 12, 20, 0.72)';
       ctx.fillRect(
@@ -466,20 +469,20 @@ export class SkillBar {
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillStyle = '#e2e8f0';
-      ctx.font = '700 20px system-ui, -apple-system, "Segoe UI", sans-serif';
+      ctx.font = '700 15px system-ui, -apple-system, "Segoe UI", sans-serif';
       const sec =
         state.cdRemaining >= 10
           ? `${Math.ceil(state.cdRemaining)}`
           : state.cdRemaining.toFixed(1);
-      ctx.fillText(sec, cx, cy + 2);
+      ctx.fillText(sec, cx, cy + 1);
     }
 
     // 键位标签（右下角小徽章）
-    const badgeW = 22;
-    const badgeH = 18;
-    const bx = x + size - badgeW - 5;
-    const by = y + size - badgeH - 5;
-    this.roundRect(bx, by, badgeW, badgeH, 5);
+    const badgeW = 16;
+    const badgeH = 13;
+    const bx = x + size - badgeW - 3;
+    const by = y + size - badgeH - 3;
+    this.roundRect(bx, by, badgeW, badgeH, 3);
     ctx.fillStyle = targeting
       ? 'rgba(219, 39, 119, 0.95)'
       : pressed
@@ -497,7 +500,7 @@ export class SkillBar {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillStyle = pressed || targeting ? '#eff6ff' : '#e2e8f0';
-    ctx.font = '700 12px system-ui, -apple-system, "Segoe UI", sans-serif';
+    ctx.font = '700 9px system-ui, -apple-system, "Segoe UI", sans-serif';
     ctx.fillText(slot, bx + badgeW / 2, by + badgeH / 2 + 0.5);
   }
 

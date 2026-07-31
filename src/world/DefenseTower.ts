@@ -10,57 +10,195 @@ import {
 import { HealthBar } from './ui/HealthBar';
 
 /**
- * 防御塔（LoL 风格示意，非官方素材）。
- * 特征：厚重基座、分段石塔身、金属箍、顶部能量水晶。
- * 战斗：范围内锁定敌方单位，从水晶发射追踪弹。
- * 摧毁后仅保留原有底座，隐藏底座以上结构与范围圈。
+ * 防御塔静态共享资源池（所有防御塔共用一套 Geometry 与 Material，零重复开销）
+ */
+class DefenseTowerAssets {
+  private static instance: DefenseTowerAssets | null = null;
+
+  // 共享材质
+  readonly stoneDarkMat: THREE.MeshStandardMaterial;
+  readonly stoneMidMat: THREE.MeshStandardMaterial;
+  readonly stoneMat: THREE.MeshStandardMaterial;
+  readonly stoneBrokenMat: THREE.MeshStandardMaterial;
+  readonly metalDarkMat: THREE.MeshStandardMaterial;
+  readonly metalMat: THREE.MeshStandardMaterial;
+  readonly crystalBlueMat: THREE.MeshStandardMaterial;
+  readonly crystalCoreBlueMat: THREE.MeshStandardMaterial;
+  readonly crystalRedMat: THREE.MeshStandardMaterial;
+  readonly crystalCoreRedMat: THREE.MeshStandardMaterial;
+  readonly crystalBrokenMat: THREE.MeshStandardMaterial;
+
+  // 共享几何体 - 完整塔模型
+  readonly baseBottomGeo: THREE.CylinderGeometry;
+  readonly baseMidGeo: THREE.CylinderGeometry;
+  readonly baseTopGeo: THREE.CylinderGeometry;
+  readonly ringBottomGeo: THREE.TorusGeometry;
+  readonly runeGeo: THREE.BoxGeometry;
+  readonly lowerShaftGeo: THREE.CylinderGeometry;
+  readonly ringLowerGeo: THREE.TorusGeometry;
+  readonly ringMidGeo: THREE.TorusGeometry;
+  readonly midShaftGeo: THREE.CylinderGeometry;
+  readonly collarGeo: THREE.CylinderGeometry;
+  readonly upperShaftGeo: THREE.CylinderGeometry;
+  readonly crownGeo: THREE.CylinderGeometry;
+  readonly ringCrownGeo: THREE.TorusGeometry;
+  readonly clawGeo: THREE.BoxGeometry;
+  readonly pedestalGeo: THREE.CylinderGeometry;
+  readonly crystalGeo: THREE.OctahedronGeometry;
+  readonly crystalCoreGeo: THREE.IcosahedronGeometry;
+
+  // 共享几何体 - 被破坏残骸模型 (Broken Model)
+  readonly brokenBaseGeo: THREE.CylinderGeometry;
+  readonly brokenStumpGeo: THREE.CylinderGeometry;
+  readonly rubbleBoxGeo: THREE.BoxGeometry;
+  readonly rubblePolyGeo: THREE.DodecahedronGeometry;
+  readonly brokenCrystalGeo: THREE.OctahedronGeometry;
+
+  private constructor() {
+    // 石质材质
+    this.stoneDarkMat = new THREE.MeshStandardMaterial({
+      color: 0x3a4654,
+      roughness: 0.9,
+      metalness: 0.05,
+    });
+    this.stoneMidMat = new THREE.MeshStandardMaterial({
+      color: 0x4d5c6b,
+      roughness: 0.9,
+      metalness: 0.05,
+    });
+    this.stoneMat = new THREE.MeshStandardMaterial({
+      color: 0x5c6b7a,
+      roughness: 0.9,
+      metalness: 0.05,
+    });
+    this.stoneBrokenMat = new THREE.MeshStandardMaterial({
+      color: 0x333d47,
+      roughness: 0.95,
+      metalness: 0.02,
+    });
+
+    // 金属材质
+    this.metalDarkMat = new THREE.MeshStandardMaterial({
+      color: 0x8a7020,
+      roughness: 0.45,
+      metalness: 0.75,
+    });
+    this.metalMat = new THREE.MeshStandardMaterial({
+      color: 0xc4a035,
+      roughness: 0.45,
+      metalness: 0.75,
+    });
+
+    // 蓝/红方水晶材质
+    this.crystalBlueMat = new THREE.MeshStandardMaterial({
+      color: 0x4fc3f7,
+      emissive: 0x4fc3f7,
+      emissiveIntensity: 0.85,
+      roughness: 0.2,
+      metalness: 0.15,
+      transparent: true,
+      opacity: 0.92,
+    });
+    this.crystalCoreBlueMat = new THREE.MeshStandardMaterial({
+      color: 0xe0f7ff,
+      emissive: 0xe0f7ff,
+      emissiveIntensity: 1.2,
+      roughness: 0.15,
+      metalness: 0.1,
+    });
+    this.crystalRedMat = new THREE.MeshStandardMaterial({
+      color: 0xef4444,
+      emissive: 0xef4444,
+      emissiveIntensity: 0.85,
+      roughness: 0.2,
+      metalness: 0.15,
+      transparent: true,
+      opacity: 0.92,
+    });
+    this.crystalCoreRedMat = new THREE.MeshStandardMaterial({
+      color: 0xffe4e6,
+      emissive: 0xffe4e6,
+      emissiveIntensity: 1.2,
+      roughness: 0.15,
+      metalness: 0.1,
+    });
+    this.crystalBrokenMat = new THREE.MeshStandardMaterial({
+      color: 0x334155,
+      emissive: 0x0f172a,
+      emissiveIntensity: 0.05,
+      roughness: 0.85,
+      metalness: 0.1,
+      transparent: true,
+      opacity: 0.65,
+    });
+
+    // 几何体 - 完整防御塔
+    this.baseBottomGeo = new THREE.CylinderGeometry(0.55, 0.62, 0.12, 8);
+    this.baseMidGeo = new THREE.CylinderGeometry(0.46, 0.52, 0.14, 8);
+    this.baseTopGeo = new THREE.CylinderGeometry(0.38, 0.42, 0.1, 8);
+    this.ringBottomGeo = new THREE.TorusGeometry(0.4, 0.03, 8, 20);
+    this.runeGeo = new THREE.BoxGeometry(0.08, 0.1, 0.05);
+    this.lowerShaftGeo = new THREE.CylinderGeometry(0.28, 0.36, 0.85, 8);
+    this.ringLowerGeo = new THREE.TorusGeometry(0.3, 0.025, 8, 20);
+    this.ringMidGeo = new THREE.TorusGeometry(0.29, 0.022, 8, 20);
+    this.midShaftGeo = new THREE.CylinderGeometry(0.24, 0.28, 0.55, 8);
+    this.collarGeo = new THREE.CylinderGeometry(0.32, 0.32, 0.1, 8);
+    this.upperShaftGeo = new THREE.CylinderGeometry(0.22, 0.26, 0.5, 8);
+    this.crownGeo = new THREE.CylinderGeometry(0.34, 0.3, 0.12, 8);
+    this.ringCrownGeo = new THREE.TorusGeometry(0.33, 0.02, 8, 20);
+    this.clawGeo = new THREE.BoxGeometry(0.06, 0.38, 0.08);
+    this.pedestalGeo = new THREE.CylinderGeometry(0.08, 0.12, 0.16, 8);
+    this.crystalGeo = new THREE.OctahedronGeometry(0.22, 0);
+    this.crystalCoreGeo = new THREE.IcosahedronGeometry(0.1, 0);
+
+    // 几何体 - 被破坏残骸
+    this.brokenBaseGeo = new THREE.CylinderGeometry(0.52, 0.62, 0.16, 8);
+    this.brokenStumpGeo = new THREE.CylinderGeometry(0.34, 0.44, 0.38, 7);
+    this.rubbleBoxGeo = new THREE.BoxGeometry(0.18, 0.14, 0.16);
+    this.rubblePolyGeo = new THREE.DodecahedronGeometry(0.13, 0);
+    this.brokenCrystalGeo = new THREE.OctahedronGeometry(0.14, 0);
+  }
+
+  static get get(): DefenseTowerAssets {
+    if (!DefenseTowerAssets.instance) {
+      DefenseTowerAssets.instance = new DefenseTowerAssets();
+    }
+    return DefenseTowerAssets.instance;
+  }
+}
+
+/**
+ * 防御塔类（LoL 风格防御塔）
+ * 特征：
+ * 1. 模型复用：共享全局单例 Geometry 与 Material 资源，8座防御塔零重复创建。
+ * 2. 双模型分离：独立构建“完整状态模型 (fullModel)”与“被破坏残骸模型 (brokenModel)”，摧毁时无缝瞬间切换。
  */
 export class DefenseTower extends THREE.Group implements CombatUnit {
-  /** 水平缩放 */
   private static readonly SCALE_XZ = 0.65;
-  /** 高度缩放（更矮） */
   private static readonly SCALE_Y = 0.48;
-  /** 地面圆形碰撞半径（世界单位，约贴合基座） */
   static readonly COLLIDER_RADIUS = 0.42;
   static readonly MAX_HP = 520;
-  /** 目标标签：高于小兵；小兵会优先打塔，塔仍优先清兵 */
   static readonly COMBAT_PRIORITY = 1;
-  /** 攻击范围（世界单位，圆心距） */
   static readonly ATTACK_RANGE = 2.0;
-  /** 单发伤害（约两发清一个小兵） */
   static readonly ATTACK_DAMAGE = 55;
-  /** 攻击间隔（秒，含前摇）——比小兵更慢 */
   static readonly ATTACK_INTERVAL = 1.85;
-  /** 出手前摇（秒） */
   static readonly WINDUP = 0.22;
-  /** 塔弹视觉缩放（相对小兵弹） */
   static readonly BOLT_SCALE = 5;
 
-  // 召唤师峡谷蓝方气质配色
-  private static readonly STONE = 0x5c6b7a;
-  private static readonly STONE_DARK = 0x3a4654;
-  private static readonly STONE_MID = 0x4d5c6b;
-  private static readonly METAL = 0xc4a035;
-  private static readonly METAL_DARK = 0x8a7020;
-  private static readonly CRYSTAL_BLUE = 0x4fc3f7;
-  private static readonly CRYSTAL_BLUE_CORE = 0xe0f7ff;
-  private static readonly CRYSTAL_RED = 0xef4444;
-  private static readonly CRYSTAL_RED_CORE = 0xffe4e6;
+  /** 完整状态模型 */
+  readonly fullModel: THREE.Group;
+  /** 被破坏状态模型（废墟残骸） */
+  private readonly brokenModel: THREE.Group;
 
   private readonly crystal: THREE.Mesh;
-  private readonly crystalLight: THREE.PointLight;
   private readonly crystalGroup: THREE.Group;
-  /** 底座以上结构（摧毁后隐藏） */
-  private readonly upperRoot: THREE.Group;
+  private readonly crystalLight: THREE.PointLight;
   private readonly healthBar: HealthBar;
   private readonly rangeMarker: THREE.Group;
-  private elapsed = 0;
 
-  /** 当前锁定目标（出范围或死亡后清空） */
+  private elapsed = 0;
   private target: CombatUnit | null = null;
-  /** 攻击冷却：>0 时不能开始新前摇 */
   private attackCd = 0;
-  /** 前摇计时；<0 表示不在前摇 */
   private windupElapsed = -1;
   private readonly muzzleWorld = new THREE.Vector3();
 
@@ -70,22 +208,12 @@ export class DefenseTower extends THREE.Group implements CombatUnit {
   readonly maxHp = DefenseTower.MAX_HP;
   hp = DefenseTower.MAX_HP;
 
-  /**
-   * @param x 世界 X；x > 0 为红方水晶，x < 0 为蓝方水晶
-   */
   constructor(x: number, z = 0) {
     super();
     this.name = `DefenseTower_${x}_${z}`;
     this.position.set(x, 0, z);
     this.team = x > 0 ? 'red' : 'blue';
 
-    const isRed = this.team === 'red';
-    const crystalColor = isRed
-      ? DefenseTower.CRYSTAL_RED
-      : DefenseTower.CRYSTAL_BLUE;
-    const crystalCore = isRed
-      ? DefenseTower.CRYSTAL_RED_CORE
-      : DefenseTower.CRYSTAL_BLUE_CORE;
     this.scale.set(
       DefenseTower.SCALE_XZ,
       DefenseTower.SCALE_Y,
@@ -95,175 +223,127 @@ export class DefenseTower extends THREE.Group implements CombatUnit {
       isStatic: true,
     });
 
-    const stone = (color: number) =>
-      new THREE.MeshStandardMaterial({
-        color,
-        roughness: 0.9,
-        metalness: 0.05,
-      });
-    const metal = (color: number) =>
-      new THREE.MeshStandardMaterial({
-        color,
-        roughness: 0.45,
-        metalness: 0.75,
-      });
+    const assets = DefenseTowerAssets.get;
+    const isRed = this.team === 'red';
 
-    // 底座始终保留；upperRoot 为底座以上结构，摧毁后隐藏
-    this.upperRoot = new THREE.Group();
-    this.upperRoot.name = 'TowerUpper';
-    this.add(this.upperRoot);
+    // ==========================================
+    // 1. 构建【完整状态模型 (fullModel)】
+    // ==========================================
+    this.fullModel = new THREE.Group();
+    this.fullModel.name = 'TowerFullModel';
+    this.add(this.fullModel);
 
-    // —— 基座（多层台阶，LoL 塔底座很“沉”）——
-    const baseBottom = mesh(
-      new THREE.CylinderGeometry(0.55, 0.62, 0.12, 8),
-      stone(DefenseTower.STONE_DARK),
-      0.06,
-    );
-    this.add(baseBottom);
+    // --- 底座 ---
+    this.fullModel.add(mesh(assets.baseBottomGeo, assets.stoneDarkMat, 0.06));
+    this.fullModel.add(mesh(assets.baseMidGeo, assets.stoneMidMat, 0.19));
+    this.fullModel.add(mesh(assets.baseTopGeo, assets.stoneMat, 0.31));
+    this.fullModel.add(ring(assets.ringBottomGeo, assets.metalDarkMat, 0.36));
 
-    const baseMid = mesh(
-      new THREE.CylinderGeometry(0.46, 0.52, 0.14, 8),
-      stone(DefenseTower.STONE_MID),
-      0.19,
-    );
-    this.add(baseMid);
-
-    const baseTop = mesh(
-      new THREE.CylinderGeometry(0.38, 0.42, 0.1, 8),
-      stone(DefenseTower.STONE),
-      0.31,
-    );
-    this.add(baseTop);
-
-    // 底座金边
-    this.add(
-      ring(0.4, 0.03, DefenseTower.METAL_DARK, 0.36, metal(DefenseTower.METAL_DARK)),
-    );
-
-    // 底部一圈小符文石（装饰，属底座）
-    const runeMat = metal(DefenseTower.METAL);
+    // 底部一圈小符文石
     for (let i = 0; i < 6; i++) {
       const a = (i / 6) * Math.PI * 2;
-      const rune = new THREE.Mesh(
-        new THREE.BoxGeometry(0.08, 0.1, 0.05),
-        runeMat,
-      );
+      const rune = new THREE.Mesh(assets.runeGeo, assets.metalMat);
       rune.position.set(Math.cos(a) * 0.48, 0.28, Math.sin(a) * 0.48);
       rune.rotation.y = -a;
-      this.add(rune);
+      rune.castShadow = true;
+      this.fullModel.add(rune);
     }
 
-    // —— 下塔身（粗）——
-    const lowerShaft = mesh(
-      new THREE.CylinderGeometry(0.28, 0.36, 0.85, 8),
-      stone(DefenseTower.STONE),
-      0.36 + 0.425,
-    );
-    this.upperRoot.add(lowerShaft);
+    // --- 塔身 ---
+    this.fullModel.add(mesh(assets.lowerShaftGeo, assets.stoneMat, 0.36 + 0.425));
+    this.fullModel.add(ring(assets.ringLowerGeo, assets.metalMat, 0.55));
+    this.fullModel.add(ring(assets.ringMidGeo, assets.metalMat, 1.05));
+    this.fullModel.add(mesh(assets.midShaftGeo, assets.stoneMidMat, 1.21 + 0.275));
+    this.fullModel.add(mesh(assets.collarGeo, assets.metalMat, 1.55));
+    this.fullModel.add(mesh(assets.upperShaftGeo, assets.stoneMat, 1.6 + 0.25));
+    this.fullModel.add(mesh(assets.crownGeo, assets.stoneDarkMat, 2.16));
+    this.fullModel.add(ring(assets.ringCrownGeo, assets.metalMat, 2.23));
 
-    // 下段金属箍
-    this.upperRoot.add(
-      ring(0.3, 0.025, DefenseTower.METAL, 0.55, metal(DefenseTower.METAL)),
-    );
-    this.upperRoot.add(
-      ring(0.29, 0.022, DefenseTower.METAL, 1.05, metal(DefenseTower.METAL)),
-    );
-
-    // —— 中段收腰 ——
-    const midShaft = mesh(
-      new THREE.CylinderGeometry(0.24, 0.28, 0.55, 8),
-      stone(DefenseTower.STONE_MID),
-      1.21 + 0.275,
-    );
-    this.upperRoot.add(midShaft);
-
-    // 中段饰带
-    const collar = mesh(
-      new THREE.CylinderGeometry(0.32, 0.32, 0.1, 8),
-      metal(DefenseTower.METAL),
-      1.55,
-    );
-    this.upperRoot.add(collar);
-
-    // —— 上塔身 ——
-    const upperShaft = mesh(
-      new THREE.CylinderGeometry(0.22, 0.26, 0.5, 8),
-      stone(DefenseTower.STONE),
-      1.6 + 0.25,
-    );
-    this.upperRoot.add(upperShaft);
-
-    // —— 顶部平台（托住水晶）——
-    const crown = mesh(
-      new THREE.CylinderGeometry(0.34, 0.3, 0.12, 8),
-      stone(DefenseTower.STONE_DARK),
-      2.16,
-    );
-    this.upperRoot.add(crown);
-    this.upperRoot.add(
-      ring(0.33, 0.02, DefenseTower.METAL, 2.23, metal(DefenseTower.METAL)),
-    );
-
-    // 托架“爪”：四根斜撑，类似塔顶金属支架
-    const clawMat = metal(DefenseTower.METAL_DARK);
-    const clawGeo = new THREE.BoxGeometry(0.06, 0.38, 0.08);
+    // 四爪支撑
     for (let i = 0; i < 4; i++) {
       const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
-      const claw = new THREE.Mesh(clawGeo, clawMat);
+      const claw = new THREE.Mesh(assets.clawGeo, assets.metalDarkMat);
       claw.position.set(Math.cos(a) * 0.22, 2.38, Math.sin(a) * 0.22);
       claw.lookAt(0, 2.7, 0);
       claw.castShadow = true;
-      this.upperRoot.add(claw);
+      this.fullModel.add(claw);
     }
 
-    // 短柱支撑水晶
-    const pedestal = mesh(
-      new THREE.CylinderGeometry(0.08, 0.12, 0.16, 8),
-      metal(DefenseTower.METAL),
-      2.3,
-    );
-    this.upperRoot.add(pedestal);
+    // 短柱
+    this.fullModel.add(mesh(assets.pedestalGeo, assets.metalMat, 2.3));
 
-    // —— 能量水晶（LoL 塔核心识别点）——
+    // --- 能量水晶 ---
     this.crystalGroup = new THREE.Group();
     this.crystalGroup.position.y = 2.55;
-    this.upperRoot.add(this.crystalGroup);
+    this.fullModel.add(this.crystalGroup);
 
-    const crystalMat = new THREE.MeshStandardMaterial({
-      color: crystalColor,
-      emissive: crystalColor,
-      emissiveIntensity: 0.85,
-      roughness: 0.2,
-      metalness: 0.15,
-      transparent: true,
-      opacity: 0.92,
-    });
-    this.crystal = new THREE.Mesh(
-      new THREE.OctahedronGeometry(0.22, 0),
-      crystalMat,
-    );
+    const crystalMat = isRed ? assets.crystalRedMat : assets.crystalBlueMat;
+    const crystalCoreMat = isRed ? assets.crystalCoreRedMat : assets.crystalCoreBlueMat;
+
+    this.crystal = new THREE.Mesh(assets.crystalGeo, crystalMat);
     this.crystal.castShadow = true;
     this.crystalGroup.add(this.crystal);
 
-    // 内核高亮
-    const core = new THREE.Mesh(
-      new THREE.IcosahedronGeometry(0.1, 0),
-      new THREE.MeshStandardMaterial({
-        color: crystalCore,
-        emissive: crystalCore,
-        emissiveIntensity: 1.2,
-        roughness: 0.15,
-        metalness: 0.1,
-      }),
-    );
+    const core = new THREE.Mesh(assets.crystalCoreGeo, crystalCoreMat);
     this.crystalGroup.add(core);
 
-    // 水晶光晕
+    const crystalColor = isRed ? 0xef4444 : 0x4fc3f7;
     this.crystalLight = new THREE.PointLight(crystalColor, 1.1, 6, 2);
     this.crystalLight.position.set(0, 0, 0);
     this.crystalGroup.add(this.crystalLight);
 
-    // 塔顶血条：补偿父级非均匀 scale，约 0.55×0.05 世界单位
+    // ==========================================
+    // 2. 构建【被破坏状态模型 (brokenModel)】
+    // ==========================================
+    this.brokenModel = new THREE.Group();
+    this.brokenModel.name = 'TowerBrokenModel';
+    this.add(this.brokenModel);
+
+    // 破损开裂底座
+    const brokenBase = mesh(assets.brokenBaseGeo, assets.stoneBrokenMat, 0.08);
+    this.brokenModel.add(brokenBase);
+
+    // 倾斜断塌的残柱
+    const brokenStump = mesh(assets.brokenStumpGeo, assets.stoneDarkMat, 0.25);
+    brokenStump.rotation.z = 0.18;
+    brokenStump.rotation.x = -0.12;
+    this.brokenModel.add(brokenStump);
+
+    // 散落周边的几块破损石块 (Rubble)
+    const rubblePositions = [
+      { x: 0.38, y: 0.08, z: 0.25, rx: 0.4, ry: 0.2, rz: 0.6 },
+      { x: -0.42, y: 0.07, z: -0.18, rx: 0.2, ry: 0.8, rz: -0.3 },
+      { x: 0.22, y: 0.06, z: -0.45, rx: -0.5, ry: 0.3, rz: 0.1 },
+      { x: -0.28, y: 0.09, z: 0.36, rx: 0.3, ry: -0.4, rz: 0.7 },
+    ];
+    for (const r of rubblePositions) {
+      const rubble = new THREE.Mesh(assets.rubbleBoxGeo, assets.stoneBrokenMat);
+      rubble.position.set(r.x, r.y, r.z);
+      rubble.rotation.set(r.rx, r.ry, r.rz);
+      rubble.castShadow = true;
+      this.brokenModel.add(rubble);
+    }
+
+    const polyRubble = new THREE.Mesh(assets.rubblePolyGeo, assets.stoneMidMat);
+    polyRubble.position.set(0.12, 0.1, 0.32);
+    polyRubble.rotation.set(0.5, 0.5, 0.2);
+    polyRubble.castShadow = true;
+    this.brokenModel.add(polyRubble);
+
+    // 跌落在残骸旁、熄灭破裂的水晶渣
+    const brokenCrystal = new THREE.Mesh(assets.brokenCrystalGeo, assets.crystalBrokenMat);
+    brokenCrystal.position.set(-0.25, 0.12, 0.2);
+    brokenCrystal.rotation.set(0.8, 0.3, 1.2);
+    brokenCrystal.scale.set(0.9, 0.5, 0.8);
+    this.brokenModel.add(brokenCrystal);
+
+    // 初始状态：显示完整模型，隐藏破损模型
+    this.fullModel.visible = true;
+    this.brokenModel.visible = false;
+
+    // ==========================================
+    // 3. UI 元素（血条与攻击范围圈）
+    // ==========================================
     this.healthBar = new HealthBar({
       width: 0.55 / DefenseTower.SCALE_XZ,
       height: 0.05 / DefenseTower.SCALE_Y,
@@ -273,7 +353,6 @@ export class DefenseTower extends THREE.Group implements CombatUnit {
     this.add(this.healthBar);
     this.healthBar.setHp(this.hp, this.maxHp);
 
-    // 攻击范围地面标记（半径补偿父级 XZ 缩放）
     this.rangeMarker = createAttackRangeMarker(
       this.team,
       DefenseTower.ATTACK_RANGE,
@@ -306,7 +385,6 @@ export class DefenseTower extends THREE.Group implements CombatUnit {
     }
   }
 
-  /** 弹道落点：中段塔身中心（本地 y≈1.5，再乘高度缩放） */
   getHitPoint(out: THREE.Vector3): THREE.Vector3 {
     out.set(
       this.position.x,
@@ -316,10 +394,6 @@ export class DefenseTower extends THREE.Group implements CombatUnit {
     return out;
   }
 
-  /**
-   * 水晶动画 + 索敌攻击。
-   * 范围内优先小兵，锁定后持续输出直至死亡或离开范围。
-   */
   update(
     delta: number,
     units: readonly CombatUnit[],
@@ -354,7 +428,6 @@ export class DefenseTower extends THREE.Group implements CombatUnit {
     units: readonly CombatUnit[],
     projectiles: ProjectileManager,
   ): void {
-    // 已锁定目标：校验存活与范围
     if (isValidTarget(this, this.target)) {
       const d = distXZ(this.collider, this.target.collider);
       if (d > DefenseTower.ATTACK_RANGE) {
@@ -364,7 +437,6 @@ export class DefenseTower extends THREE.Group implements CombatUnit {
       this.clearTarget();
     }
 
-    // 无目标时重新索敌（优先小兵）
     if (!this.target) {
       this.target = pickEnemyTarget(
         this,
@@ -376,12 +448,10 @@ export class DefenseTower extends THREE.Group implements CombatUnit {
 
     if (!this.target) return;
 
-    // 冷却中且不在前摇：等待
     if (this.attackCd > 0 && this.windupElapsed < 0) {
       return;
     }
 
-    // 开始 / 继续前摇
     if (this.windupElapsed < 0) {
       this.windupElapsed = 0;
     }
@@ -389,7 +459,6 @@ export class DefenseTower extends THREE.Group implements CombatUnit {
 
     if (this.windupElapsed < DefenseTower.WINDUP) return;
 
-    // 出手：从水晶世界坐标发射锁定弹
     if (
       isValidTarget(this, this.target) &&
       distXZ(this.collider, this.target.collider) <= DefenseTower.ATTACK_RANGE
@@ -416,9 +485,12 @@ export class DefenseTower extends THREE.Group implements CombatUnit {
     this.windupElapsed = -1;
   }
 
+  /**
+   * 被摧毁时：无缝瞬间做模型替换（隐藏 fullModel，显示 brokenModel）
+   */
   private onDestroyed(): void {
-    // 只留原有底座：隐藏塔身及以上
-    this.upperRoot.visible = false;
+    this.fullModel.visible = false;
+    this.brokenModel.visible = true;
     this.crystalLight.intensity = 0;
     this.rangeMarker.visible = false;
     this.healthBar.visible = false;
@@ -426,21 +498,10 @@ export class DefenseTower extends THREE.Group implements CombatUnit {
   }
 
   dispose(): void {
-    this.traverse((obj) => {
-      const mesh = obj as THREE.Mesh;
-      if (mesh.geometry) mesh.geometry.dispose();
-      const material = mesh.material;
-      if (!material) return;
-      const list = Array.isArray(material) ? material : [material];
-      for (const m of list) m.dispose();
-    });
+    // Geometry 与 Material 为全局共享，此处仅清理节点引用
   }
 }
 
-/**
- * 地面攻击范围：淡色填充圆 + 1px 细线边框（LineLoop，屏幕像素宽）。
- * 几何半径按父级 SCALE_XZ 反向补偿，使世界半径 = attackRange。
- */
 function createAttackRangeMarker(
   team: TeamId,
   attackRange: number,
@@ -472,7 +533,6 @@ function createAttackRangeMarker(
   fill.castShadow = false;
   group.add(fill);
 
-  // 屏幕空间 1px 细线（WebGL Line 宽度在多数平台固定为 1）
   const segments = 96;
   const positions = new Float32Array((segments + 1) * 3);
   for (let i = 0; i <= segments; i += 1) {
@@ -513,13 +573,11 @@ function mesh(
 }
 
 function ring(
-  radius: number,
-  tube: number,
-  _color: number,
-  y: number,
+  geometry: THREE.BufferGeometry,
   material: THREE.Material,
+  y: number,
 ): THREE.Mesh {
-  const m = new THREE.Mesh(new THREE.TorusGeometry(radius, tube, 8, 20), material);
+  const m = new THREE.Mesh(geometry, material);
   m.rotation.x = Math.PI / 2;
   m.position.y = y;
   m.castShadow = true;

@@ -16,6 +16,8 @@ export interface GameSettingsSnapshot {
    * false = 自由视角（WASD 移镜头 / 拖拽）。
    */
   cameraLocked: boolean;
+  /** 固定相机（开启后定位于 Pitch -66°, Yaw -34°, Offset (-0.4, 3.7, 1.5)） */
+  fixedCamera: boolean;
   /** 英雄无敌 */
   godMode: boolean;
   /** 自动出兵 */
@@ -29,6 +31,7 @@ export const DEFAULT_GAME_SETTINGS: GameSettingsSnapshot = {
   showColliderMarkers: true,
   brightnessUi: 1,
   cameraLocked: false,
+  fixedCamera: false,
   godMode: false,
   minionSpawn: true,
   towerInvincible: false,
@@ -59,6 +62,10 @@ export function loadGameSettings(): GameSettingsSnapshot {
         typeof data.cameraLocked === 'boolean'
           ? data.cameraLocked
           : DEFAULT_GAME_SETTINGS.cameraLocked,
+      fixedCamera:
+        typeof data.fixedCamera === 'boolean'
+          ? data.fixedCamera
+          : DEFAULT_GAME_SETTINGS.fixedCamera,
       godMode:
         typeof data.godMode === 'boolean'
           ? data.godMode
@@ -84,6 +91,7 @@ export function saveGameSettings(state: GameSettingsSnapshot): void {
       showColliderMarkers: !!state.showColliderMarkers,
       brightnessUi: clamp01(state.brightnessUi),
       cameraLocked: !!state.cameraLocked,
+      fixedCamera: !!state.fixedCamera,
       godMode: !!state.godMode,
       minionSpawn: !!state.minionSpawn,
       towerInvincible: !!state.towerInvincible,

@@ -55,6 +55,9 @@ function bootstrap(): void {
   scene.setAxesVisible(settings.showAxes);
   scene.setColliderMarkersVisible(settings.showColliderMarkers);
   controls.setViewMode(settings.cameraLocked ? 'locked' : 'free');
+  if (settings.fixedCamera) {
+    controls.setFixedCamera(true);
+  }
   scene.setHeroInvincible(settings.godMode);
   scene.setMinionSpawnEnabled(settings.minionSpawn);
   scene.setTowerInvincible(settings.towerInvincible);
@@ -75,6 +78,9 @@ function bootstrap(): void {
     if (patch.cameraLocked !== undefined) {
       settings.cameraLocked = patch.cameraLocked;
     }
+    if (patch.fixedCamera !== undefined) {
+      settings.fixedCamera = patch.fixedCamera;
+    }
     if (patch.godMode !== undefined) {
       settings.godMode = patch.godMode;
     }
@@ -89,10 +95,12 @@ function bootstrap(): void {
 
   // ESC 设置面板：游戏内 HUD（正交场景 + Canvas 纹理）
   const escMenu = new EscMenu(renderer.domElement, {
+    getCameraParams: () => controls.getParams(),
     initialAxesVisible: settings.showAxes,
     initialColliderMarkersVisible: settings.showColliderMarkers,
     initialBrightness: settings.brightnessUi,
     initialCameraLocked: settings.cameraLocked,
+    initialFixedCamera: settings.fixedCamera,
     initialGodMode: settings.godMode,
     initialMinionSpawn: settings.minionSpawn,
     initialTowerInvincible: settings.towerInvincible,
@@ -112,7 +120,20 @@ function bootstrap(): void {
     },
     onCameraLockChange: (locked) => {
       controls.setViewMode(locked ? 'locked' : 'free');
-      persistSettings({ cameraLocked: locked });
+      if (!locked) {
+        controls.setFixedCamera(false);
+        persistSettings({ cameraLocked: false, fixedCamera: false });
+      } else {
+        persistSettings({ cameraLocked: true });
+      }
+    },
+    onFixedCameraChange: (fixed) => {
+      controls.setFixedCamera(fixed);
+      if (fixed) {
+        persistSettings({ fixedCamera: true, cameraLocked: true });
+      } else {
+        persistSettings({ fixedCamera: false });
+      }
     },
     onGodModeChange: (god) => {
       scene.setHeroInvincible(god);
@@ -134,9 +155,8 @@ function bootstrap(): void {
       }
     },
   });
-  escMenu.setSize(width, height);
 
-  // 底部技能栏 QERF（E = 枪林弹雨）
+  // 底部技能栏 QWER（E = 枪林弹雨）
   const skillBar = new SkillBar({
     isInputBlocked: () => escMenu.isOpen,
     onSkillPress: (slot) => {
@@ -148,8 +168,6 @@ function bootstrap(): void {
   });
   skillBar.setSize(width, height);
 
-  // 锁定视角：右键点敌 → 普攻；右键点地 / WASD → 移动
-  // 技能选点：左键确认，右键取消
   const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
   const raycaster = new THREE.Raycaster();
   const pointerNdc = new THREE.Vector2();
@@ -170,7 +188,6 @@ function bootstrap(): void {
   const onPointerDownCommand = (e: PointerEvent): void => {
     if (escMenu.isOpen) return;
 
-    // 技能选点：左键确认 / 右键取消
     if (scene.isSkillTargeting) {
       if (e.button === 2) {
         e.preventDefault();
@@ -188,16 +205,28 @@ function bootstrap(): void {
       return;
     }
 
-    if (e.button !== 2) return;
-    e.preventDefault();
-    if (!pickGround(e.clientX, e.clientY)) return;
-
-    // 落点附近有敌方单位 → 普攻锁定；否则点地移动
-    const enemy = scene.pickEnemyNear(hitPoint.x, hitPoint.z);
-    if (enemy) {
-      scene.commandHeroAttack(enemy);
-    } else {
+    if (e.button === 2) {
+      e.preventDefault();
+      if (!pickGround(e.clientX, e.clientY)) return;
       scene.commandHeroMoveTo(hitPoint.x, hitPoint.z);
+      return;
+    }
+
+    if (e.button === 0) {
+      if (!pickGround(e.clientX, e.clientY)) return;
+
+      let enemy = scene.pickEnemyNear(hitPoint.x, hitPoint.z, 0.6);
+      if (!enemy) {
+        enemy = scene.pickEnemyNear(hitPoint.x, hitPoint.z, 2.5);
+      }
+      if (!enemy) {
+        enemy = scene.findClosestEnemy(hitPoint.x, hitPoint.z);
+      }
+
+      if (enemy) {
+        scene.commandHeroAttack(enemy);
+      }
+      return;
     }
   };
 
@@ -209,7 +238,6 @@ function bootstrap(): void {
 
   renderer.domElement.addEventListener('pointerdown', onPointerDownCommand);
   renderer.domElement.addEventListener('pointermove', onPointerMoveTargeting);
-  // 技能选点时禁用浏览器右键菜单，避免挡住取消操作
   renderer.domElement.addEventListener('contextmenu', (e) => {
     e.preventDefault();
   });
@@ -231,10 +259,8 @@ function bootstrap(): void {
 
   const tick = (): void => {
     requestAnimationFrame(tick);
-    // 钳制单帧游戏时间，避免切 tab 后大 delta 在一帧内跑完转身（视觉突变）
     const delta = Math.min(clock.getDelta(), 1 / 20);
 
-    // 锁定视角：WASD 相对镜头水平方向驱动英雄（自由视角 WASD 仍只移镜头）
     if (controls.isLocked) {
       controls.getWasdWishXZ(wasdWish);
       scene.commandHeroMoveInput(wasdWish.x, wasdWish.z);
@@ -242,11 +268,9 @@ function bootstrap(): void {
       scene.commandHeroMoveInput(0, 0);
     }
 
-    // 先推进场景（英雄位移），再跟随镜头
     scene.update(delta);
     controls.update(delta);
 
-    // 技能栏：E 冷却 / 选点高亮 / 英雄血量
     skillBar.setCooldown(
       'E',
       scene.hero.eCooldownRemaining,

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GroundCastIndicator } from '../effects/GroundCastIndicator';
+import { GroundClickEffect } from '../effects/GroundClickEffect';
 import { ProjectileManager } from '../effects/ProjectileManager';
 import { CircleBody } from '../world/collision/CircleBody';
 import { clampBodiesToFloor } from '../world/collision/clampBodiesToFloor';
@@ -41,6 +42,8 @@ export class MainScene extends THREE.Scene {
   private readonly missFortune: MissFortune;
   /** 技能地面选点指示（E 枪林弹雨） */
   private readonly castIndicator: GroundCastIndicator;
+  /** 点击地面移动特效 */
+  private readonly clickEffects: GroundClickEffect[] = [];
 
   private axesVisible = true;
   private colliderMarkersVisible = true;
@@ -149,6 +152,14 @@ export class MainScene extends THREE.Scene {
     const clampedX = THREE.MathUtils.clamp(x, -maxX + r, maxX - r);
     const clampedZ = THREE.MathUtils.clamp(z, -halfZ + r, halfZ - r);
     this.missFortune.moveTo(clampedX, clampedZ);
+    this.spawnClickEffect(clampedX, clampedZ);
+  }
+
+  /** 在地面指定位置触发点击特效 */
+  spawnClickEffect(x: number, z: number): void {
+    const effect = new GroundClickEffect(x, z);
+    this.add(effect);
+    this.clickEffects.push(effect);
   }
 
   /**
@@ -267,6 +278,27 @@ export class MainScene extends THREE.Scene {
       const d = Math.hypot(dx, dz);
       const pickR = unit.collider.radius + slack;
       if (d > pickR) continue;
+      if (d < bestDist) {
+        best = unit;
+        bestDist = d;
+      }
+    }
+    return best;
+  }
+
+  /** 在指定坐标 (x, z) 附近寻找最近敌方单位 */
+  findClosestEnemy(x: number, z: number): CombatUnit | null {
+    if (!Number.isFinite(x) || !Number.isFinite(z)) return null;
+    const hero = this.missFortune;
+    if (!hero.isAlive) return null;
+
+    let best: CombatUnit | null = null;
+    let bestDist = Infinity;
+
+    for (const unit of this.collectEnemyCombatUnits(hero.team)) {
+      const dx = unit.collider.x - x;
+      const dz = unit.collider.z - z;
+      const d = Math.hypot(dx, dz);
       if (d < bestDist) {
         best = unit;
         bestDist = d;
@@ -431,6 +463,16 @@ export class MainScene extends THREE.Scene {
     this.projectiles.update(delta);
     this.minionSpawner.pruneDead();
 
+    // 点击移动特效更新
+    for (let i = this.clickEffects.length - 1; i >= 0; i--) {
+      const effect = this.clickEffects[i];
+      if (!effect.update(delta)) {
+        this.remove(effect);
+        effect.dispose();
+        this.clickEffects.splice(i, 1);
+      }
+    }
+
     // 移动后再做地面圆碰撞（死兵已 prune；死塔/死水晶仍挡路；英雄挡路）
     const bodies = this.collectColliderBodies();
     resolveCircleCollisions(bodies);
@@ -457,6 +499,11 @@ export class MainScene extends THREE.Scene {
     this.missFortune.dispose();
     this.minionSpawner.dispose();
     this.projectiles.dispose();
+    for (const effect of this.clickEffects) {
+      this.remove(effect);
+      effect.dispose();
+    }
+    this.clickEffects.length = 0;
   }
 
   private collectColliderBodies(): CircleBody[] {

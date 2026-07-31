@@ -12,6 +12,8 @@ export interface HealthBarOptions {
   team?: TeamId;
   /** 满血时隐藏（默认 false，始终显示） */
   hideWhenFull?: boolean;
+  /** Sprite 屏幕锚点 (X 方向，默认 0.5；小于 0.5 屏幕投影向右偏) */
+  centerX?: number;
 }
 
 /**
@@ -44,6 +46,7 @@ export class HealthBar extends THREE.Sprite {
     const yOffset = options.yOffset ?? 1.2;
     const team = options.team ?? 'blue';
     const hideWhenFull = options.hideWhenFull ?? false;
+    const centerX = options.centerX ?? 0.5;
 
     const canvas = document.createElement('canvas');
     canvas.width = HealthBar.CANVAS_W;
@@ -59,7 +62,7 @@ export class HealthBar extends THREE.Sprite {
     const material = new THREE.SpriteMaterial({
       map: texture,
       transparent: true,
-      depthTest: true,
+      depthTest: false,
       depthWrite: false,
       sizeAttenuation: true,
     });
@@ -71,7 +74,7 @@ export class HealthBar extends THREE.Sprite {
     this.fillColor = team === 'red' ? HealthBar.FILL_RED : HealthBar.FILL_BLUE;
     this.hideWhenFull = hideWhenFull;
 
-    this.center.set(0.5, 0.5);
+    this.center.set(centerX, 0.5);
     this.scale.set(width, height, 1);
     this.position.set(0, yOffset, 0);
     this.renderOrder = 10;

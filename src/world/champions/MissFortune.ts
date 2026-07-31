@@ -3,6 +3,7 @@ import type { ProjectileManager } from '../../effects/ProjectileManager';
 import { CircleBody } from '../collision/CircleBody';
 import type { CombatUnit, TeamId } from '../combat/CombatUnit';
 import { distXZ, isValidTarget } from '../combat/combatMath';
+import { HealthBar } from '../ui/HealthBar';
 
 /**
  * 第一个英雄：厄运小姐。
@@ -194,6 +195,8 @@ export class MissFortune extends THREE.Group implements CombatUnit {
   private spawnZ: number;
   private respawnTimer = 0;
 
+  private readonly healthBar: HealthBar;
+
   constructor(x = 0, z = 0) {
     super();
     this.name = MissFortune.DISPLAY_NAME;
@@ -207,6 +210,19 @@ export class MissFortune extends THREE.Group implements CombatUnit {
     this.rotation.set(0, this.yaw, 0);
 
     this.collider = new CircleBody(this, MissFortune.COLLIDER_RADIUS);
+
+    // 头顶血条：挂载于轴心正上方，进一步抬高 yOffset，通过 centerX 屏幕锚点向右平移
+    const s = MissFortune.SCALE;
+    this.healthBar = new HealthBar({
+      width: 0.52 / s,
+      height: 0.085 / s,
+      yOffset: 3.3,
+      team: this.team,
+      hideWhenFull: false,
+      centerX: 0.35,
+    });
+    this.add(this.healthBar);
+    this.healthBar.setHp(this.hp, this.maxHp);
 
     this.bodyRoot = new THREE.Group();
     this.add(this.bodyRoot);
@@ -360,16 +376,20 @@ export class MissFortune extends THREE.Group implements CombatUnit {
   takeDamage(amount: number): void {
     if (this.invincible || !this.isAlive || amount <= 0) return;
     this.hp = Math.max(0, this.hp - amount);
+    this.healthBar.setHp(this.hp, this.maxHp);
     if (!this.isAlive) {
       this.clearAttackTarget();
       this.stopMoving();
       this.respawnTimer = 5;
       this.visible = false;
+      this.healthBar.visible = false;
     }
   }
 
   respawn(): void {
     this.hp = MissFortune.MAX_HP;
+    this.healthBar.setHp(this.hp, this.maxHp);
+    this.healthBar.visible = true;
     this.position.set(this.spawnX, 0, this.spawnZ);
     this.clearAttackTarget();
     this.stopMoving();
@@ -565,6 +585,8 @@ export class MissFortune extends THREE.Group implements CombatUnit {
       }
       return;
     }
+
+    this.healthBar.setHp(this.hp, this.maxHp);
 
     if (this.eCd > 0) {
       this.eCd = Math.max(0, this.eCd - delta);
