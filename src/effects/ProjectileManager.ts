@@ -31,7 +31,7 @@ export class ProjectileManager {
     damage: number,
     team: TeamId,
     scale = 1,
-    extras?: Pick<HomingBoltSpawn, 'color' | 'emissive'>,
+    extras?: Pick<HomingBoltSpawn, 'color' | 'emissive' | 'speed'>,
   ): void {
     this.fire({ origin, target, damage, team, scale, ...extras });
   }

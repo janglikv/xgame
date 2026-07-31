@@ -323,8 +323,8 @@ export class SkillBar {
         barY + barH,
       );
       if (ratio > 0.3) {
-        grad.addColorStop(0, '#60a5fa');
-        grad.addColorStop(1, '#2563eb');
+        grad.addColorStop(0, '#4ade80');
+        grad.addColorStop(1, '#16a34a');
       } else {
         grad.addColorStop(0, '#f87171');
         grad.addColorStop(1, '#dc2626');

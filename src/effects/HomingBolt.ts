@@ -8,6 +8,8 @@ export interface HomingBoltSpawn {
   team: TeamId;
   /** 视觉与命中半径缩放，默认 1（小兵弹） */
   scale?: number;
+  /** 自定义飞行速度，默认 HomingBolt.SPEED */
+  speed?: number;
   /** 覆盖队伍默认弹体外壳色 */
   color?: number;
   /** 覆盖队伍默认自发光色 */
@@ -29,6 +31,7 @@ export class HomingBolt extends THREE.Group {
   private readonly target: CombatUnit;
   private readonly damage: number;
   private readonly hitRadius: number;
+  private readonly speed: number;
   private readonly core: THREE.Mesh;
   private readonly glow: THREE.Mesh;
   private age = 0;
@@ -44,6 +47,7 @@ export class HomingBolt extends THREE.Group {
     this.team = spawn.team;
     this.target = spawn.target;
     this.damage = spawn.damage;
+    this.speed = spawn.speed ?? HomingBolt.SPEED;
     this.position.copy(spawn.origin);
 
     const scale = Math.max(0.1, spawn.scale ?? 1);
@@ -117,7 +121,7 @@ export class HomingBolt extends THREE.Group {
       return false;
     }
 
-    const step = HomingBolt.SPEED * delta;
+    const step = this.speed * delta;
     if (step >= dist) {
       this.position.copy(this.aim);
       this.applyHit();

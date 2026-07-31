@@ -214,9 +214,9 @@ export class MissFortune extends THREE.Group implements CombatUnit {
     // 头顶血条：挂载于轴心正上方，进一步抬高 yOffset，通过 centerX 屏幕锚点向右平移
     const s = MissFortune.SCALE;
     this.healthBar = new HealthBar({
-      width: 0.52 / s,
-      height: 0.085 / s,
-      yOffset: 3.3,
+      width: 0.4 / s,
+      height: 0.055 / s,
+      yOffset: 3.1,
       team: this.team,
       hideWhenFull: false,
       centerX: 0.35,

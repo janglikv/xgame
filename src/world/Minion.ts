@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { HomingBolt } from '../effects/HomingBolt';
 import type { ProjectileManager } from '../effects/ProjectileManager';
 import { CircleBody } from './collision/CircleBody';
 import type { CombatUnit, TeamId } from './combat/CombatUnit';
@@ -36,7 +37,7 @@ interface MinionStats {
 
 const MELEE_STATS: MinionStats = {
   scale: 0.125,
-  colliderRadius: 0.12,
+  colliderRadius: 0.08,
   maxHp: 80,
   attackDamage: 12,
   attackRange: 0.55,
@@ -51,7 +52,7 @@ const MELEE_STATS: MinionStats = {
 /** 远程：更小、更远、更高伤害 */
 const RANGED_STATS: MinionStats = {
   scale: 0.085,
-  colliderRadius: 0.08,
+  colliderRadius: 0.05,
   maxHp: 80,
   attackDamage: 22,
   attackRange: 1.45,
@@ -335,6 +336,7 @@ export class Minion extends THREE.Group implements CombatUnit {
     if (this.isDead) return;
     this.isDead = true;
     this.healthBar.visible = false;
+    this.collider.setMarkerVisible(false);
     this.clearCombat();
 
     // 切换为死亡 KO 晕眩可爱表情贴图（倒八字眉 + 黑叉眼 + 吐粉红舌）
@@ -679,6 +681,7 @@ export class Minion extends THREE.Group implements CombatUnit {
       this.stats.attackDamage,
       this.team,
       this.stats.boltScale,
+      { speed: HomingBolt.SPEED * 0.3 },
     );
   }
 

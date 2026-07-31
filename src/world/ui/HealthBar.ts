@@ -21,20 +21,13 @@ export interface HealthBarOptions {
  * 作为单位子节点挂载；若父级有缩放，请用 width/height 补偿。
  */
 export class HealthBar extends THREE.Sprite {
-  private static readonly CANVAS_W = 128;
-  private static readonly CANVAS_H = 16;
-  private static readonly BORDER = 2;
-
-  private static readonly BG = '#1a1a1e';
-  private static readonly BORDER_COLOR = '#0a0a0c';
-  private static readonly FILL_BLUE = '#3b82f6';
-  private static readonly FILL_RED = '#ef4444';
-  private static readonly FILL_LOW = '#f59e0b';
-  private static readonly FILL_CRIT = '#dc2626';
+  private static readonly CANVAS_W = 256;
+  private static readonly CANVAS_H = 24;
+  private static readonly BORDER = 3;
 
   private readonly ctx: CanvasRenderingContext2D;
   private readonly texture: THREE.CanvasTexture;
-  private readonly fillColor: string;
+  private readonly team: TeamId;
   private readonly hideWhenFull: boolean;
 
   private lastRatio = -1;
@@ -56,7 +49,7 @@ export class HealthBar extends THREE.Sprite {
 
     const texture = new THREE.CanvasTexture(canvas);
     texture.colorSpace = THREE.SRGBColorSpace;
-    texture.magFilter = THREE.NearestFilter;
+    texture.magFilter = THREE.LinearFilter;
     texture.minFilter = THREE.LinearFilter;
 
     const material = new THREE.SpriteMaterial({
@@ -71,7 +64,7 @@ export class HealthBar extends THREE.Sprite {
     this.name = 'HealthBar';
     this.ctx = ctx;
     this.texture = texture;
-    this.fillColor = team === 'red' ? HealthBar.FILL_RED : HealthBar.FILL_BLUE;
+    this.team = team;
     this.hideWhenFull = hideWhenFull;
 
     this.center.set(centerX, 0.5);
@@ -114,29 +107,85 @@ export class HealthBar extends THREE.Sprite {
 
     ctx.clearRect(0, 0, w, h);
 
-    // 外框
-    ctx.fillStyle = HealthBar.BORDER_COLOR;
-    ctx.fillRect(0, 0, w, h);
+    // 1. 深色精致外框底座 (圆角 5px)
+    this.roundRect(0, 0, w, h, 5);
+    ctx.fillStyle = '#090d16';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.18)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
 
-    // 底槽
-    ctx.fillStyle = HealthBar.BG;
-    ctx.fillRect(b, b, w - b * 2, h - b * 2);
-
-    // 血量填充
+    // 2. 内部暗色背景槽
     const innerW = w - b * 2;
+    const innerH = h - b * 2;
+    this.roundRect(b, b, innerW, innerH, 3);
+    ctx.fillStyle = '#111827';
+    ctx.fill();
+
+    // 3. 血量填充渐变
     const fillW = Math.max(0, Math.round(innerW * ratio));
     if (fillW > 0) {
-      ctx.fillStyle = this.pickFill(ratio);
-      ctx.fillRect(b, b, fillW, h - b * 2);
+      this.roundRect(b, b, fillW, innerH, 2.5);
+      const grad = ctx.createLinearGradient(b, b, b, b + innerH);
+
+      if (ratio <= 0.2) {
+        grad.addColorStop(0, '#f87171');
+        grad.addColorStop(1, '#991b1b');
+      } else if (ratio <= 0.4) {
+        grad.addColorStop(0, '#fbbf24');
+        grad.addColorStop(1, '#b45309');
+      } else if (this.team === 'blue') {
+        grad.addColorStop(0, '#4ade80');
+        grad.addColorStop(1, '#16a34a');
+      } else {
+        grad.addColorStop(0, '#f43f5e');
+        grad.addColorStop(1, '#be123c');
+      }
+      ctx.fillStyle = grad;
+      ctx.fill();
+
+      // 4. 顶部镜面高光 (Specular Highlight)
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.32)';
+      ctx.fillRect(b, b, fillW, Math.max(1, innerH * 0.35));
+    }
+
+    // 5. 每 10% 血量细刻度刻印线
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.35)';
+    ctx.lineWidth = 1;
+    for (let i = 1; i < 10; i += 1) {
+      const x = b + (innerW * i) / 10;
+      ctx.beginPath();
+      ctx.moveTo(x, b);
+      ctx.lineTo(x, b + innerH);
+      ctx.stroke();
+    }
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
+    for (let i = 1; i < 10; i += 1) {
+      const x = b + (innerW * i) / 10 + 1;
+      ctx.beginPath();
+      ctx.moveTo(x, b);
+      ctx.lineTo(x, b + innerH);
+      ctx.stroke();
     }
 
     this.texture.needsUpdate = true;
   }
 
-  /** 低血变黄/红，便于读状态；队伍底色仍作主色 */
-  private pickFill(ratio: number): string {
-    if (ratio <= 0.2) return HealthBar.FILL_CRIT;
-    if (ratio <= 0.4) return HealthBar.FILL_LOW;
-    return this.fillColor;
+  private roundRect(
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    r: number,
+  ): void {
+    const ctx = this.ctx;
+    const radius = Math.min(r, w / 2, h / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + radius, y);
+    ctx.arcTo(x + w, y, x + w, y + h, radius);
+    ctx.arcTo(x + w, y + h, x, y + h, radius);
+    ctx.arcTo(x, y + h, x, y, radius);
+    ctx.arcTo(x, y, x + w, y, radius);
+    ctx.closePath();
   }
 }
