@@ -18,8 +18,8 @@ export class MissFortune extends THREE.Group implements CombatUnit {
    * 写死在此，不引用小兵常量，避免耦合。
    */
   static readonly SCALE = 0.375;
-  /** 地面圆碰撞半径（约小兵 0.12 × 3） */
-  static readonly COLLIDER_RADIUS = 0.36;
+  /** 地面圆碰撞半径 */
+  static readonly COLLIDER_RADIUS = 0.22;
   /** 玩家英雄：蓝方 */
   static readonly TEAM: TeamId = 'blue';
   static readonly MAX_HP = 520;

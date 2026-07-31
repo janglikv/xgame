@@ -198,6 +198,7 @@ function bootstrap(): void {
       }
     },
   });
+  escMenu.setSize(width, height);
 
   // 底部技能栏 QWER（E = 枪林弹雨）
   const skillBar = new SkillBar({

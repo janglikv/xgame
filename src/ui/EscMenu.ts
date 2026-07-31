@@ -66,19 +66,36 @@ interface HitRegion {
 
 /**
  * ESC 设置面板：Three.js 正交 HUD + Canvas 纹理绘制。
- * 紧凑型双栏高科技面板（1800x1200）。
+ * 紧凑型双栏高科技面板。
+ *
+ * UI 空间：正交相机 top/bottom = ±1（屏高 = 2），left/right = ±aspect。
+ * 面板几何按 PANEL_H 构建，窄屏时在 setSize 中等比缩小。
  */
 export class EscMenu {
-  private static readonly CANVAS_W = 1800;
-  private static readonly CANVAS_H = 1200;
-  /** 面板在 UI 空间中的高度（屏幕高度为 2 时） */
-  private static readonly PANEL_H = 1.52;
+  /**
+   * 布局坐标系尺寸（hit-test / 绘制逻辑单位）。
+   * 实际纹理像素 = 布局 × RENDER_SCALE，保证 Retina 上不糊。
+   */
+  private static readonly CANVAS_W = 1400;
+  private static readonly CANVAS_H = 700;
+  /**
+   * 纹理超采样倍率。Retina(dpr=2) 时面板约 2500×1250 设备像素，
+   * 2× 布局即可接近 1:1，文字与开关边缘更锐利。
+   */
+  private static readonly RENDER_SCALE = 2;
   private static readonly PANEL_ASPECT =
     EscMenu.CANVAS_W / EscMenu.CANVAS_H;
+  /**
+   * 面板在 UI 空间中的目标高度（屏幕高度为 2 → 约 58% 屏高）。
+   * 宽高由 CANVAS 纵横比决定，避免被纵向/横向拉变形。
+   */
+  private static readonly PANEL_H = 1.16;
+  /** 面板最大占屏宽比例（相对可视宽度 2*aspect） */
+  private static readonly MAX_WIDTH_RATIO = 0.86;
 
   /** 亮度滑条有效轨道相对 region 的内边距 */
-  private static readonly SLIDER_PAD_X = 24;
-  private static readonly SLIDER_TRACK_H = 12;
+  private static readonly SLIDER_PAD_X = 22;
+  private static readonly SLIDER_TRACK_H = 10;
 
   private readonly uiScene = new THREE.Scene();
   private readonly uiCamera: THREE.OrthographicCamera;
@@ -180,18 +197,23 @@ export class EscMenu {
     this.dimMesh.position.z = -0.02;
     this.root.add(this.dimMesh);
 
-    // 面板 canvas 纹理
+    // 面板 canvas 纹理（物理像素 = 布局 × RENDER_SCALE）
     this.canvas = document.createElement('canvas');
-    this.canvas.width = EscMenu.CANVAS_W;
-    this.canvas.height = EscMenu.CANVAS_H;
+    this.canvas.width = EscMenu.CANVAS_W * EscMenu.RENDER_SCALE;
+    this.canvas.height = EscMenu.CANVAS_H * EscMenu.RENDER_SCALE;
     const ctx = this.canvas.getContext('2d');
     if (!ctx) throw new Error('2D canvas context unavailable');
     this.ctx = ctx;
+    // 文本更锐利（仍走布局坐标，靠 transform 超采样）
+    this.ctx.imageSmoothingEnabled = true;
+    this.ctx.imageSmoothingQuality = 'high';
 
     this.texture = new THREE.CanvasTexture(this.canvas);
     this.texture.colorSpace = THREE.SRGBColorSpace;
+    this.texture.generateMipmaps = false;
     this.texture.minFilter = THREE.LinearFilter;
     this.texture.magFilter = THREE.LinearFilter;
+    this.texture.anisotropy = 1;
 
     this.panelMat = new THREE.MeshBasicMaterial({
       map: this.texture,
@@ -215,6 +237,8 @@ export class EscMenu {
 
     this.layoutRegions();
     this.redraw();
+    // 默认按 16:9 占位，避免 setSize 调用前相机仍是 1:1 导致面板左右被裁切
+    this.setSize(16, 9);
 
     this.onKeyDown = (e: KeyboardEvent) => {
       if (e.code !== 'Escape') return;
@@ -317,7 +341,23 @@ export class EscMenu {
     this.uiCamera.bottom = -1;
     this.uiCamera.updateProjectionMatrix();
 
+    // 遮罩铺满可视区域
     this.dimMesh.scale.set(aspect, 1, 1);
+
+    // 几何体基准：宽 = PANEL_H * ASPECT，高 = PANEL_H
+    // 仅在超出最大宽度时等比缩小，绝不非等比拉伸
+    const baseW = EscMenu.PANEL_H * EscMenu.PANEL_ASPECT;
+    const baseH = EscMenu.PANEL_H;
+    const maxW = aspect * 2 * EscMenu.MAX_WIDTH_RATIO;
+    const scale = baseW > maxW ? maxW / baseW : 1;
+    this.panelMesh.scale.set(scale, scale, 1);
+
+    // 兜底：确保高度也不顶满屏（极端超宽屏几乎不会触发）
+    const worldH = baseH * scale;
+    if (worldH > 1.7) {
+      const s2 = 1.7 / baseH;
+      this.panelMesh.scale.set(s2, s2, 1);
+    }
   }
 
   render(renderer: THREE.WebGLRenderer): void {
@@ -508,28 +548,31 @@ export class EscMenu {
 
   private layoutRegions(): void {
     const W = EscMenu.CANVAS_W;
-    const pad = 48;
-    const gap = 36;
-    const colW = (W - pad * 2 - gap) / 2; // 834
-    const leftX = pad; // 48
-    const rightX = pad + colW + gap; // 918
+    const H = EscMenu.CANVAS_H;
+    const pad = 40;
+    const gap = 28;
+    const colW = (W - pad * 2 - gap) / 2;
+    const leftX = pad;
+    const rightX = pad + colW + gap;
 
-    // 左栏：7 个紧凑开关
-    const rowH = 64;
+    // 左栏：7 个开关（紧凑但不挤）
+    const rowH = 62;
     const rowGap = 8;
-    const listY = 120;
+    const listY = 96;
 
-    // 右栏
-    const brightY = 362;
-    const brightH = 104;
+    // 右栏：相机卡片 → 亮度 → 快进
+    const brightY = 318;
+    const brightH = 100;
 
-    const skipY = 504;
-    const skipH = 64;
-    const skipGap = 16;
+    const skipY = 456;
+    const skipH = 56;
+    const skipGap = 12;
     const skipBtnW = (colW - skipGap) / 2;
 
-    const closeH = 72;
-    const closeY = EscMenu.CANVAS_H - pad - closeH;
+    const closeH = 58;
+    // 贴在左栏底部下方，消除大块留白
+    const listEnd = listY + (rowH + rowGap) * 6 + rowH;
+    const closeY = Math.min(H - pad - closeH, listEnd + 24);
 
     this.regions = [
       { id: 'axes', x: leftX, y: listY, w: colW, h: rowH },
@@ -598,11 +641,16 @@ export class EscMenu {
     const { ctx } = this;
     const W = EscMenu.CANVAS_W;
     const H = EscMenu.CANVAS_H;
-    const pad = 48;
+    const pad = 40;
+    const s = EscMenu.RENDER_SCALE;
 
-    ctx.clearRect(0, 0, W, H);
+    // 物理像素清空后，按布局坐标绘制（scale 提升纹理清晰度）
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    ctx.setTransform(s, 0, 0, s, 0, 0);
 
-    this.roundRect(pad * 0.3, pad * 0.3, W - pad * 0.6, H - pad * 0.6, 28);
+    // 只绘制圆角面板区域，四周透明 → 屏上不会出现“被拉升的硬边框”
+    this.roundRect(16, 16, W - 32, H - 32, 22);
     const bg = ctx.createLinearGradient(0, 0, 0, H);
     bg.addColorStop(0, 'rgba(24, 34, 50, 0.97)');
     bg.addColorStop(1, 'rgba(10, 14, 22, 0.98)');
@@ -613,24 +661,24 @@ export class EscMenu {
     ctx.lineWidth = 2;
     ctx.stroke();
 
-    const shine = ctx.createLinearGradient(0, 15, 0, 80);
+    const shine = ctx.createLinearGradient(0, 16, 0, 72);
     shine.addColorStop(0, 'rgba(96, 165, 250, 0.18)');
     shine.addColorStop(1, 'rgba(96, 165, 250, 0)');
     ctx.fillStyle = shine;
-    ctx.fillRect(pad * 0.3 + 2, pad * 0.3 + 2, W - pad * 0.6 - 4, 70);
+    ctx.fillRect(18, 18, W - 36, 56);
 
     ctx.textAlign = 'left';
     ctx.textBaseline = 'alphabetic';
     ctx.fillStyle = '#f8fafc';
-    ctx.font = '700 40px system-ui, -apple-system, "Segoe UI", sans-serif';
-    ctx.fillText('系统设置', pad, 76);
+    ctx.font = '700 30px system-ui, -apple-system, "Segoe UI", sans-serif';
+    ctx.fillText('系统设置', pad, 58);
 
     ctx.textAlign = 'right';
     ctx.fillStyle = '#94a3b8';
-    ctx.font = '400 20px system-ui, -apple-system, "Segoe UI", sans-serif';
-    ctx.fillText('按 Esc 关闭', W - pad, 76);
+    ctx.font = '400 16px system-ui, -apple-system, "Segoe UI", sans-serif';
+    ctx.fillText('按 Esc 关闭', W - pad, 58);
 
-    // 左栏 7 个紧凑开关
+    // 左栏 7 个开关
     this.drawToggleRow(
       this.region('axes'),
       '坐标参考线',
@@ -691,10 +739,10 @@ export class EscMenu {
     );
 
     // 右栏 1：相机实时参数仪表卡片
-    const gap = 36;
+    const gap = 28;
     const colW = (W - pad * 2 - gap) / 2;
     const rightX = pad + colW + gap;
-    this.drawCameraParamsSection(rightX, 120, colW);
+    this.drawCameraParamsSection(rightX, 96, colW);
 
     // 右栏 2：全局亮度
     this.drawBrightnessRow(
@@ -707,10 +755,10 @@ export class EscMenu {
     // 右栏 3：时间快进
     const skip1 = this.region('skip1m');
     ctx.fillStyle = '#94a3b8';
-    ctx.font = '600 20px system-ui, -apple-system, "Segoe UI", sans-serif';
+    ctx.font = '600 15px system-ui, -apple-system, "Segoe UI", sans-serif';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'alphabetic';
-    ctx.fillText('时间快进 (TIME WARP)', rightX, skip1.y - 14);
+    ctx.fillText('时间快进 (TIME WARP)', rightX, skip1.y - 10);
 
     this.drawActionButton(
       skip1,
@@ -746,17 +794,22 @@ export class EscMenu {
     width: number,
   ): void {
     const { ctx } = this;
-    const cardY = startY + 24;
-    const cardH = 196;
+    const cardY = startY + 18;
+    const cardH = 168;
 
     ctx.fillStyle = '#94a3b8';
-    ctx.font = '600 20px system-ui, -apple-system, "Segoe UI", sans-serif';
+    ctx.font = '600 15px system-ui, -apple-system, "Segoe UI", sans-serif';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'alphabetic';
-    ctx.fillText('相机实效参数 (CAMERA REALTIME DATA)', startX, startY + 12);
+    ctx.fillText('相机实效参数 (CAMERA REALTIME DATA)', startX, startY + 10);
 
-    this.roundRect(startX, cardY, width, cardH, 16);
-    const bgGrad = ctx.createLinearGradient(startX, cardY, startX, cardY + cardH);
+    this.roundRect(startX, cardY, width, cardH, 12);
+    const bgGrad = ctx.createLinearGradient(
+      startX,
+      cardY,
+      startX,
+      cardY + cardH,
+    );
     bgGrad.addColorStop(0, 'rgba(15, 23, 42, 0.88)');
     bgGrad.addColorStop(1, 'rgba(10, 16, 28, 0.93)');
     ctx.fillStyle = bgGrad;
@@ -779,34 +832,34 @@ export class EscMenu {
       mode: 'locked',
     };
 
-    const cellW = (width - 20 - 12) / 2;
-    const cellH = (cardH - 20 - 10) / 2;
+    const cellW = (width - 16 - 8) / 2;
+    const cellH = (cardH - 16 - 8) / 2;
 
     const items = [
       {
         title: '位置 (POS X / Y / Z)',
-        value: `X: ${p.x.toFixed(1)}   Y: ${p.y.toFixed(1)}   Z: ${p.z.toFixed(1)}`,
+        value: `X: ${p.x.toFixed(1)}  Y: ${p.y.toFixed(1)}  Z: ${p.z.toFixed(1)}`,
         col: 0,
         row: 0,
         highlight: false,
       },
       {
         title: '视角 (PITCH / YAW)',
-        value: `俯仰 ${p.pitchDeg.toFixed(1)}°   偏航 ${p.yawDeg.toFixed(1)}°`,
+        value: `俯仰 ${p.pitchDeg.toFixed(1)}°  偏航 ${p.yawDeg.toFixed(1)}°`,
         col: 1,
         row: 0,
         highlight: false,
       },
       {
         title: '视场与深度范围 (FOV & DEPTH)',
-        value: `FOV: ${p.fov}°   范围: ${p.near}m - ${p.far}m`,
+        value: `FOV: ${p.fov}°  范围: ${p.near}m - ${p.far}m`,
         col: 0,
         row: 1,
         highlight: false,
       },
       {
         title: '视角模式与控制速度',
-        value: `${p.mode === 'locked' ? (this.fixedCameraOn ? '🔒 固定相机' : '🔒 锁定跟随') : '✈️ 自由漫游'}   移速: ${p.moveSpeed.toFixed(1)} m/s`,
+        value: `${p.mode === 'locked' ? (this.fixedCameraOn ? '🔒 固定视角' : '🔒 锁定跟随') : '✈️ 自由视角'}  ${p.moveSpeed.toFixed(1)}m/s`,
         col: 1,
         row: 1,
         highlight: true,
@@ -814,24 +867,24 @@ export class EscMenu {
     ];
 
     for (const item of items) {
-      const cx = startX + 10 + item.col * (cellW + 12);
-      const cy = cardY + 10 + item.row * (cellH + 10);
+      const cx = startX + 8 + item.col * (cellW + 8);
+      const cy = cardY + 8 + item.row * (cellH + 8);
 
-      this.roundRect(cx, cy, cellW, cellH, 12);
+      this.roundRect(cx, cy, cellW, cellH, 8);
       ctx.fillStyle = item.highlight
         ? 'rgba(30, 48, 76, 0.65)'
         : 'rgba(20, 30, 48, 0.50)';
       ctx.fill();
 
       ctx.fillStyle = '#64748b';
-      ctx.font = '600 15px system-ui, -apple-system, "Segoe UI", sans-serif';
+      ctx.font = '600 12px system-ui, -apple-system, "Segoe UI", sans-serif';
       ctx.textAlign = 'left';
       ctx.textBaseline = 'alphabetic';
-      ctx.fillText(item.title, cx + 14, cy + 26);
+      ctx.fillText(item.title, cx + 10, cy + 22);
 
       ctx.fillStyle = item.highlight ? '#93c5fd' : '#e2e8f0';
-      ctx.font = '600 20px monospace, system-ui, sans-serif';
-      ctx.fillText(item.value, cx + 14, cy + 56);
+      ctx.font = '600 15px monospace, system-ui, sans-serif';
+      ctx.fillText(item.value, cx + 10, cy + 46);
     }
   }
 
@@ -846,7 +899,7 @@ export class EscMenu {
     const { ctx } = this;
     const { x, y, w, h } = region;
 
-    this.roundRect(x, y, w, h, 14);
+    this.roundRect(x, y, w, h, 10);
     if (hover || pressed) {
       ctx.fillStyle = pressed
         ? 'rgba(30, 48, 72, 0.92)'
@@ -864,23 +917,23 @@ export class EscMenu {
     ctx.textAlign = 'left';
     ctx.textBaseline = 'alphabetic';
     ctx.fillStyle = '#e8eef6';
-    ctx.font = '600 22px system-ui, -apple-system, "Segoe UI", sans-serif';
-    ctx.fillText(title, x + 20, y + 30);
+    ctx.font = '600 18px system-ui, -apple-system, "Segoe UI", sans-serif';
+    ctx.fillText(title, x + 16, y + 24);
 
     ctx.fillStyle = '#94a3b8';
-    ctx.font = '400 16px system-ui, -apple-system, "Segoe UI", sans-serif';
-    ctx.fillText(desc, x + 20, y + 52);
+    ctx.font = '400 13px system-ui, -apple-system, "Segoe UI", sans-serif';
+    ctx.fillText(desc, x + 16, y + 44);
 
-    const sw = 66;
-    const sh = 34;
-    const sx = x + w - 20 - sw;
+    const sw = 52;
+    const sh = 28;
+    const sx = x + w - 16 - sw;
     const sy = y + (h - sh) / 2;
     this.roundRect(sx, sy, sw, sh, sh / 2);
     ctx.fillStyle = on ? '#3b82f6' : '#334155';
     ctx.fill();
 
-    const knob = 26;
-    const kx = on ? sx + sw - 4 - knob : sx + 4;
+    const knob = 22;
+    const kx = on ? sx + sw - 3 - knob : sx + 3;
     const ky = sy + (sh - knob) / 2;
     ctx.beginPath();
     ctx.arc(kx + knob / 2, ky + knob / 2, knob / 2, 0, Math.PI * 2);
@@ -898,7 +951,7 @@ export class EscMenu {
     const { x, y, w, h } = region;
     const t = THREE.MathUtils.clamp(value, 0, 1);
 
-    this.roundRect(x, y, w, h, 14);
+    this.roundRect(x, y, w, h, 10);
     ctx.fillStyle =
       hover || active ? 'rgba(28, 44, 66, 0.88)' : 'rgba(15, 23, 34, 0.72)';
     ctx.fill();
@@ -912,24 +965,24 @@ export class EscMenu {
     ctx.textAlign = 'left';
     ctx.textBaseline = 'alphabetic';
     ctx.fillStyle = '#e8eef6';
-    ctx.font = '600 22px system-ui, -apple-system, "Segoe UI", sans-serif';
-    ctx.fillText('全局画面亮度', x + 20, y + 34);
+    ctx.font = '600 18px system-ui, -apple-system, "Segoe UI", sans-serif';
+    ctx.fillText('全局画面亮度', x + 16, y + 26);
 
     const pct = `${Math.round(t * 100)}%`;
     ctx.textAlign = 'right';
     ctx.fillStyle = '#93c5fd';
-    ctx.font = '600 22px system-ui, -apple-system, "Segoe UI", sans-serif';
-    ctx.fillText(pct, x + w - 20, y + 34);
+    ctx.font = '600 18px system-ui, -apple-system, "Segoe UI", sans-serif';
+    ctx.fillText(pct, x + w - 16, y + 26);
 
     ctx.textAlign = 'left';
     ctx.fillStyle = '#94a3b8';
-    ctx.font = '400 16px system-ui, -apple-system, "Segoe UI", sans-serif';
-    ctx.fillText('拖动滑条实时调暗 / 调亮画面', x + 20, y + 58);
+    ctx.font = '400 13px system-ui, -apple-system, "Segoe UI", sans-serif';
+    ctx.fillText('拖动滑条实时调暗 / 调亮画面', x + 16, y + 46);
 
     const trackX = x + EscMenu.SLIDER_PAD_X;
     const trackW = w - EscMenu.SLIDER_PAD_X * 2;
     const trackH = EscMenu.SLIDER_TRACK_H;
-    const trackY = y + h - 24;
+    const trackY = y + h - 20;
     this.roundRect(trackX, trackY, trackW, trackH, trackH / 2);
     ctx.fillStyle = 'rgba(51, 65, 85, 0.95)';
     ctx.fill();
@@ -942,7 +995,7 @@ export class EscMenu {
     ctx.fillStyle = fillGrad;
     ctx.fill();
 
-    const knobR = 13;
+    const knobR = 10;
     const knobX = trackX + trackW * t;
     const knobY = trackY + trackH / 2;
     ctx.beginPath();
@@ -964,7 +1017,7 @@ export class EscMenu {
     const { ctx } = this;
     const { x, y, w, h } = region;
 
-    this.roundRect(x, y, w, h, 14);
+    this.roundRect(x, y, w, h, 10);
 
     if (variant === 'primary') {
       const grad = ctx.createLinearGradient(x, y, x, y + h);
@@ -1000,7 +1053,7 @@ export class EscMenu {
 
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.font = '700 24px system-ui, -apple-system, "Segoe UI", sans-serif';
+    ctx.font = '700 18px system-ui, -apple-system, "Segoe UI", sans-serif';
     ctx.fillText(label, x + w / 2, y + h / 2 + 0.5);
   }
 
