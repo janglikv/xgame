@@ -10,9 +10,27 @@ import { createSceneLights } from '../world/createSceneLights';
 import { DefenseTower } from '../world/DefenseTower';
 import { DirtFloor } from '../world/DirtFloor';
 import { MissFortune } from '../world/champions/MissFortune';
+import { Minion } from '../world/Minion';
 import { MinionWaveSpawner } from '../world/MinionWaveSpawner';
 import { NexusCrystal } from '../world/NexusCrystal';
 import { SpatialAxesGrid } from '../world/SpatialAxesGrid';
+
+/** 指针拾取时忽略的 UI / 辅助节点（避免范围圈、血条误触攻击光标） */
+function isCursorPickIgnore(obj: THREE.Object3D): boolean {
+  let cur: THREE.Object3D | null = obj;
+  while (cur) {
+    const n = cur.name;
+    if (
+      n === 'ColliderMarker' ||
+      n === 'AttackRangeMarker' ||
+      n === 'HealthBar'
+    ) {
+      return true;
+    }
+    cur = cur.parent;
+  }
+  return false;
+}
 
 /**
  * 主场景：灯光 + 地板 + 坐标辅助 + 基地水晶 + 防御塔 + AI 发兵 + 弹道战斗 + 地面圆碰撞。
@@ -263,10 +281,15 @@ export class MainScene extends THREE.Scene {
   }
 
   /**
-   * 在地面落点附近点选敌方单位（供右键攻击）。
+   * 在地面落点附近点选敌方单位（供点击攻击，可放宽容差）。
    * 优先最近圆心；点击半径 ≈ 碰撞半径 + slack。
    */
-  pickEnemyNear(x: number, z: number, slack = 0.45): CombatUnit | null {
+  pickEnemyNear(
+    x: number,
+    z: number,
+    slack = 0.45,
+    excludeTowers = false,
+  ): CombatUnit | null {
     if (!Number.isFinite(x) || !Number.isFinite(z)) return null;
     const hero = this.missFortune;
     if (!hero.isAlive) return null;
@@ -275,6 +298,7 @@ export class MainScene extends THREE.Scene {
     let bestDist = Infinity;
 
     for (const unit of this.collectEnemyCombatUnits(hero.team)) {
+      if (excludeTowers && unit instanceof DefenseTower) continue;
       const dx = unit.collider.x - x;
       const dz = unit.collider.z - z;
       const d = Math.hypot(dx, dz);
@@ -310,22 +334,88 @@ export class MainScene extends THREE.Scene {
   }
 
   /**
-   * 射线拾取未摧毁的防御塔（用于鼠标悬停描边）。
-   * 只检测 fullModel，残骸不参与。
+   * 指针悬停可攻击判定（用于攻击光标）。
+   * - 防御塔：必须与红色描边同源 —— 仅当当前 hoveredTower 有效时才算（对准 fullModel）
+   * - 其他单位：射线打中本体，或地面落点落在碰撞圆 + 很小 slack 内
+   */
+  pickAttackHover(
+    raycaster: THREE.Raycaster,
+    groundX?: number,
+    groundZ?: number,
+  ): CombatUnit | null {
+    const hero = this.missFortune;
+    if (!hero.isAlive) return null;
+
+    // 塔：与 OutlinePass 完全一致，有红描边才出攻击指针
+    const outlined = this.getHoveredEnemyTower();
+    if (outlined) return outlined;
+
+    const enemies = this.collectEnemyCombatUnits(hero.team);
+    if (enemies.length === 0) return null;
+
+    // 塔已由描边状态处理，这里只扫小兵 / 水晶
+    const roots: THREE.Object3D[] = [];
+    for (const unit of enemies) {
+      if (unit instanceof DefenseTower) continue;
+      if (unit instanceof THREE.Object3D) roots.push(unit);
+    }
+
+    if (roots.length > 0) {
+      const hits = raycaster.intersectObjects(roots, true);
+      for (const hit of hits) {
+        if (isCursorPickIgnore(hit.object)) continue;
+
+        let obj: THREE.Object3D | null = hit.object;
+        while (obj) {
+          if (obj instanceof Minion || obj instanceof NexusCrystal) {
+            if (obj.isAlive && obj.team !== hero.team) return obj;
+          }
+          obj = obj.parent;
+        }
+      }
+    }
+
+    // 地面紧贴：排除防御塔，避免指塔脚地板却出剑、却无描边
+    if (
+      groundX !== undefined &&
+      groundZ !== undefined &&
+      Number.isFinite(groundX) &&
+      Number.isFinite(groundZ)
+    ) {
+      return this.pickEnemyNear(
+        groundX,
+        groundZ,
+        MainScene.CURSOR_GROUND_SLACK,
+        /* excludeTowers */ true,
+      );
+    }
+    return null;
+  }
+
+  /** 攻击光标地面容差（米）：叠在碰撞半径上，仅辅助小体型单位 */
+  private static readonly CURSOR_GROUND_SLACK = 0.12;
+
+  /**
+   * 射线拾取可攻击的敌方防御塔（用于鼠标悬停红描边 + 攻击指针）。
+   * 只检测 fullModel，残骸 / 友方塔 / 范围圈不参与。
    */
   pickTowerAtRay(raycaster: THREE.Raycaster): DefenseTower | null {
+    const heroTeam = this.missFortune.team;
     const roots: THREE.Object3D[] = [];
     for (const tower of this.defenseTowers) {
-      if (tower.isAlive) roots.push(tower.fullModel);
+      if (tower.isAlive && tower.team !== heroTeam) {
+        roots.push(tower.fullModel);
+      }
     }
     if (roots.length === 0) return null;
 
     const hits = raycaster.intersectObjects(roots, true);
     for (const hit of hits) {
+      if (isCursorPickIgnore(hit.object)) continue;
       let obj: THREE.Object3D | null = hit.object;
       while (obj) {
         if (obj instanceof DefenseTower) {
-          return obj.isAlive ? obj : null;
+          return obj.isAlive && obj.team !== heroTeam ? obj : null;
         }
         obj = obj.parent;
       }
@@ -335,20 +425,36 @@ export class MainScene extends THREE.Scene {
 
   /**
    * 设置防御塔鼠标悬停；传入 null 清除。
-   * 已摧毁的塔会被忽略。描边由主循环 OutlinePass 根据 getHoverOutlineRoot() 绘制。
+   * 已摧毁 / 友方塔会被忽略。描边与攻击指针共用此状态。
    */
   setTowerHover(tower: DefenseTower | null): void {
-    if (tower && !tower.isAlive) tower = null;
+    if (tower && (!tower.isAlive || tower.team === this.missFortune.team)) {
+      tower = null;
+    }
     if (this.hoveredTower === tower) return;
     this.hoveredTower = tower;
+  }
+
+  /**
+   * 当前悬停且可攻击的敌方防御塔（与红色描边同步；无则 null）。
+   */
+  getHoveredEnemyTower(): DefenseTower | null {
+    if (
+      !this.hoveredTower ||
+      !this.hoveredTower.isAlive ||
+      this.hoveredTower.team === this.missFortune.team
+    ) {
+      return null;
+    }
+    return this.hoveredTower;
   }
 
   /**
    * 后处理选中根节点：仅完整塔模型（不含血条/范围圈/残骸）。
    */
   getHoverOutlineRoot(): THREE.Object3D | null {
-    if (!this.hoveredTower || !this.hoveredTower.isAlive) return null;
-    return this.hoveredTower.fullModel;
+    const tower = this.getHoveredEnemyTower();
+    return tower ? tower.fullModel : null;
   }
 
   /** 存活敌方：小兵 + 塔 + 水晶 */

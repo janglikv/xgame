@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { CameraParams } from '../controls/CameraController';
+import { setGameCursor } from './GameCursor';
 
 export interface EscMenuOptions {
   /** 坐标参考线开关回调 */
@@ -267,7 +268,7 @@ export class EscMenu {
       if (!this.open) return;
       if (this.draggingBrightness) {
         this.applyBrightnessFromPointer(e.clientX, e.clientY);
-        this.domElement.style.cursor = 'pointer';
+        setGameCursor(this.domElement, 'default');
         return;
       }
       this.setHover(this.hitTest(e.clientX, e.clientY));
@@ -301,7 +302,7 @@ export class EscMenu {
       this.draggingBrightness = false;
       this.pressId = null;
       this.setHover(null);
-      if (this.open) this.domElement.style.cursor = 'default';
+      if (this.open) setGameCursor(this.domElement, 'default');
     };
 
     window.addEventListener('keydown', this.onKeyDown);
@@ -324,7 +325,8 @@ export class EscMenu {
     this.draggingBrightness = false;
     this.dirty = true;
     if (!open) {
-      this.domElement.style.cursor = 'grab';
+      // 实际光标由 CameraController.setEnabled 在 onOpenChange 中刷新
+      setGameCursor(this.domElement, 'default');
     } else {
       this.updateCursor();
     }
@@ -457,19 +459,7 @@ export class EscMenu {
 
   private updateCursor(): void {
     if (!this.open) return;
-    const interactive =
-      this.hoverId === 'axes' ||
-      this.hoverId === 'colliders' ||
-      this.hoverId === 'cameraLock' ||
-      this.hoverId === 'fixedCamera' ||
-      this.hoverId === 'godMode' ||
-      this.hoverId === 'minionSpawn' ||
-      this.hoverId === 'towerInvincible' ||
-      this.hoverId === 'brightness' ||
-      this.hoverId === 'skip1m' ||
-      this.hoverId === 'skip3m' ||
-      this.hoverId === 'close';
-    this.domElement.style.cursor = interactive ? 'pointer' : 'default';
+    setGameCursor(this.domElement, 'default');
   }
 
   private applyBrightnessFromPointer(clientX: number, clientY: number): void {

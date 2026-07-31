@@ -11,6 +11,7 @@ import {
   type GameSettingsSnapshot,
 } from './storage/gameSettings';
 import { EscMenu } from './ui/EscMenu';
+import { preloadGameCursors, setGameCursor } from './ui/GameCursor';
 import { ScreenBrightness } from './ui/ScreenBrightness';
 import { SkillBar } from './ui/SkillBar';
 
@@ -45,6 +46,12 @@ function bootstrap(): void {
   renderer.domElement.style.width = '100%';
   renderer.domElement.style.height = '100%';
   host.appendChild(renderer.domElement);
+  void preloadGameCursors().then(() => {
+    setGameCursor(renderer.domElement, 'default');
+    setGameCursor(document.body, 'default');
+  });
+  setGameCursor(renderer.domElement, 'default');
+  setGameCursor(document.body, 'default');
 
   const camera = new THREE.PerspectiveCamera(55, width / height, 0.1, 1000);
   camera.position.set(8, 10, 12);
@@ -207,6 +214,7 @@ function bootstrap(): void {
       if (slot === 'E') {
         scene.beginHeroSkillE();
         skillBar.setTargeting(scene.skillTargetingSlot);
+        refreshGameplayCursor();
       }
     },
   });
@@ -237,6 +245,7 @@ function bootstrap(): void {
         e.preventDefault();
         scene.cancelSkillTargeting();
         skillBar.setTargeting(null);
+        refreshGameplayCursor(e.clientX, e.clientY);
         return;
       }
       if (e.button === 0) {
@@ -244,6 +253,7 @@ function bootstrap(): void {
         if (!pickGround(e.clientX, e.clientY)) return;
         scene.confirmSkillTarget(hitPoint.x, hitPoint.z);
         skillBar.setTargeting(null);
+        refreshGameplayCursor(e.clientX, e.clientY);
         return;
       }
       return;
@@ -285,16 +295,45 @@ function bootstrap(): void {
     return true;
   };
 
+  /** 两态指针：可攻击悬停（塔=红描边同源）→ 短剑，其余 → 小手 */
+  const refreshGameplayCursor = (clientX?: number, clientY?: number): void => {
+    if (escMenu.isOpen) {
+      setGameCursor(renderer.domElement, 'default');
+      return;
+    }
+
+    if (clientX === undefined || clientY === undefined) {
+      setGameCursor(renderer.domElement, 'default');
+      return;
+    }
+
+    if (!updatePointerNdc(clientX, clientY)) {
+      setGameCursor(renderer.domElement, 'default');
+      return;
+    }
+    const hasGround =
+      raycaster.ray.intersectPlane(groundPlane, hitPoint) != null;
+    // 须在 setTowerHover 之后调用：塔的攻击指针与红描边共用 hoveredTower
+    const target = scene.pickAttackHover(
+      raycaster,
+      hasGround ? hitPoint.x : undefined,
+      hasGround ? hitPoint.z : undefined,
+    );
+
+    setGameCursor(renderer.domElement, target ? 'attack' : 'default');
+  };
+
   const onPointerMove = (e: PointerEvent): void => {
     if (escMenu.isOpen) {
       scene.setTowerHover(null);
       syncTowerOutline();
+      setGameCursor(renderer.domElement, 'default');
       return;
     }
 
     if (!updatePointerNdc(e.clientX, e.clientY)) return;
 
-    // 未摧毁防御塔：鼠标经过时由 OutlinePass 画整体外轮廓
+    // 敌方完整塔 fullModel 命中 → 红描边；攻击指针与此同源
     scene.setTowerHover(scene.pickTowerAtRay(raycaster));
     syncTowerOutline();
 
@@ -304,11 +343,14 @@ function bootstrap(): void {
         scene.updateSkillTargeting(hitPoint.x, hitPoint.z);
       }
     }
+
+    refreshGameplayCursor(e.clientX, e.clientY);
   };
 
   const onPointerLeave = (): void => {
     scene.setTowerHover(null);
     syncTowerOutline();
+    setGameCursor(renderer.domElement, 'default');
   };
 
   renderer.domElement.addEventListener('pointerdown', onPointerDownCommand);

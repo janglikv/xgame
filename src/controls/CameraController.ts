@@ -4,6 +4,7 @@ import {
   saveCameraState,
   type CameraStateSnapshot,
 } from '../storage/cameraState';
+import { setGameCursor } from '../ui/GameCursor';
 
 export interface CameraControllerOptions {
   /** 水平移动速度（单位/秒） */
@@ -159,7 +160,7 @@ export class CameraController {
         this.isMouseDown = true;
         this.lastMouseX = e.clientX;
         this.lastMouseY = e.clientY;
-        this.domElement.style.cursor = 'grabbing';
+        setGameCursor(this.domElement, 'default');
       }
     };
 
@@ -302,15 +303,8 @@ export class CameraController {
   }
 
   private refreshCursor(): void {
-    if (!this.enabled) {
-      this.domElement.style.cursor = 'default';
-      return;
-    }
-    if (this.viewMode === 'locked') {
-      this.domElement.style.cursor = 'default';
-      return;
-    }
-    this.domElement.style.cursor = this.isMouseDown ? 'grabbing' : 'grab';
+    // 全局仅两态指针：日常小手 / 可攻击短剑（攻击态由 main 悬停逻辑切换）
+    setGameCursor(this.domElement, 'default');
   }
 
   /**
