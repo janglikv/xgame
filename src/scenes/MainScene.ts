@@ -52,6 +52,8 @@ export class MainScene extends THREE.Scene {
   /** 最近一次鼠标地面落点（选点中跟随英雄时用） */
   private aimX = 0;
   private aimZ = 0;
+  /** 当前鼠标悬停的未摧毁防御塔（描边高亮） */
+  private hoveredTower: DefenseTower | null = null;
 
   /** 待快进的游戏时间（秒） */
   private skipGameLeft = 0;
@@ -307,6 +309,48 @@ export class MainScene extends THREE.Scene {
     return best;
   }
 
+  /**
+   * 射线拾取未摧毁的防御塔（用于鼠标悬停描边）。
+   * 只检测 fullModel，残骸不参与。
+   */
+  pickTowerAtRay(raycaster: THREE.Raycaster): DefenseTower | null {
+    const roots: THREE.Object3D[] = [];
+    for (const tower of this.defenseTowers) {
+      if (tower.isAlive) roots.push(tower.fullModel);
+    }
+    if (roots.length === 0) return null;
+
+    const hits = raycaster.intersectObjects(roots, true);
+    for (const hit of hits) {
+      let obj: THREE.Object3D | null = hit.object;
+      while (obj) {
+        if (obj instanceof DefenseTower) {
+          return obj.isAlive ? obj : null;
+        }
+        obj = obj.parent;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * 设置防御塔鼠标悬停；传入 null 清除。
+   * 已摧毁的塔会被忽略。描边由主循环 OutlinePass 根据 getHoverOutlineRoot() 绘制。
+   */
+  setTowerHover(tower: DefenseTower | null): void {
+    if (tower && !tower.isAlive) tower = null;
+    if (this.hoveredTower === tower) return;
+    this.hoveredTower = tower;
+  }
+
+  /**
+   * 后处理选中根节点：仅完整塔模型（不含血条/范围圈/残骸）。
+   */
+  getHoverOutlineRoot(): THREE.Object3D | null {
+    if (!this.hoveredTower || !this.hoveredTower.isAlive) return null;
+    return this.hoveredTower.fullModel;
+  }
+
   /** 存活敌方：小兵 + 塔 + 水晶 */
   private collectEnemyCombatUnits(team: CombatUnit['team']): CombatUnit[] {
     const out: CombatUnit[] = [];
@@ -442,6 +486,11 @@ export class MainScene extends THREE.Scene {
       tower.update(delta, combatUnits, this.projectiles);
     }
 
+    // 悬停塔若本帧被摧毁，清掉悬停引用（OutlinePass 下一帧不再选中）
+    if (this.hoveredTower && !this.hoveredTower.isAlive) {
+      this.hoveredTower = null;
+    }
+
     // 英雄：意图 → 位移 → 限速转向 → 对准后从枪口开火
     this.missFortune.update(delta, this.projectiles);
 
@@ -486,6 +535,7 @@ export class MainScene extends THREE.Scene {
   }
 
   dispose(): void {
+    this.setTowerHover(null);
     this.floor.dispose();
     for (const nexus of this.nexusCrystals) {
       nexus.dispose();

@@ -1,4 +1,8 @@
 import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { OutlinePass } from 'three/addons/postprocessing/OutlinePass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { CameraController } from './controls/CameraController';
 import { MainScene } from './scenes/MainScene';
 import {
@@ -9,6 +13,9 @@ import {
 import { EscMenu } from './ui/EscMenu';
 import { ScreenBrightness } from './ui/ScreenBrightness';
 import { SkillBar } from './ui/SkillBar';
+
+/** 防御塔悬停：屏幕空间整体外轮廓（深红） */
+const TOWER_OUTLINE_COLOR = 0x8b0000;
 
 function bootstrap(): void {
   const host = document.getElementById('app');
@@ -27,7 +34,8 @@ function bootstrap(): void {
     antialias: true,
     powerPreference: 'high-performance',
   });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+  renderer.setPixelRatio(pixelRatio);
   renderer.setSize(width, height);
   renderer.setClearColor(0x0b0f14, 1);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -43,6 +51,41 @@ function bootstrap(): void {
   camera.lookAt(0, 0, 0);
 
   const scene = new MainScene();
+
+  // 方案 1：后处理屏幕空间 silhouette 描边（整塔外轮廓，非零件级）
+  const composer = new EffectComposer(renderer);
+  composer.setPixelRatio(pixelRatio);
+  composer.setSize(width, height);
+  composer.addPass(new RenderPass(scene, camera));
+
+  const outlinePass = new OutlinePass(
+    new THREE.Vector2(width * pixelRatio, height * pixelRatio),
+    scene,
+    camera,
+  );
+  outlinePass.edgeStrength = 5;
+  outlinePass.edgeGlow = 0;
+  outlinePass.edgeThickness = 2;
+  outlinePass.pulsePeriod = 0;
+  outlinePass.visibleEdgeColor.set(TOWER_OUTLINE_COLOR);
+  outlinePass.hiddenEdgeColor.set(TOWER_OUTLINE_COLOR);
+  outlinePass.enabled = false;
+  composer.addPass(outlinePass);
+  composer.addPass(new OutputPass());
+
+  let lastOutlineRoot: THREE.Object3D | null = null;
+  const syncTowerOutline = (): void => {
+    const root = scene.getHoverOutlineRoot();
+    if (root === lastOutlineRoot) return;
+    lastOutlineRoot = root;
+    if (root) {
+      outlinePass.selectedObjects = [root];
+      outlinePass.enabled = true;
+    } else {
+      outlinePass.selectedObjects = [];
+      outlinePass.enabled = false;
+    }
+  };
 
   const controls = new CameraController(camera, renderer.domElement, {
     moveSpeed: 1.8,
@@ -230,23 +273,60 @@ function bootstrap(): void {
     }
   };
 
-  const onPointerMoveTargeting = (e: PointerEvent): void => {
-    if (escMenu.isOpen || !scene.isSkillTargeting) return;
-    if (!pickGround(e.clientX, e.clientY)) return;
-    scene.updateSkillTargeting(hitPoint.x, hitPoint.z);
+  const updatePointerNdc = (clientX: number, clientY: number): boolean => {
+    const rect = renderer.domElement.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return false;
+    pointerNdc.set(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -(((clientY - rect.top) / rect.height) * 2 - 1),
+    );
+    raycaster.setFromCamera(pointerNdc, camera);
+    return true;
+  };
+
+  const onPointerMove = (e: PointerEvent): void => {
+    if (escMenu.isOpen) {
+      scene.setTowerHover(null);
+      syncTowerOutline();
+      return;
+    }
+
+    if (!updatePointerNdc(e.clientX, e.clientY)) return;
+
+    // 未摧毁防御塔：鼠标经过时由 OutlinePass 画整体外轮廓
+    scene.setTowerHover(scene.pickTowerAtRay(raycaster));
+    syncTowerOutline();
+
+    // 技能选点：同步地面瞄准点
+    if (scene.isSkillTargeting) {
+      if (raycaster.ray.intersectPlane(groundPlane, hitPoint) != null) {
+        scene.updateSkillTargeting(hitPoint.x, hitPoint.z);
+      }
+    }
+  };
+
+  const onPointerLeave = (): void => {
+    scene.setTowerHover(null);
+    syncTowerOutline();
   };
 
   renderer.domElement.addEventListener('pointerdown', onPointerDownCommand);
-  renderer.domElement.addEventListener('pointermove', onPointerMoveTargeting);
+  renderer.domElement.addEventListener('pointermove', onPointerMove);
+  renderer.domElement.addEventListener('pointerleave', onPointerLeave);
   renderer.domElement.addEventListener('contextmenu', (e) => {
     e.preventDefault();
   });
 
   const onResize = (): void => {
     const { width: w, height: h } = getSize();
+    const pr = Math.min(window.devicePixelRatio || 1, 2);
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
+    renderer.setPixelRatio(pr);
     renderer.setSize(w, h);
+    composer.setPixelRatio(pr);
+    composer.setSize(w, h);
+    outlinePass.resolution.set(w * pr, h * pr);
     scene.resize(w, h);
     screenBrightness.setSize(w, h);
     escMenu.setSize(w, h);
@@ -270,6 +350,8 @@ function bootstrap(): void {
 
     scene.update(delta);
     controls.update(delta);
+    // 塔被摧毁等逻辑可能清掉悬停，与 OutlinePass 同步
+    syncTowerOutline();
 
     skillBar.setCooldown(
       'E',
@@ -279,7 +361,7 @@ function bootstrap(): void {
     skillBar.setTargeting(scene.skillTargetingSlot);
     skillBar.setHp(scene.hero.hp, scene.hero.maxHp);
 
-    renderer.render(scene, camera);
+    composer.render();
     // 压暗世界画面，设置面板保持清晰可读
     screenBrightness.render(renderer);
     skillBar.render(renderer);

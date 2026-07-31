@@ -343,6 +343,7 @@ export class DefenseTower extends THREE.Group implements CombatUnit {
 
     // ==========================================
     // 3. UI 元素（血条与攻击范围圈）
+    //    悬停外轮廓由主循环 OutlinePass 后处理绘制（选中 fullModel）
     // ==========================================
     this.healthBar = new HealthBar({
       width: 0.55 / DefenseTower.SCALE_XZ,
