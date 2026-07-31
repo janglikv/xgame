@@ -2,7 +2,12 @@ import type { CircleBody } from './CircleBody';
 
 /**
  * 二维圆-圆位置校正（地面 XZ）。
- * 静态体不动，动态体被推开；双方皆动态时各退一半。
+ *
+ * 策略：
+ * - 静态建筑 / 本帧未移动的单位视为锚定，不被挤走
+ * - 移动体撞锚定体：只推开移动体
+ * - 双方都在移动：各退一半
+ * - 双方都锚定但仍重叠（出生重叠等）：各退一半以免卡死
  */
 export function resolveCircleCollisions(
   bodies: readonly CircleBody[],
@@ -10,6 +15,10 @@ export function resolveCircleCollisions(
 ): void {
   const n = bodies.length;
   if (n < 2) return;
+
+  for (const body of bodies) {
+    body.beginMotionFrame();
+  }
 
   for (let iter = 0; iter < iterations; iter += 1) {
     for (let i = 0; i < n; i += 1) {
@@ -36,17 +45,30 @@ export function resolveCircleCollisions(
         }
 
         const overlap = minDist - dist;
+        const aAnchored = a.isAnchored;
+        const bAnchored = b.isAnchored;
 
-        if (a.isStatic) {
+        if (aAnchored && !bAnchored) {
+          // A 静止/建筑：只把移动的 B 推出
           b.setXZ(b.x + dx * overlap, b.z + dz * overlap);
-        } else if (b.isStatic) {
+        } else if (bAnchored && !aAnchored) {
+          // B 静止/建筑：只把移动的 A 推出
           a.setXZ(a.x - dx * overlap, a.z - dz * overlap);
         } else {
+          // 双方都在动，或双方都锚定但重叠：各退一半
           const half = overlap * 0.5;
-          a.setXZ(a.x - dx * half, a.z - dz * half);
-          b.setXZ(b.x + dx * half, b.z + dz * half);
+          if (!a.isStatic) {
+            a.setXZ(a.x - dx * half, a.z - dz * half);
+          }
+          if (!b.isStatic) {
+            b.setXZ(b.x + dx * half, b.z + dz * half);
+          }
         }
       }
     }
+  }
+
+  for (const body of bodies) {
+    body.endMotionFrame();
   }
 }
