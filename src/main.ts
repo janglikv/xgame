@@ -81,7 +81,8 @@ function bootstrap(): void {
   composer.addPass(new OutputPass());
 
   let lastOutlineRoot: THREE.Object3D | null = null;
-  const syncTowerOutline = (): void => {
+  /** 同步 OutlinePass：敌方塔 / 小兵悬停红描边 */
+  const syncHoverOutline = (): void => {
     const root = scene.getHoverOutlineRoot();
     if (root === lastOutlineRoot) return;
     lastOutlineRoot = root;
@@ -313,7 +314,7 @@ function bootstrap(): void {
     }
     const hasGround =
       raycaster.ray.intersectPlane(groundPlane, hitPoint) != null;
-    // 须在 setTowerHover 之后调用：塔的攻击指针与红描边共用 hoveredTower
+    // 须在 updateAttackHover 之后：塔/兵攻击指针与红描边同源
     const target = scene.pickAttackHover(
       raycaster,
       hasGround ? hitPoint.x : undefined,
@@ -325,17 +326,17 @@ function bootstrap(): void {
 
   const onPointerMove = (e: PointerEvent): void => {
     if (escMenu.isOpen) {
-      scene.setTowerHover(null);
-      syncTowerOutline();
+      scene.clearAttackHover();
+      syncHoverOutline();
       setGameCursor(renderer.domElement, 'default');
       return;
     }
 
     if (!updatePointerNdc(e.clientX, e.clientY)) return;
 
-    // 敌方完整塔 fullModel 命中 → 红描边；攻击指针与此同源
-    scene.setTowerHover(scene.pickTowerAtRay(raycaster));
-    syncTowerOutline();
+    // 敌方塔 fullModel / 小兵 bodyRoot → 红描边；攻击指针同源
+    scene.updateAttackHover(raycaster);
+    syncHoverOutline();
 
     // 技能选点：同步地面瞄准点
     if (scene.isSkillTargeting) {
@@ -348,8 +349,8 @@ function bootstrap(): void {
   };
 
   const onPointerLeave = (): void => {
-    scene.setTowerHover(null);
-    syncTowerOutline();
+    scene.clearAttackHover();
+    syncHoverOutline();
     setGameCursor(renderer.domElement, 'default');
   };
 
@@ -393,8 +394,8 @@ function bootstrap(): void {
 
     scene.update(delta);
     controls.update(delta);
-    // 塔被摧毁等逻辑可能清掉悬停，与 OutlinePass 同步
-    syncTowerOutline();
+    // 目标死亡等逻辑可能清掉悬停，与 OutlinePass 同步
+    syncHoverOutline();
 
     skillBar.setCooldown(
       'E',

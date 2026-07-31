@@ -35,9 +35,13 @@ interface MinionStats {
   boltScale: number;
 }
 
+/** 前/后排统一体型；整体相对旧近战再 ×2 */
+const MINION_SCALE = 0.25;
+const MINION_COLLIDER_RADIUS = 0.16;
+
 const MELEE_STATS: MinionStats = {
-  scale: 0.125,
-  colliderRadius: 0.08,
+  scale: MINION_SCALE,
+  colliderRadius: MINION_COLLIDER_RADIUS,
   maxHp: 80,
   attackDamage: 12,
   attackRange: 0.55,
@@ -49,10 +53,10 @@ const MELEE_STATS: MinionStats = {
   boltScale: 1,
 };
 
-/** 远程：更小、更远、更高伤害 */
+/** 远程：与前排同体型；射程更远、伤害更高 */
 const RANGED_STATS: MinionStats = {
-  scale: 0.085,
-  colliderRadius: 0.05,
+  scale: MINION_SCALE,
+  colliderRadius: MINION_COLLIDER_RADIUS,
   maxHp: 80,
   attackDamage: 22,
   attackRange: 1.45,
@@ -67,7 +71,7 @@ const RANGED_STATS: MinionStats = {
 /**
  * 极简五球小兵：身体 + 左手 + 右手 + 左脚 + 右脚。
  * AI：推进 Move / 追击 Chase / 站桩攻击 Attack（LoL 风格简化）。
- * kind=melee 近战前排；kind=ranged 远程后排（体积小、射程远、伤害高）。
+ * kind=melee 近战前排；kind=ranged 远程后排（同体型、射程远、伤害高）。
  */
 export class Minion extends THREE.Group implements CombatUnit {
   /** 目标标签：低于防御塔，小兵优先打塔 */
@@ -96,7 +100,8 @@ export class Minion extends THREE.Group implements CombatUnit {
   /** 死亡动画总时长（秒）：包含倒下、停留与渐隐 */
   private static readonly DEATH_DURATION = 1.6;
 
-  private readonly bodyRoot: THREE.Group;
+  /** 身体网格根节点（描边用，不含血条/碰撞圈） */
+  readonly bodyRoot: THREE.Group;
   private readonly body: THREE.Mesh;
   private readonly leftHand: THREE.Mesh;
   private readonly rightHand: THREE.Mesh;

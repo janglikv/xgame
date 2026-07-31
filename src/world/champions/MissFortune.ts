@@ -14,7 +14,7 @@ export class MissFortune extends THREE.Group implements CombatUnit {
   static readonly DISPLAY_NAME = '厄运小姐';
 
   /**
-   * 相对近战小兵默认 scale(0.125) 的三倍。
+   * 英雄缩放（历史：相对旧近战小兵 0.125 的三倍）。
    * 写死在此，不引用小兵常量，避免耦合。
    */
   static readonly SCALE = 0.375;
