@@ -129,6 +129,8 @@ export class Minion extends THREE.Group implements CombatUnit {
   private staffDetached = false;
   private readonly staffStartPos = new THREE.Vector3();
   private readonly staffStartRot = new THREE.Euler();
+  /** 死亡渐隐专用材质（克隆，避免共享材质/深度写入导致手脚突然消失） */
+  private deathFadeMats: THREE.Material[] = [];
 
   readonly kind: MinionKind;
   readonly team: TeamId;
@@ -371,51 +373,90 @@ export class Minion extends THREE.Group implements CombatUnit {
       this.staffDetached = true;
     }
 
-    // 遍历所有组件材质，开启 transparent 允许透明度动画
+    // 克隆全部网格材质做渐隐：关闭 depthWrite，避免倒地后手脚被地面/身体深度测试「瞬间吃掉」
+    this.prepareDeathFadeMaterials();
+  }
+
+  /** 为死亡渐隐克隆材质，身体/帽/手/脚/杖统一可控透明度 */
+  private prepareDeathFadeMaterials(): void {
+    this.deathFadeMats = [];
+    // 同一材质可能挂在多个网格（如帽子），只克隆一次
+    const cloneMap = new Map<THREE.Material, THREE.Material>();
+    const originals: THREE.Material[] = [];
+
     this.traverse((obj) => {
-      const meshObj = obj as THREE.Mesh;
-      if (meshObj.isMesh && meshObj.material) {
-        const list = Array.isArray(meshObj.material)
-          ? meshObj.material
-          : [meshObj.material];
-        for (const mat of list) {
+      const mesh = obj as THREE.Mesh;
+      if (!mesh.isMesh || !mesh.material) return;
+
+      const sourceList = Array.isArray(mesh.material)
+        ? mesh.material
+        : [mesh.material];
+      const clonedList = sourceList.map((src) => {
+        let mat = cloneMap.get(src);
+        if (!mat) {
+          mat = src.clone();
           mat.transparent = true;
+          mat.depthWrite = false;
+          mat.opacity = 1;
+          mat.needsUpdate = true;
+          cloneMap.set(src, mat);
+          originals.push(src);
+          this.deathFadeMats.push(mat);
         }
-      }
+        return mat;
+      });
+      mesh.material =
+        clonedList.length === 1 ? clonedList[0]! : clonedList;
+      mesh.castShadow = false;
+      mesh.receiveShadow = false;
     });
+
+    // 释放本兵独有原材质（不 dispose 共享脸贴图）
+    for (const src of originals) {
+      src.dispose();
+    }
   }
 
   private updateDeath(delta: number): void {
     this.deathElapsed += delta;
     const duration = Minion.DEATH_DURATION;
     const fallTime = 0.45;
-    const fadeStart = 0.8;
+    /** 倒下接近完成即开始渐隐，整身（含手脚）一起淡出 */
+    const fadeStart = 0.55;
 
     // 1. 倒下动作（0 ~ 0.45s，整套模型包含身体/帽/手/脚整体平滑倒地）
     const tFall = Math.min(1, this.deathElapsed / fallTime);
     const fallEase = 1 - Math.pow(1 - tFall, 2.5);
 
-    const angle = Math.PI * 0.48 * fallEase;
+    // 略减小倾角，减少手脚穿地
+    const angle = Math.PI * 0.42 * fallEase;
     this.bodyRoot.rotation.x = -angle;
 
-    // 几何补偿：随着整体倾倒，抬升 bodyRoot Y 轴，保证身体与手脚不陷地
-    this.bodyRoot.position.y = 0.38 * (1 - Math.cos(angle));
-    this.bodyRoot.position.z = -0.15 * fallEase;
+    // 抬升 + 略后移，让倒地姿态贴地但不埋进地板
+    this.bodyRoot.position.y = 0.12 + 0.42 * (1 - Math.cos(angle));
+    this.bodyRoot.position.z = -0.12 * fallEase;
 
-    // 手脚在局部坐标系中保持在关节位置（自然脱力瘫软）
+    // 手脚收向躯干、略抬高，倒地后仍露在身体轮廓外以便渐隐可见
     this.leftHand.position.set(
-      this.baseLeftHand.x + 0.05 * fallEase,
-      this.baseLeftHand.y + 0.02 * fallEase,
-      this.baseLeftHand.z - 0.05 * fallEase,
+      this.baseLeftHand.x + 0.04 * fallEase,
+      this.baseLeftHand.y + 0.06 * fallEase,
+      this.baseLeftHand.z - 0.04 * fallEase,
     );
     this.rightHand.position.set(
-      this.baseRightHand.x - 0.05 * fallEase,
-      this.baseRightHand.y + 0.02 * fallEase,
-      this.baseRightHand.z - 0.05 * fallEase,
+      this.baseRightHand.x - 0.04 * fallEase,
+      this.baseRightHand.y + 0.06 * fallEase,
+      this.baseRightHand.z - 0.04 * fallEase,
     );
-
-    this.leftFoot.position.copy(this.baseLeftFoot);
-    this.rightFoot.position.copy(this.baseRightFoot);
+    this.leftFoot.position.set(
+      this.baseLeftFoot.x + 0.02 * fallEase,
+      this.baseLeftFoot.y + 0.1 * fallEase,
+      this.baseLeftFoot.z + 0.06 * fallEase,
+    );
+    this.rightFoot.position.set(
+      this.baseRightFoot.x - 0.02 * fallEase,
+      this.baseRightFoot.y + 0.1 * fallEase,
+      this.baseRightFoot.z + 0.06 * fallEase,
+    );
 
     // 武器在独立坐标系下从右手高度自然坠落地表并平躺
     if (this.staffDetached) {
@@ -423,10 +464,10 @@ export class Minion extends THREE.Group implements CombatUnit {
       const startY = this.staffStartPos.y;
       const startZ = this.staffStartPos.z;
 
-      // 目标平躺点：在右手脱落位置旁侧，y = 0.035m（贴在地面之上）
+      // 目标平躺点：在右手脱落位置旁侧，略抬离地面避免 z-fight
       const targetX = startX - 0.22;
       const targetZ = startZ + 0.35;
-      const targetY = 0.035;
+      const targetY = 0.05;
 
       this.staff.position.x = THREE.MathUtils.lerp(startX, targetX, fallEase);
       this.staff.position.y = THREE.MathUtils.lerp(startY, targetY, fallEase);
@@ -450,22 +491,13 @@ export class Minion extends THREE.Group implements CombatUnit {
       );
     }
 
-    // 2. 渐隐（0.8s ~ 1.6s）
+    // 2. 全身渐隐（身体 / 帽 / 手 / 脚 / 杖同一 opacity）
     if (this.deathElapsed >= fadeStart) {
       const tFade = (this.deathElapsed - fadeStart) / (duration - fadeStart);
       const opacity = THREE.MathUtils.clamp(1.0 - tFade, 0, 1);
-
-      this.traverse((obj) => {
-        const meshObj = obj as THREE.Mesh;
-        if (meshObj.isMesh && meshObj.material) {
-          const list = Array.isArray(meshObj.material)
-            ? meshObj.material
-            : [meshObj.material];
-          for (const mat of list) {
-            mat.opacity = opacity;
-          }
-        }
-      });
+      for (const mat of this.deathFadeMats) {
+        mat.opacity = opacity;
+      }
     }
   }
 
@@ -777,16 +809,26 @@ export class Minion extends THREE.Group implements CombatUnit {
   dispose(): void {
     this.traverse((obj) => {
       const mesh = obj as THREE.Mesh;
+      if (!mesh.isMesh) return;
       if (mesh.geometry) mesh.geometry.dispose();
       const material = mesh.material;
       if (!material) return;
       const list = Array.isArray(material) ? material : [material];
       for (const m of list) {
+        // 脸贴图为类静态共享，禁止随单个小兵 dispose
         const std = m as THREE.MeshStandardMaterial;
-        std.map?.dispose();
+        if (
+          std.map &&
+          std.map !== Minion.aliveFaceTexture &&
+          std.map !== Minion.deadFaceTexture
+        ) {
+          std.map.dispose();
+        }
         m.dispose();
       }
     });
+    this.deathFadeMats = [];
+    this.healthBar.dispose();
   }
 }
 

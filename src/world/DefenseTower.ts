@@ -498,6 +498,28 @@ export class DefenseTower extends THREE.Group implements CombatUnit {
     this.clearTarget();
   }
 
+  /**
+   * 启动 GPU 预热：同时显示完整塔 + 残骸，供 renderer.compile 编译材质/上传几何。
+   * 结束后必须调用 restoreAfterGpuWarmup()。
+   */
+  prepareGpuWarmup(): void {
+    this.fullModel.visible = true;
+    this.brokenModel.visible = true;
+    // 预热时关掉点光，避免 compile 路径里额外处理光源变化
+    this.crystalLight.visible = false;
+  }
+
+  /** 预热结束后恢复到与存活状态一致的显示 */
+  restoreAfterGpuWarmup(): void {
+    const alive = this.isAlive;
+    this.fullModel.visible = alive;
+    this.brokenModel.visible = !alive;
+    this.crystalLight.visible = alive;
+    this.crystalLight.intensity = alive ? 0.85 : 0;
+    this.rangeMarker.visible = alive;
+    this.healthBar.visible = alive;
+  }
+
   dispose(): void {
     // Geometry 与 Material 为全局共享，此处仅清理节点引用
   }

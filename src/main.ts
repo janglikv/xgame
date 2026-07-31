@@ -58,6 +58,8 @@ function bootstrap(): void {
   camera.lookAt(0, 0, 0);
 
   const scene = new MainScene();
+  // 预编译残骸模型材质，避免首座防御塔摧毁时 GPU hitch
+  scene.warmUpGpu(renderer, camera);
 
   // 方案 1：后处理屏幕空间 silhouette 描边（整塔外轮廓，非零件级）
   const composer = new EffectComposer(renderer);

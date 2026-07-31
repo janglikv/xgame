@@ -661,11 +661,6 @@ export class MainScene extends THREE.Scene {
       tower.update(delta, combatUnits, this.projectiles);
     }
 
-    // 悬停目标若本帧死亡，清掉描边引用
-    if (this.hoverAttackUnit && !this.hoverAttackUnit.isAlive) {
-      this.clearAttackHover();
-    }
-
     // 英雄：意图 → 位移 → 限速转向 → 对准后从枪口开火
     this.missFortune.update(delta, this.projectiles);
 
@@ -683,9 +678,14 @@ export class MainScene extends THREE.Scene {
     if (this.missFortune.isAlive) minionHostiles.push(this.missFortune);
     this.minionSpawner.update(delta, minionHostiles, this.projectiles);
 
-    // 弹道追踪与命中结算（命中才 takeDamage）
+    // 弹道追踪与命中结算（命中才 takeDamage；塔在此帧可能被摧毁）
     this.projectiles.update(delta);
     this.minionSpawner.pruneDead();
+
+    // 须在 takeDamage 之后清悬停：否则同帧仍 OutlinePass 选中已隐藏的 fullModel
+    if (this.hoverAttackUnit && !this.hoverAttackUnit.isAlive) {
+      this.clearAttackHover();
+    }
 
     // 点击移动特效更新
     for (let i = this.clickEffects.length - 1; i >= 0; i--) {
@@ -702,6 +702,21 @@ export class MainScene extends THREE.Scene {
     resolveCircleCollisions(bodies);
     // 兵线两侧夹紧：圆心+半径不得超出地板 Z 范围
     clampBodiesToFloor(bodies, { halfZ: DirtFloor.HALF_Z });
+  }
+
+  /**
+   * 预编译防御塔残骸等「平时不可见」资源的 WebGL 程序，
+   * 避免首座塔被摧毁时才 compile shader / 上传几何导致单帧卡顿。
+   */
+  warmUpGpu(renderer: THREE.WebGLRenderer, camera: THREE.Camera): void {
+    for (const tower of this.defenseTowers) {
+      tower.prepareGpuWarmup();
+    }
+    this.updateMatrixWorld(true);
+    renderer.compile(this, camera);
+    for (const tower of this.defenseTowers) {
+      tower.restoreAfterGpuWarmup();
+    }
   }
 
   /** 窗口尺寸变化时由外部调用 */
