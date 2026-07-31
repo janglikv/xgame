@@ -226,8 +226,8 @@ export class Minion extends THREE.Group implements CombatUnit {
       metalness: 0.1,
     });
 
-    // 1. 帽檐底盘（平滑圆盘，放大帽檐尺寸）
-    const brimRadius = 0.62;
+    // 1. 帽檐底盘
+    const brimRadius = 0.52;
     const brimDisk = new THREE.Mesh(
       new THREE.CylinderGeometry(brimRadius, brimRadius, 0.045, 32),
       hatMat,
