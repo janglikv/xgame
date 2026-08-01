@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { HomingBolt } from '../../effects/HomingBolt';
 import type { ProjectileManager } from '../../effects/ProjectileManager';
 import { CircleBody } from '../collision/CircleBody';
 import type { CombatUnit, TeamId } from '../combat/CombatUnit';
@@ -34,6 +35,8 @@ export class MissFortune extends THREE.Group implements CombatUnit {
   static readonly WINDUP = 0.14;
   /** 粉色子弹视觉缩放（已翻 4 倍） */
   static readonly BOLT_SCALE = 9.6;
+  /** 粉色弹道飞行速度（翻 3 倍） */
+  static readonly BOLT_SPEED = HomingBolt.SPEED * 3;
   /** 粉色弹道色 */
   static readonly BOLT_COLOR = 0xf9a8d4;
   static readonly BOLT_EMISSIVE = 0xec4899;
@@ -492,6 +495,7 @@ export class MissFortune extends THREE.Group implements CombatUnit {
       color: MissFortune.BOLT_COLOR,
       emissive: MissFortune.BOLT_EMISSIVE,
       boltScale: MissFortune.BOLT_SCALE * 0.55,
+      boltSpeedScale: 3,
       getEnemyUnits,
     });
 
@@ -939,6 +943,7 @@ export class MissFortune extends THREE.Group implements CombatUnit {
       {
         color: MissFortune.BOLT_COLOR,
         emissive: MissFortune.BOLT_EMISSIVE,
+        speed: MissFortune.BOLT_SPEED,
       },
     );
   }

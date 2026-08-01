@@ -24,6 +24,8 @@ export interface GameSettingsSnapshot {
   minionSpawn: boolean;
   /** 防御塔无敌 */
   towerInvincible: boolean;
+  /** 控制按键（'right' = 鼠标右键控制，'left' = 鼠标左键控制） */
+  mouseControl: 'right' | 'left';
 }
 
 export const DEFAULT_GAME_SETTINGS: GameSettingsSnapshot = {
@@ -35,6 +37,7 @@ export const DEFAULT_GAME_SETTINGS: GameSettingsSnapshot = {
   godMode: false,
   minionSpawn: true,
   towerInvincible: false,
+  mouseControl: 'right',
 };
 
 export function loadGameSettings(): GameSettingsSnapshot {
@@ -78,6 +81,8 @@ export function loadGameSettings(): GameSettingsSnapshot {
         typeof data.towerInvincible === 'boolean'
           ? data.towerInvincible
           : DEFAULT_GAME_SETTINGS.towerInvincible,
+      mouseControl:
+        data.mouseControl === 'left' ? 'left' : DEFAULT_GAME_SETTINGS.mouseControl,
     };
   } catch {
     return { ...DEFAULT_GAME_SETTINGS };
@@ -95,6 +100,7 @@ export function saveGameSettings(state: GameSettingsSnapshot): void {
       godMode: !!state.godMode,
       minionSpawn: !!state.minionSpawn,
       towerInvincible: !!state.towerInvincible,
+      mouseControl: state.mouseControl === 'left' ? 'left' : 'right',
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
   } catch {

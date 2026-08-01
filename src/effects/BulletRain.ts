@@ -18,6 +18,8 @@ export interface BulletRainSpawn {
   emissive?: number;
   /** 视觉缩放，默认 4 */
   boltScale?: number;
+  /** 落弹飞行速度倍率，默认 1 */
+  boltSpeedScale?: number;
   /** 每帧提供当前可受伤的敌方单位 */
   getEnemyUnits: () => readonly CombatUnit[];
 }
@@ -56,6 +58,7 @@ export class BulletRain extends THREE.Group {
   private readonly color: number;
   private readonly emissive: number;
   private readonly boltScale: number;
+  private readonly boltSpeedScale: number;
 
   constructor(spawn: BulletRainSpawn) {
     super();
@@ -70,6 +73,7 @@ export class BulletRain extends THREE.Group {
     this.emissive =
       spawn.emissive ?? (spawn.team === 'blue' ? 0xec4899 : 0xef4444);
     this.boltScale = Math.max(0.5, spawn.boltScale ?? 4);
+    this.boltSpeedScale = Math.max(0.1, spawn.boltSpeedScale ?? 1);
 
     this.position.set(spawn.centerX, 0, spawn.centerZ);
 
@@ -288,7 +292,7 @@ export class BulletRain extends THREE.Group {
       mesh: core,
       glow,
       landY,
-      speed: 5.5 + Math.random() * 3.5,
+      speed: (5.5 + Math.random() * 3.5) * this.boltSpeedScale,
       alive: true,
     });
   }

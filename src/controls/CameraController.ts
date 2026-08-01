@@ -407,7 +407,7 @@ export class CameraController {
    */
   getWasdWishXZ(out: THREE.Vector3): THREE.Vector3 {
     out.set(0, 0, 0);
-    if (!this.enabled) return out;
+    if (!this.enabled || this.fixedCamera) return out;
     if (!document.hasFocus() || document.hidden) return out;
 
     this.fillHorizontalBasis();

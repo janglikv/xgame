@@ -27,6 +27,8 @@ export interface EscMenuOptions {
   onMinionSpawnChange?: (enabled: boolean) => void;
   /** 防御塔无敌开关回调 */
   onTowerInvincibleChange?: (invincible: boolean) => void;
+  /** 控制按键切换回调（'right' | 'left'） */
+  onMouseControlChange?: (mode: 'right' | 'left') => void;
   /** 面板开/关（用于暂停相机等） */
   onOpenChange?: (open: boolean) => void;
   /** 获取当前相机实时参数 */
@@ -40,6 +42,7 @@ export interface EscMenuOptions {
   initialGodMode?: boolean;
   initialMinionSpawn?: boolean;
   initialTowerInvincible?: boolean;
+  initialMouseControl?: 'right' | 'left';
 }
 
 type HitId =
@@ -50,6 +53,7 @@ type HitId =
   | 'godMode'
   | 'minionSpawn'
   | 'towerInvincible'
+  | 'mouseControl'
   | 'brightness'
   | 'skip1m'
   | 'skip3m'
@@ -122,6 +126,7 @@ export class EscMenu {
   private readonly onGodModeChange?: (invincible: boolean) => void;
   private readonly onMinionSpawnChange?: (enabled: boolean) => void;
   private readonly onTowerInvincibleChange?: (invincible: boolean) => void;
+  private readonly onMouseControlChange?: (mode: 'right' | 'left') => void;
   private readonly onOpenChange?: (open: boolean) => void;
   private readonly getCameraParams?: () => CameraParams;
 
@@ -143,6 +148,7 @@ export class EscMenu {
   private godModeOn: boolean;
   private minionSpawnOn: boolean;
   private towerInvincibleOn: boolean;
+  private mouseControl: 'right' | 'left';
   /** 全局亮度 0~1 */
   private brightness: number;
   private hoverId: HitId | null = null;
@@ -164,6 +170,7 @@ export class EscMenu {
     this.onGodModeChange = options.onGodModeChange;
     this.onMinionSpawnChange = options.onMinionSpawnChange;
     this.onTowerInvincibleChange = options.onTowerInvincibleChange;
+    this.onMouseControlChange = options.onMouseControlChange;
     this.onOpenChange = options.onOpenChange;
     this.getCameraParams = options.getCameraParams;
     this.axesOn = options.initialAxesVisible ?? true;
@@ -173,6 +180,7 @@ export class EscMenu {
     this.godModeOn = options.initialGodMode ?? false;
     this.minionSpawnOn = options.initialMinionSpawn ?? true;
     this.towerInvincibleOn = options.initialTowerInvincible ?? false;
+    this.mouseControl = options.initialMouseControl ?? 'right';
     this.brightness = THREE.MathUtils.clamp(
       options.initialBrightness ?? 1,
       0,
@@ -434,6 +442,11 @@ export class EscMenu {
         this.dirty = true;
         this.onTowerInvincibleChange?.(this.towerInvincibleOn);
         break;
+      case 'mouseControl':
+        this.mouseControl = this.mouseControl === 'right' ? 'left' : 'right';
+        this.dirty = true;
+        this.onMouseControlChange?.(this.mouseControl);
+        break;
       case 'skip1m':
         this.onSkipTime(60, 1);
         this.setOpen(false);
@@ -545,10 +558,10 @@ export class EscMenu {
     const leftX = pad;
     const rightX = pad + colW + gap;
 
-    // 左栏：7 个开关（紧凑但不挤）
-    const rowH = 62;
-    const rowGap = 8;
-    const listY = 96;
+    // 左栏：8 个开关（紧凑但不挤）
+    const rowH = 55;
+    const rowGap = 6;
+    const listY = 88;
 
     // 右栏：相机卡片 → 亮度 → 快进
     const brightY = 318;
@@ -559,10 +572,10 @@ export class EscMenu {
     const skipGap = 12;
     const skipBtnW = (colW - skipGap) / 2;
 
-    const closeH = 58;
-    // 贴在左栏底部下方，消除大块留白
-    const listEnd = listY + (rowH + rowGap) * 6 + rowH;
-    const closeY = Math.min(H - pad - closeH, listEnd + 24);
+    const closeH = 56;
+    // 贴在左栏底部下方
+    const listEnd = listY + (rowH + rowGap) * 7 + rowH;
+    const closeY = Math.min(H - pad - closeH, listEnd + 16);
 
     this.regions = [
       { id: 'axes', x: leftX, y: listY, w: colW, h: rowH },
@@ -605,6 +618,13 @@ export class EscMenu {
         id: 'towerInvincible',
         x: leftX,
         y: listY + (rowH + rowGap) * 6,
+        w: colW,
+        h: rowH,
+      },
+      {
+        id: 'mouseControl',
+        x: leftX,
+        y: listY + (rowH + rowGap) * 7,
         w: colW,
         h: rowH,
       },
@@ -668,7 +688,7 @@ export class EscMenu {
     ctx.font = '400 16px system-ui, -apple-system, "Segoe UI", sans-serif';
     ctx.fillText('按 Esc 关闭', W - pad, 58);
 
-    // 左栏 7 个开关
+    // 左栏 8 个开关
     this.drawToggleRow(
       this.region('axes'),
       '坐标参考线',
@@ -689,7 +709,7 @@ export class EscMenu {
       this.region('cameraLock'),
       '锁定视角',
       this.cameraLocked
-        ? '跟随英雄 · 右键点地 / WASD 移动'
+        ? '跟随英雄 · 鼠标点地 / WASD 移动'
         : '关闭后为自由视角（WASD 移镜头 / 拖拽）',
       this.cameraLocked,
       this.hoverId === 'cameraLock',
@@ -726,6 +746,16 @@ export class EscMenu {
       this.towerInvincibleOn,
       this.hoverId === 'towerInvincible',
       this.pressId === 'towerInvincible',
+    );
+    this.drawToggleRow(
+      this.region('mouseControl'),
+      '控制按键 (右键/左键)',
+      this.mouseControl === 'left'
+        ? '当前：鼠标左键移动与攻击 (右键取消技能)'
+        : '当前：鼠标右键移动与攻击 (左键确认技能)',
+      this.mouseControl === 'left',
+      this.hoverId === 'mouseControl',
+      this.pressId === 'mouseControl',
     );
 
     // 右栏 1：相机实时参数仪表卡片

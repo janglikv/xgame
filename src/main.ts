@@ -11,6 +11,7 @@ import {
   type GameSettingsSnapshot,
 } from './storage/gameSettings';
 import { EscMenu } from './ui/EscMenu';
+import { FpsOverlay } from './ui/FpsOverlay';
 import { preloadGameCursors, setGameCursor } from './ui/GameCursor';
 import { ScreenBrightness } from './ui/ScreenBrightness';
 import { SkillBar } from './ui/SkillBar';
@@ -143,6 +144,9 @@ function bootstrap(): void {
     if (patch.towerInvincible !== undefined) {
       settings.towerInvincible = patch.towerInvincible;
     }
+    if (patch.mouseControl !== undefined) {
+      settings.mouseControl = patch.mouseControl;
+    }
     saveGameSettings(settings);
   };
 
@@ -157,6 +161,7 @@ function bootstrap(): void {
     initialGodMode: settings.godMode,
     initialMinionSpawn: settings.minionSpawn,
     initialTowerInvincible: settings.towerInvincible,
+    initialMouseControl: settings.mouseControl,
     onAxesChange: (visible) => {
       scene.setAxesVisible(visible);
       persistSettings({ showAxes: visible });
@@ -199,6 +204,9 @@ function bootstrap(): void {
     onTowerInvincibleChange: (invincible) => {
       scene.setTowerInvincible(invincible);
       persistSettings({ towerInvincible: invincible });
+    },
+    onMouseControlChange: (mode) => {
+      persistSettings({ mouseControl: mode });
     },
     onOpenChange: (open) => {
       controls.setEnabled(!open);
@@ -243,15 +251,18 @@ function bootstrap(): void {
   const onPointerDownCommand = (e: PointerEvent): void => {
     if (escMenu.isOpen) return;
 
+    const mainBtn = settings.mouseControl === 'left' ? 0 : 2;
+    const cancelBtn = settings.mouseControl === 'left' ? 2 : 0;
+
     if (scene.isSkillTargeting) {
-      if (e.button === 2) {
+      if (e.button === cancelBtn) {
         e.preventDefault();
         scene.cancelSkillTargeting();
         skillBar.setTargeting(null);
         refreshGameplayCursor(e.clientX, e.clientY);
         return;
       }
-      if (e.button === 0) {
+      if (e.button === mainBtn) {
         e.preventDefault();
         if (!pickGround(e.clientX, e.clientY)) return;
         scene.confirmSkillTarget(hitPoint.x, hitPoint.z);
@@ -262,26 +273,20 @@ function bootstrap(): void {
       return;
     }
 
-    if (e.button === 2) {
+    if (e.button === mainBtn) {
       e.preventDefault();
       if (!pickGround(e.clientX, e.clientY)) return;
-      scene.commandHeroMoveTo(hitPoint.x, hitPoint.z);
-      return;
-    }
 
-    if (e.button === 0) {
-      if (!pickGround(e.clientX, e.clientY)) return;
-
-      let enemy = scene.pickEnemyNear(hitPoint.x, hitPoint.z, 0.6);
+      // 统一按键控制：若点击目标为敌人则执行攻击，否则移动至指定位置
+      let enemy = scene.pickAttackHover(raycaster, hitPoint.x, hitPoint.z);
       if (!enemy) {
-        enemy = scene.pickEnemyNear(hitPoint.x, hitPoint.z, 2.5);
-      }
-      if (!enemy) {
-        enemy = scene.findClosestEnemy(hitPoint.x, hitPoint.z);
+        enemy = scene.pickEnemyNear(hitPoint.x, hitPoint.z, 0.6);
       }
 
       if (enemy) {
         scene.commandHeroAttack(enemy);
+      } else {
+        scene.commandHeroMoveTo(hitPoint.x, hitPoint.z);
       }
       return;
     }
@@ -381,10 +386,12 @@ function bootstrap(): void {
 
   window.addEventListener('resize', onResize);
 
+  const fpsOverlay = new FpsOverlay();
   const clock = new THREE.Clock();
 
   const tick = (): void => {
     requestAnimationFrame(tick);
+    fpsOverlay.update();
     const delta = Math.min(clock.getDelta(), 1 / 20);
 
     if (controls.isLocked) {
