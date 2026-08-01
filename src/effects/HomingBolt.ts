@@ -1,6 +1,9 @@
 import * as THREE from 'three';
 import type { CombatUnit, TeamId } from '../world/combat/CombatUnit';
 
+/** 命中音效来源：用于区分英雄 / 小兵 / 防御塔 */
+export type BoltHitSfx = 'hero' | 'minion' | 'tower';
+
 export interface HomingBoltSpawn {
   origin: THREE.Vector3;
   target: CombatUnit;
@@ -14,6 +17,8 @@ export interface HomingBoltSpawn {
   color?: number;
   /** 覆盖队伍默认自发光色 */
   emissive?: number;
+  /** 命中音效类型；省略则不播或由发射方决定 */
+  hitSfx?: BoltHitSfx;
 }
 
 /**
@@ -28,6 +33,8 @@ export class HomingBolt extends THREE.Group {
   static readonly MAX_LIFE = 2.8 * 3;
 
   readonly team: TeamId;
+  /** 命中时播放的音效种类（无则不播专用命中音） */
+  readonly hitSfx: BoltHitSfx | null;
   private readonly target: CombatUnit;
   private readonly damage: number;
   private readonly hitRadius: number;
@@ -45,6 +52,7 @@ export class HomingBolt extends THREE.Group {
     super();
     this.name = 'HomingBolt';
     this.team = spawn.team;
+    this.hitSfx = spawn.hitSfx ?? null;
     this.target = spawn.target;
     this.damage = spawn.damage;
     this.speed = spawn.speed ?? HomingBolt.SPEED;

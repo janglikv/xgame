@@ -471,6 +471,7 @@ export class DefenseTower extends THREE.Group implements CombatUnit {
         DefenseTower.ATTACK_DAMAGE,
         this.team,
         DefenseTower.BOLT_SCALE,
+        { hitSfx: 'tower' },
       );
     }
 

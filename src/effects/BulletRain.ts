@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { getGameAudio } from '../audio/GameAudio';
 import type { CombatUnit, TeamId } from '../world/combat/CombatUnit';
 
 export interface BulletRainSpawn {
@@ -239,13 +240,23 @@ export class BulletRain extends THREE.Group {
     const cx = this.position.x;
     const cz = this.position.z;
     const r = this.radius;
+    let hitCount = 0;
     for (const unit of this.getEnemyUnits()) {
       if (!unit.isAlive || unit.team === this.team) continue;
       // 圆心距 ≤ 半径 + 目标碰撞半径，边缘单位也能吃到
       const d = Math.hypot(unit.collider.x - cx, unit.collider.z - cz);
       if (d <= r + unit.collider.radius * 0.35) {
         unit.takeDamage(this.damagePerTick);
+        hitCount += 1;
       }
+    }
+    // 范围 tick 命中：轻薄连击感（内部有 aoe 节流）
+    if (hitCount > 0) {
+      getGameAudio().playProjectileHit({
+        kind: 'aoe',
+        pitch: 1.02 + Math.random() * 0.08,
+        gain: Math.min(1, 0.55 + hitCount * 0.12),
+      });
     }
   }
 

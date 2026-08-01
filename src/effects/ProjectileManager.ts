@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { getGameAudio } from '../audio/GameAudio';
 import type { CombatUnit, TeamId } from '../world/combat/CombatUnit';
 import { BulletRain, type BulletRainSpawn } from './BulletRain';
 import { HitSpark } from './HitSpark';
@@ -31,7 +32,10 @@ export class ProjectileManager {
     damage: number,
     team: TeamId,
     scale = 1,
-    extras?: Pick<HomingBoltSpawn, 'color' | 'emissive' | 'speed'>,
+    extras?: Pick<
+      HomingBoltSpawn,
+      'color' | 'emissive' | 'speed' | 'hitSfx'
+    >,
   ): void {
     this.fire({ origin, target, damage, team, scale, ...extras });
   }
@@ -51,6 +55,7 @@ export class ProjectileManager {
 
       if (bolt.didHit) {
         this.spawnSpark(bolt.position, bolt.team);
+        this.playHitSfx(bolt);
       }
 
       this.parent.remove(bolt);
@@ -97,5 +102,15 @@ export class ProjectileManager {
     const spark = new HitSpark(position.clone(), team);
     this.sparks.push(spark);
     this.parent.add(spark);
+  }
+
+  /** 追踪弹命中音：按发射方 hitSfx，缺省按队伍给中性小兵感 */
+  private playHitSfx(bolt: HomingBolt): void {
+    const kind = bolt.hitSfx ?? 'minion';
+    getGameAudio().playProjectileHit({
+      kind,
+      pitch: 0.96 + Math.random() * 0.1,
+      gain: kind === 'tower' ? 1 : kind === 'hero' ? 0.9 : 0.75,
+    });
   }
 }

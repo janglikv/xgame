@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { getGameAudio } from '../../audio/GameAudio';
 import { HomingBolt } from '../../effects/HomingBolt';
 import type { ProjectileManager } from '../../effects/ProjectileManager';
 import { CircleBody } from '../collision/CircleBody';
@@ -482,6 +483,7 @@ export class MissFortune extends THREE.Group implements CombatUnit {
     this.shootAnimTimer = 0.32;
     this.activeShotRight = this.nextShotRight;
     this.nextShotRight = !this.nextShotRight;
+    getGameAudio().playHeroBulletRainStart();
 
     projectiles.spawnBulletRain({
       centerX: x,
@@ -932,8 +934,14 @@ export class MissFortune extends THREE.Group implements CombatUnit {
     const muzzle = this.nextShotRight ? this.rightMuzzle : this.leftMuzzle;
     this.activeShotRight = this.nextShotRight;
     this.shootAnimTimer = 0.28;
+    const hand = this.nextShotRight ? 'right' : 'left';
     this.nextShotRight = !this.nextShotRight;
     muzzle.getWorldPosition(this.muzzleWorld);
+    // 程序化双枪音效：左右 pan + 轻微音高抖动，避免机械重复
+    getGameAudio().playHeroGunshot({
+      hand,
+      pitch: 0.96 + Math.random() * 0.1,
+    });
     projectiles.fireAt(
       this.muzzleWorld,
       target,
@@ -944,6 +952,7 @@ export class MissFortune extends THREE.Group implements CombatUnit {
         color: MissFortune.BOLT_COLOR,
         emissive: MissFortune.BOLT_EMISSIVE,
         speed: MissFortune.BOLT_SPEED,
+        hitSfx: 'hero',
       },
     );
   }

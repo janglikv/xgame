@@ -718,7 +718,7 @@ export class Minion extends THREE.Group implements CombatUnit {
       this.stats.attackDamage,
       this.team,
       this.stats.boltScale,
-      { speed: HomingBolt.SPEED * 0.3 },
+      { speed: HomingBolt.SPEED * 0.3, hitSfx: 'minion' },
     );
   }
 

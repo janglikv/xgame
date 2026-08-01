@@ -3,6 +3,7 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { OutlinePass } from 'three/addons/postprocessing/OutlinePass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { getGameAudio } from './audio/GameAudio';
 import { CameraController } from './controls/CameraController';
 import { MainScene } from './scenes/MainScene';
 import {
@@ -116,6 +117,19 @@ function bootstrap(): void {
   scene.setMinionSpawnEnabled(settings.minionSpawn);
   scene.setTowerInvincible(settings.towerInvincible);
 
+  // 音频：程序化 SFX；须用户手势后 unlock（浏览器策略）
+  const audio = getGameAudio();
+  audio.setSfxVolume(settings.sfxVolume);
+  const unlockAudio = (): void => {
+    void audio.unlock().then(() => {
+      if (!audio.isUnlocked) return;
+      window.removeEventListener('pointerdown', unlockAudio);
+      window.removeEventListener('keydown', unlockAudio);
+    });
+  };
+  window.addEventListener('pointerdown', unlockAudio);
+  window.addEventListener('keydown', unlockAudio);
+
   // 全局亮度压暗层（主场景后、设置面板前）
   const screenBrightness = new ScreenBrightness();
   screenBrightness.setSize(width, height);
@@ -146,6 +160,10 @@ function bootstrap(): void {
     }
     if (patch.mouseControl !== undefined) {
       settings.mouseControl = patch.mouseControl;
+    }
+    if (patch.sfxVolume !== undefined) {
+      settings.sfxVolume = patch.sfxVolume;
+      audio.setSfxVolume(patch.sfxVolume);
     }
     saveGameSettings(settings);
   };
