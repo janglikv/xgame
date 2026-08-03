@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { getGameAudio } from '../audio/GameAudio';
 import { GroundCastIndicator } from '../effects/GroundCastIndicator';
 import { GroundClickEffect } from '../effects/GroundClickEffect';
 import { ProjectileManager } from '../effects/ProjectileManager';
@@ -251,10 +252,35 @@ export class MainScene extends THREE.Scene {
     return this.commandHeroCastW();
   }
 
-  /** 直接施放 W */
   commandHeroCastW(): boolean {
     if (!this.missFortune.isAlive) return false;
     return this.missFortune.castW();
+  }
+
+  private flashSkillEnabled = true;
+
+  setFlashSkillEnabled(enabled: boolean): void {
+    this.flashSkillEnabled = enabled;
+  }
+
+  /** D 键疾跑：0 CD */
+  castHeroGhost(): boolean {
+    if (!this.missFortune.isAlive) return false;
+    this.missFortune.castGhost();
+    getGameAudio().playHeroGhost();
+    return true;
+  }
+
+  /** F 键闪现：0 CD */
+  castHeroFlash(aimX: number, aimZ: number): boolean {
+    if (!this.flashSkillEnabled) return false;
+    if (!this.missFortune.isAlive) return false;
+    const res = this.missFortune.castFlash(aimX, aimZ);
+    if (res) {
+      getGameAudio().playHeroFlash();
+      return true;
+    }
+    return false;
   }
 
   /** 按 E：进入/取消「枪林弹雨」选点 */

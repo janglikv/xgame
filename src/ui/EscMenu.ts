@@ -29,6 +29,8 @@ export interface EscMenuOptions {
   onTowerInvincibleChange?: (invincible: boolean) => void;
   /** 控制按键切换回调（'right' | 'left'） */
   onMouseControlChange?: (mode: 'right' | 'left') => void;
+  /** 闪现技能开关回调 */
+  onFlashSkillChange?: (enabled: boolean) => void;
   /** 面板开/关（用于暂停相机等） */
   onOpenChange?: (open: boolean) => void;
   /** 获取当前相机实时参数 */
@@ -43,6 +45,7 @@ export interface EscMenuOptions {
   initialMinionSpawn?: boolean;
   initialTowerInvincible?: boolean;
   initialMouseControl?: 'right' | 'left';
+  initialFlashSkill?: boolean;
 }
 
 type HitId =
@@ -54,6 +57,7 @@ type HitId =
   | 'minionSpawn'
   | 'towerInvincible'
   | 'mouseControl'
+  | 'flashSkill'
   | 'brightness'
   | 'skip1m'
   | 'skip3m'
@@ -127,6 +131,7 @@ export class EscMenu {
   private readonly onMinionSpawnChange?: (enabled: boolean) => void;
   private readonly onTowerInvincibleChange?: (invincible: boolean) => void;
   private readonly onMouseControlChange?: (mode: 'right' | 'left') => void;
+  private readonly onFlashSkillChange?: (enabled: boolean) => void;
   private readonly onOpenChange?: (open: boolean) => void;
   private readonly getCameraParams?: () => CameraParams;
 
@@ -149,6 +154,7 @@ export class EscMenu {
   private minionSpawnOn: boolean;
   private towerInvincibleOn: boolean;
   private mouseControl: 'right' | 'left';
+  private flashSkillOn: boolean;
   /** 全局亮度 0~1 */
   private brightness: number;
   private hoverId: HitId | null = null;
@@ -171,6 +177,7 @@ export class EscMenu {
     this.onMinionSpawnChange = options.onMinionSpawnChange;
     this.onTowerInvincibleChange = options.onTowerInvincibleChange;
     this.onMouseControlChange = options.onMouseControlChange;
+    this.onFlashSkillChange = options.onFlashSkillChange;
     this.onOpenChange = options.onOpenChange;
     this.getCameraParams = options.getCameraParams;
     this.axesOn = options.initialAxesVisible ?? true;
@@ -181,6 +188,7 @@ export class EscMenu {
     this.minionSpawnOn = options.initialMinionSpawn ?? true;
     this.towerInvincibleOn = options.initialTowerInvincible ?? false;
     this.mouseControl = options.initialMouseControl ?? 'right';
+    this.flashSkillOn = options.initialFlashSkill ?? true;
     this.brightness = THREE.MathUtils.clamp(
       options.initialBrightness ?? 1,
       0,
@@ -447,6 +455,11 @@ export class EscMenu {
         this.dirty = true;
         this.onMouseControlChange?.(this.mouseControl);
         break;
+      case 'flashSkill':
+        this.flashSkillOn = !this.flashSkillOn;
+        this.dirty = true;
+        this.onFlashSkillChange?.(this.flashSkillOn);
+        break;
       case 'skip1m':
         this.onSkipTime(60, 1);
         this.setOpen(false);
@@ -558,10 +571,10 @@ export class EscMenu {
     const leftX = pad;
     const rightX = pad + colW + gap;
 
-    // 左栏：8 个开关（紧凑但不挤）
-    const rowH = 55;
-    const rowGap = 6;
-    const listY = 88;
+    // 左栏：9 个开关（紧凑整齐）
+    const rowH = 50;
+    const rowGap = 5;
+    const listY = 86;
 
     // 右栏：相机卡片 → 亮度 → 快进
     const brightY = 318;
@@ -572,10 +585,10 @@ export class EscMenu {
     const skipGap = 12;
     const skipBtnW = (colW - skipGap) / 2;
 
-    const closeH = 56;
+    const closeH = 54;
     // 贴在左栏底部下方
-    const listEnd = listY + (rowH + rowGap) * 7 + rowH;
-    const closeY = Math.min(H - pad - closeH, listEnd + 16);
+    const listEnd = listY + (rowH + rowGap) * 8 + rowH;
+    const closeY = Math.min(H - pad - closeH, listEnd + 12);
 
     this.regions = [
       { id: 'axes', x: leftX, y: listY, w: colW, h: rowH },
@@ -625,6 +638,13 @@ export class EscMenu {
         id: 'mouseControl',
         x: leftX,
         y: listY + (rowH + rowGap) * 7,
+        w: colW,
+        h: rowH,
+      },
+      {
+        id: 'flashSkill',
+        x: leftX,
+        y: listY + (rowH + rowGap) * 8,
         w: colW,
         h: rowH,
       },
@@ -756,6 +776,16 @@ export class EscMenu {
       this.mouseControl === 'left',
       this.hoverId === 'mouseControl',
       this.pressId === 'mouseControl',
+    );
+    this.drawToggleRow(
+      this.region('flashSkill'),
+      '闪现技能 (F键)',
+      this.flashSkillOn
+        ? '开启 · 按 F 键瞬移至鼠标位置 (0 CD)'
+        : '关闭 · 按 F 键禁用闪现位移',
+      this.flashSkillOn,
+      this.hoverId === 'flashSkill',
+      this.pressId === 'flashSkill',
     );
 
     // 右栏 1：相机实时参数仪表卡片

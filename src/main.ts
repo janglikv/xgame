@@ -223,8 +223,13 @@ function bootstrap(): void {
       scene.setTowerInvincible(invincible);
       persistSettings({ towerInvincible: invincible });
     },
+    initialFlashSkill: settings.flashSkillEnabled,
     onMouseControlChange: (mode) => {
       persistSettings({ mouseControl: mode });
+    },
+    onFlashSkillChange: (enabled) => {
+      scene.setFlashSkillEnabled(enabled);
+      persistSettings({ flashSkillEnabled: enabled });
     },
     onOpenChange: (open) => {
       controls.setEnabled(!open);
@@ -437,6 +442,32 @@ function bootstrap(): void {
   };
 
   window.addEventListener('resize', onResize);
+
+  let currentClientX = window.innerWidth / 2;
+  let currentClientY = window.innerHeight / 2;
+
+  window.addEventListener('pointermove', (e: PointerEvent) => {
+    currentClientX = e.clientX;
+    currentClientY = e.clientY;
+  }, { passive: true });
+
+  window.addEventListener('keydown', (e: KeyboardEvent) => {
+    if (e.repeat) return;
+    if (escMenu.isOpen) return;
+    const targetEl = e.target as HTMLElement | null;
+    const tag = targetEl?.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+
+    if (e.code === 'KeyD') {
+      scene.castHeroGhost();
+    } else if (e.code === 'KeyF') {
+      if (pickGround(currentClientX, currentClientY)) {
+        scene.castHeroFlash(hitPoint.x, hitPoint.z);
+      } else if (hasPointerGround) {
+        scene.castHeroFlash(lastPointerGroundX, lastPointerGroundZ);
+      }
+    }
+  });
 
   const fpsOverlay = new FpsOverlay();
   const clock = new THREE.Clock();

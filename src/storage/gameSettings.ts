@@ -26,6 +26,8 @@ export interface GameSettingsSnapshot {
   towerInvincible: boolean;
   /** 控制按键（'right' = 鼠标右键控制，'left' = 鼠标左键控制） */
   mouseControl: 'right' | 'left';
+  /** 闪现技能开关（F 键） */
+  flashSkillEnabled: boolean;
   /** 音效音量 0~1 */
   sfxVolume: number;
 }
@@ -40,6 +42,7 @@ export const DEFAULT_GAME_SETTINGS: GameSettingsSnapshot = {
   minionSpawn: true,
   towerInvincible: false,
   mouseControl: 'right',
+  flashSkillEnabled: true,
   sfxVolume: 0.72,
 };
 
@@ -86,6 +89,10 @@ export function loadGameSettings(): GameSettingsSnapshot {
           : DEFAULT_GAME_SETTINGS.towerInvincible,
       mouseControl:
         data.mouseControl === 'left' ? 'left' : DEFAULT_GAME_SETTINGS.mouseControl,
+      flashSkillEnabled:
+        typeof data.flashSkillEnabled === 'boolean'
+          ? data.flashSkillEnabled
+          : DEFAULT_GAME_SETTINGS.flashSkillEnabled,
       sfxVolume: clamp01(
         typeof data.sfxVolume === 'number' && Number.isFinite(data.sfxVolume)
           ? data.sfxVolume
@@ -109,6 +116,7 @@ export function saveGameSettings(state: GameSettingsSnapshot): void {
       minionSpawn: !!state.minionSpawn,
       towerInvincible: !!state.towerInvincible,
       mouseControl: state.mouseControl === 'left' ? 'left' : 'right',
+      flashSkillEnabled: typeof state.flashSkillEnabled === 'boolean' ? state.flashSkillEnabled : true,
       sfxVolume: clamp01(state.sfxVolume),
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));

@@ -249,6 +249,8 @@ export class MissFortune extends THREE.Group implements CombatUnit {
   private wCd = 0;
   /** W 攻速增益剩余时间（秒） */
   private wBuffRemaining = 0;
+  /** D 疾跑剩余时间（秒） */
+  private ghostTimer = 0;
   /** E 技能剩余冷却（秒） */
   private eCd = 0;
   /** R 技能剩余冷却（秒） */
@@ -1181,6 +1183,120 @@ export class MissFortune extends THREE.Group implements CombatUnit {
     this.moveTargetZ = z;
   }
 
+  /** D 疾跑：0 CD，获得持续 5 秒高额移动速度加成 */
+  castGhost(): void {
+    if (!this.isAlive) return;
+    this.ghostTimer = 5.0;
+  }
+
+  /** F 闪现：0 CD，瞬间朝着目标位置方向闪现最多 4.5 米 */
+  castFlash(
+    aimX: number,
+    aimZ: number,
+  ): { x: number; z: number } | null {
+    if (!this.isAlive) return null;
+    if (!Number.isFinite(aimX) || !Number.isFinite(aimZ)) return null;
+
+    const startX = this.position.x;
+    const startZ = this.position.z;
+    let dx = aimX - startX;
+    let dz = aimZ - startZ;
+    let dist = Math.hypot(dx, dz);
+
+    const maxDist = 4.5;
+    let flashX = aimX;
+    let flashZ = aimZ;
+
+    // 若指针过于贴近英雄脚下，朝当前英雄面向闪现
+    if (dist < 0.1) {
+      dx = Math.sin(this.yaw);
+      dz = Math.cos(this.yaw);
+      dist = 1;
+      flashX = startX + dx * maxDist;
+      flashZ = startZ + dz * maxDist;
+    } else if (dist > maxDist) {
+      const s = maxDist / dist;
+      flashX = startX + dx * s;
+      flashZ = startZ + dz * s;
+    }
+
+    // 调整朝向
+    this.requestFacing(dx, dz);
+
+    // 瞬间更新英雄世界坐标
+    this.position.x = flashX;
+    this.position.z = flashZ;
+
+    // 若有目标点，平移同步
+    if (this.moveTargetX != null && this.moveTargetZ != null) {
+      this.moveTargetX += flashX - startX;
+      this.moveTargetZ += flashZ - startZ;
+    }
+
+    this.spawnFlashEffect(startX, startZ, flashX, flashZ);
+
+    return { x: flashX, z: flashZ };
+  }
+
+  private spawnFlashEffect(
+    sx: number,
+    sz: number,
+    fx: number,
+    fz: number,
+  ): void {
+    const p = this.parent ?? this;
+
+    // 起点与终点闪现环尺寸缩小 10 倍
+    const startRing = new THREE.Mesh(
+      new THREE.RingGeometry(0.005, 0.045, 16),
+      new THREE.MeshBasicMaterial({
+        color: 0xfacc15,
+        transparent: true,
+        opacity: 0.5,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+    startRing.rotation.x = -Math.PI / 2;
+    startRing.position.set(sx, 0.05, sz);
+    p.add(startRing);
+
+    const endRing = new THREE.Mesh(
+      new THREE.RingGeometry(0.01, 0.065, 16),
+      new THREE.MeshBasicMaterial({
+        color: 0x38bdf8,
+        transparent: true,
+        opacity: 0.55,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+    endRing.rotation.x = -Math.PI / 2;
+    endRing.position.set(fx, 0.05, fz);
+    p.add(endRing);
+
+    let elapsed = 0;
+    const fade = () => {
+      elapsed += 0.04;
+      const progress = elapsed / 0.2;
+      if (progress >= 1) {
+        p.remove(startRing);
+        p.remove(endRing);
+        startRing.geometry.dispose();
+        (startRing.material as THREE.Material).dispose();
+        endRing.geometry.dispose();
+        (endRing.material as THREE.Material).dispose();
+      } else {
+        (startRing.material as THREE.MeshBasicMaterial).opacity = 0.5 * (1 - progress);
+        (endRing.material as THREE.MeshBasicMaterial).opacity = 0.55 * (1 - progress);
+        startRing.scale.setScalar(1 + progress * 0.15);
+        endRing.scale.setScalar(1 + progress * 0.12);
+        setTimeout(fade, 40);
+      }
+    };
+    setTimeout(fade, 40);
+  }
+
   /**
    * 仅追击位移（不取消攻击目标）。
    * 普攻追敌时内部调用。
@@ -1241,6 +1357,9 @@ export class MissFortune extends THREE.Group implements CombatUnit {
     }
     if (this.wBuffRemaining > 0) {
       this.wBuffRemaining = Math.max(0, this.wBuffRemaining - delta);
+    }
+    if (this.ghostTimer > 0) {
+      this.ghostTimer = Math.max(0, this.ghostTimer - delta);
     }
     if (this.eCd > 0) {
       this.eCd = Math.max(0, this.eCd - delta);
@@ -1478,12 +1597,17 @@ export class MissFortune extends THREE.Group implements CombatUnit {
     let moveFaceX: number | null = null;
     let moveFaceZ: number | null = null;
 
+    // 疾跑与 W 技能叠加加速度
+    const ghostMult = this.ghostTimer > 0 ? 1.85 : 1.0;
+    const wMult = this.wBuffRemaining > 0 ? 1.45 : 1.0;
+    const currentMaxSpeed = MissFortune.MOVE_SPEED * wMult * ghostMult;
+
     if (this.moveInputActive) {
       // WASD：相对镜头的连续方向，满速
       moveFaceX = this.moveInputX;
       moveFaceZ = this.moveInputZ;
-      desiredVelX = this.moveInputX * MissFortune.MOVE_SPEED;
-      desiredVelZ = this.moveInputZ * MissFortune.MOVE_SPEED;
+      desiredVelX = this.moveInputX * currentMaxSpeed;
+      desiredVelZ = this.moveInputZ * currentMaxSpeed;
     } else if (this.moveTargetX != null && this.moveTargetZ != null) {
       const dx = this.moveTargetX - this.position.x;
       const dz = this.moveTargetZ - this.position.z;
@@ -1504,7 +1628,7 @@ export class MissFortune extends THREE.Group implements CombatUnit {
         moveFaceZ = dirZ;
 
         // 默认冲满速；仅在进入刹车距离后按运动学收速（满速约 0.1s 刹停）
-        let desiredSpeed = MissFortune.MOVE_SPEED;
+        let desiredSpeed = currentMaxSpeed;
         const spd = this.speed();
         const brakeDist =
           (spd * spd) / (2 * Math.max(MissFortune.MOVE_DECEL, 1e-4));

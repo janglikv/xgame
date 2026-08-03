@@ -272,6 +272,30 @@ export class GameAudio {
     }, 48);
   }
 
+  /** D 疾跑：昂扬上升增益音效 */
+  playHeroGhost(): void {
+    if (!this.unlocked || this.muted || !this.gunBody) return;
+    try {
+      const now = Tone.now();
+      this.gunBody.triggerAttackRelease('D4', '16n', now, 0.7);
+      this.gunBody.triggerAttackRelease('A4', '8n', now + 0.08, 0.85);
+    } catch {
+      // 忽略未解锁音频并发异常
+    }
+  }
+
+  /** F 闪现：清亮空灵位移音效 */
+  playHeroFlash(): void {
+    if (!this.unlocked || this.muted || !this.hitMetal || !this.gunAir) return;
+    try {
+      const now = Tone.now();
+      this.hitMetal.triggerAttackRelease('E6', '32n', now, 0.85);
+      this.gunAir.triggerAttackRelease('16n', now + 0.02, 0.65);
+    } catch {
+      // 忽略未解锁音频并发异常
+    }
+  }
+
   /**
    * 预留采样播放：先 loadSample，再 playSample。
    * 未加载时静默失败（合成路径不受影响）。
