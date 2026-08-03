@@ -454,6 +454,10 @@ function bootstrap(): void {
     }
 
     scene.update(delta);
+    // 死亡动画结束后英雄已传送回水晶：锁定镜头从死亡点平滑拉回
+    if (scene.hero.consumeRespawnCameraPan()) {
+      controls.smoothPanToFollow(1.35);
+    }
     controls.update(delta);
     // 目标死亡等逻辑可能清掉悬停，与 OutlinePass 同步
     syncHoverOutline();

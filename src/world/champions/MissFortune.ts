@@ -278,7 +278,19 @@ export class MissFortune extends THREE.Group implements CombatUnit {
 
   private spawnX: number;
   private spawnZ: number;
-  private respawnTimer = 0;
+
+  /** 死亡动画总时长（秒）：倒下 + 停留 + 渐隐，对齐小兵节奏 */
+  private static readonly DEATH_DURATION = 1.6;
+  private isDead = false;
+  private deathElapsed = 0;
+  /** 死亡渐隐材质（克隆后可安全改 opacity） */
+  private deathFadeMats: THREE.Material[] = [];
+  private deathMatsReady = false;
+  /** 死亡动画刚结束并已传送回水晶：供镜头平滑拉回，消费一次 */
+  private respawnCameraRequested = false;
+
+  private static aliveFaceTexture: THREE.CanvasTexture | null = null;
+  private static deadFaceTexture: THREE.CanvasTexture | null = null;
 
   private readonly healthBar: HealthBar;
 
@@ -322,11 +334,15 @@ export class MissFortune extends THREE.Group implements CombatUnit {
         }),
       );
 
+    if (!MissFortune.aliveFaceTexture) {
+      MissFortune.aliveFaceTexture = createFaceTexture(MissFortune.BODY);
+    }
+
     // —— 身体 ——
     this.bodyMesh = new THREE.Mesh(
       new THREE.SphereGeometry(0.42, 24, 20),
       new THREE.MeshStandardMaterial({
-        map: createFaceTexture(MissFortune.BODY),
+        map: MissFortune.aliveFaceTexture,
         roughness: 0.6,
         metalness: 0.04,
       }),
@@ -455,29 +471,184 @@ export class MissFortune extends THREE.Group implements CombatUnit {
   }
 
   get isAlive(): boolean {
-    return this.hp > 0;
+    return this.hp > 0 && !this.isDead;
+  }
+
+  /** 是否正在播放死亡动画（倒下 / 渐隐） */
+  get isDeathAnimating(): boolean {
+    return this.isDead;
+  }
+
+  /**
+   * 死亡动画结束并已传送回水晶后触发一次。
+   * 主循环消费后驱动镜头平滑拉回复活点。
+   */
+  consumeRespawnCameraPan(): boolean {
+    if (!this.respawnCameraRequested) return false;
+    this.respawnCameraRequested = false;
+    return true;
   }
 
   takeDamage(amount: number): void {
     if (this.invincible || !this.isAlive || amount <= 0) return;
     this.hp = Math.max(0, this.hp - amount);
     this.healthBar.setHp(this.hp, this.maxHp);
-    if (!this.isAlive) {
-      this.clearPendingCast();
-      this.clearAttackTarget();
-      this.stopMoving();
-      this.rChannelRemaining = 0;
-      this.wBuffRemaining = 0;
-      this.respawnTimer = 5;
-      this.visible = false;
-      this.healthBar.visible = false;
+    if (this.hp <= 0) {
+      this.triggerDeath();
     }
   }
 
+  private triggerDeath(): void {
+    if (this.isDead) return;
+    this.isDead = true;
+    this.deathElapsed = 0;
+    this.hp = 0;
+    this.healthBar.setHp(0, this.maxHp);
+    this.healthBar.visible = false;
+    this.collider.setMarkerVisible(false);
+    this.clearPendingCast();
+    this.clearAttackTarget();
+    this.stopMoving();
+    this.rChannelRemaining = 0;
+    this.wBuffRemaining = 0;
+    this.velX = 0;
+    this.velZ = 0;
+    this.shootAnimTimer = 0;
+    this.windupElapsed = -1;
+    this.moveAnimWeight = 0;
+
+    // KO 晕眩表情（叉叉眼），与小兵同风格
+    if (!MissFortune.deadFaceTexture) {
+      MissFortune.deadFaceTexture = createDeadFaceTexture(MissFortune.BODY);
+    }
+    const bodyMat = this.bodyMesh.material as THREE.MeshStandardMaterial;
+    bodyMat.map = MissFortune.deadFaceTexture;
+    bodyMat.needsUpdate = true;
+
+    this.prepareDeathFadeMaterials();
+  }
+
+  /** 克隆网格材质做渐隐；可重复死亡（第二次起只重置 opacity） */
+  private prepareDeathFadeMaterials(): void {
+    if (this.deathMatsReady) {
+      for (const mat of this.deathFadeMats) {
+        mat.transparent = true;
+        mat.depthWrite = false;
+        mat.opacity = 1;
+        mat.needsUpdate = true;
+      }
+      this.traverse((obj) => {
+        const mesh = obj as THREE.Mesh;
+        if (mesh.isMesh) {
+          mesh.castShadow = false;
+          mesh.receiveShadow = false;
+        }
+      });
+      return;
+    }
+
+    this.deathFadeMats = [];
+    const cloneMap = new Map<THREE.Material, THREE.Material>();
+    const originals: THREE.Material[] = [];
+
+    this.traverse((obj) => {
+      const mesh = obj as THREE.Mesh;
+      if (!mesh.isMesh || !mesh.material) return;
+
+      const sourceList = Array.isArray(mesh.material)
+        ? mesh.material
+        : [mesh.material];
+      const clonedList = sourceList.map((src) => {
+        let mat = cloneMap.get(src);
+        if (!mat) {
+          mat = src.clone();
+          mat.transparent = true;
+          mat.depthWrite = false;
+          mat.opacity = 1;
+          mat.needsUpdate = true;
+          cloneMap.set(src, mat);
+          originals.push(src);
+          this.deathFadeMats.push(mat);
+        }
+        return mat;
+      });
+      mesh.material =
+        clonedList.length === 1 ? clonedList[0]! : clonedList;
+      mesh.castShadow = false;
+      mesh.receiveShadow = false;
+    });
+
+    // 不 dispose 原材质上的共享脸贴图；仅丢弃材质壳
+    for (const src of originals) {
+      src.dispose();
+    }
+    this.deathMatsReady = true;
+  }
+
+  private updateDeath(delta: number): void {
+    this.deathElapsed += delta;
+    const duration = MissFortune.DEATH_DURATION;
+    const fallTime = 0.45;
+    const fadeStart = 0.55;
+
+    // 1. 倒下（整套身体/帽/手随 bodyRoot 倾倒；脚独立收拢）
+    const tFall = Math.min(1, this.deathElapsed / fallTime);
+    const fallEase = 1 - Math.pow(1 - tFall, 2.5);
+
+    const angle = Math.PI * 0.42 * fallEase;
+    this.bodyRoot.rotation.x = -angle;
+    this.bodyRoot.rotation.z = 0;
+    this.bodyRoot.position.y = 0.12 + 0.42 * (1 - Math.cos(angle));
+    this.bodyRoot.position.z = -0.12 * fallEase;
+
+    this.leftHand.position.set(
+      this.baseLeftHand.x + 0.04 * fallEase,
+      this.baseLeftHand.y + 0.06 * fallEase,
+      this.baseLeftHand.z - 0.04 * fallEase,
+    );
+    this.rightHand.position.set(
+      this.baseRightHand.x - 0.04 * fallEase,
+      this.baseRightHand.y + 0.06 * fallEase,
+      this.baseRightHand.z - 0.04 * fallEase,
+    );
+    this.leftHand.rotation.set(0.2 * fallEase, 0, 0.15 * fallEase);
+    this.rightHand.rotation.set(0.2 * fallEase, 0, -0.15 * fallEase);
+
+    this.leftFoot.position.set(
+      this.baseLeftFoot.x + 0.02 * fallEase,
+      this.baseLeftFoot.y + 0.1 * fallEase,
+      this.baseLeftFoot.z + 0.06 * fallEase,
+    );
+    this.rightFoot.position.set(
+      this.baseRightFoot.x - 0.02 * fallEase,
+      this.baseRightFoot.y + 0.1 * fallEase,
+      this.baseRightFoot.z + 0.06 * fallEase,
+    );
+
+    // 2. 全身渐隐
+    if (this.deathElapsed >= fadeStart) {
+      const tFade = (this.deathElapsed - fadeStart) / (duration - fadeStart);
+      const opacity = THREE.MathUtils.clamp(1 - tFade, 0, 1);
+      for (const mat of this.deathFadeMats) {
+        mat.opacity = opacity;
+      }
+    }
+
+    // 3. 动画结束 → 水晶前复活，并请求镜头平滑拉回
+    if (this.deathElapsed >= duration) {
+      this.respawn();
+      this.respawnCameraRequested = true;
+    }
+  }
+
+  /** 在出生点（水晶前）满血复活并重置姿态 / 材质 */
   respawn(): void {
+    this.isDead = false;
+    this.deathElapsed = 0;
     this.hp = MissFortune.MAX_HP;
     this.healthBar.setHp(this.hp, this.maxHp);
     this.healthBar.visible = true;
+    this.collider.setMarkerVisible(CircleBody.markersVisible);
     this.position.set(this.spawnX, 0, this.spawnZ);
     this.clearPendingCast();
     this.clearAttackTarget();
@@ -488,8 +659,44 @@ export class MissFortune extends THREE.Group implements CombatUnit {
     this.velZ = 0;
     this.yaw = Math.PI / 2;
     this.desiredYaw = this.yaw;
+    this.turnActive = false;
     this.rotation.set(0, this.yaw, 0);
     this.visible = true;
+    this.resetDeathPoseAndMaterials();
+  }
+
+  /** 复活后还原站立姿态、阴影与表情 */
+  private resetDeathPoseAndMaterials(): void {
+    this.bodyRoot.position.set(0, 0, 0);
+    this.bodyRoot.rotation.set(0, 0, 0);
+    this.leftHand.position.copy(this.baseLeftHand);
+    this.rightHand.position.copy(this.baseRightHand);
+    this.leftHand.rotation.set(0, 0, 0);
+    this.rightHand.rotation.set(0, 0, 0);
+    this.leftFoot.position.copy(this.baseLeftFoot);
+    this.rightFoot.position.copy(this.baseRightFoot);
+    this.applyLocomotionPose(0);
+
+    for (const mat of this.deathFadeMats) {
+      mat.opacity = 1;
+      mat.transparent = false;
+      mat.depthWrite = true;
+      mat.needsUpdate = true;
+    }
+
+    this.traverse((obj) => {
+      const mesh = obj as THREE.Mesh;
+      if (mesh.isMesh) {
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+      }
+    });
+
+    if (MissFortune.aliveFaceTexture) {
+      const bodyMat = this.bodyMesh.material as THREE.MeshStandardMaterial;
+      bodyMat.map = MissFortune.aliveFaceTexture;
+      bodyMat.needsUpdate = true;
+    }
   }
 
   /** 弹道落点：身体球中心 */
@@ -1015,13 +1222,12 @@ export class MissFortune extends THREE.Group implements CombatUnit {
   ): void {
     if (!(delta > 0) || !Number.isFinite(delta)) return;
 
+    if (this.isDead) {
+      this.updateDeath(delta);
+      return;
+    }
+
     if (!this.isAlive) {
-      if (this.respawnTimer > 0) {
-        this.respawnTimer = Math.max(0, this.respawnTimer - delta);
-        if (this.respawnTimer <= 0) {
-          this.respawn();
-        }
-      }
       return;
     }
 
@@ -1696,6 +1902,76 @@ function normalizeAngle(rad: number): number {
   while (a <= -Math.PI) a += Math.PI * 2;
   while (a > Math.PI) a -= Math.PI * 2;
   return a;
+}
+
+/**
+ * 死亡 KO 表情贴图（本文件私有）：
+ * 大黑叉叉眼 + 腮红，风格对齐小兵死亡脸。
+ */
+function createDeadFaceTexture(bodyColor: number): THREE.CanvasTexture {
+  const width = 1024;
+  const height = 512;
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('2D canvas context unavailable');
+
+  const bodyHex = `#${bodyColor.toString(16).padStart(6, '0')}`;
+  const darkColor = '#21181b';
+
+  ctx.fillStyle = bodyHex;
+  ctx.fillRect(0, 0, width, height);
+
+  const cx = width * 0.5;
+  const eyeY = height * 0.49;
+  const eyeGap = width * 0.075;
+  const eyeRy = height * 0.1;
+  const eyeRx = eyeRy;
+
+  const drawBlush = (bx: number) => {
+    const g = ctx.createRadialGradient(
+      bx,
+      height * 0.59,
+      0,
+      bx,
+      height * 0.59,
+      height * 0.08,
+    );
+    g.addColorStop(0, 'rgba(255, 120, 140, 0.55)');
+    g.addColorStop(0.5, 'rgba(255, 140, 160, 0.28)');
+    g.addColorStop(1, 'rgba(255, 180, 190, 0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.ellipse(bx, height * 0.59, eyeRx * 0.9, eyeRy * 0.55, 0, 0, Math.PI * 2);
+    ctx.fill();
+  };
+  drawBlush(cx - eyeGap * 1.55);
+  drawBlush(cx + eyeGap * 1.55);
+
+  const drawCrossEye = (ex: number) => {
+    const arm = eyeRx * 0.68;
+    ctx.strokeStyle = darkColor;
+    ctx.lineWidth = height * 0.052;
+    ctx.lineCap = 'round';
+
+    ctx.beginPath();
+    ctx.moveTo(ex - arm, eyeY - arm);
+    ctx.lineTo(ex + arm, eyeY + arm);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(ex - arm, eyeY + arm);
+    ctx.lineTo(ex + arm, eyeY - arm);
+    ctx.stroke();
+  };
+  drawCrossEye(cx - eyeGap);
+  drawCrossEye(cx + eyeGap);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.needsUpdate = true;
+  return texture;
 }
 
 /** 身体正面可爱表情贴图（本文件私有，不共享小兵实现） */

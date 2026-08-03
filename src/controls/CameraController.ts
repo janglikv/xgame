@@ -81,6 +81,15 @@ export class CameraController {
   private readonly followQuaternion = new THREE.Quaternion();
   private hasFollowSnapshot = false;
 
+  /**
+   * 锁定视角下平滑拉回跟随位姿（复活：从死亡点镜头过渡到水晶前）。
+   */
+  private panActive = false;
+  private panElapsed = 0;
+  private panDuration = 1.25;
+  private readonly panFrom = new THREE.Vector3();
+  private readonly panTo = new THREE.Vector3();
+
   private readonly forward = new THREE.Vector3();
   private readonly right = new THREE.Vector3();
   private readonly wishDir = new THREE.Vector3();
@@ -275,6 +284,7 @@ export class CameraController {
     this.viewMode = mode;
     this.clearKeys();
     this.isMouseDown = false;
+    this.cancelSmoothPan();
 
     if (mode === 'locked') {
       if (this.fixedCamera) {
@@ -297,9 +307,41 @@ export class CameraController {
   setFollowTarget(target: THREE.Object3D | null): void {
     this.followTarget = target;
     // 已锁定时不重拍快照，避免目标引用更新冲掉当前锁定关系
-    if (this.viewMode === 'locked' && this.hasFollowSnapshot) {
+    if (this.viewMode === 'locked' && this.hasFollowSnapshot && !this.panActive) {
       this.applyFollowPose();
     }
+  }
+
+  /**
+   * 从当前镜头位置平滑过渡到锁定跟随位姿（英雄已在复活点时调用）。
+   * 仅锁定视角生效；自由视角忽略。
+   * @param duration 过渡时长（秒）
+   */
+  smoothPanToFollow(duration = 1.25): void {
+    if (this.viewMode !== 'locked' || !this.followTarget || !this.hasFollowSnapshot) {
+      return;
+    }
+    this.panFrom.copy(this.camera.position);
+    this.panTo.copy(this.followTarget.position).add(this.followOffset);
+    // 已几乎贴在目标上则无需动画
+    if (this.panFrom.distanceToSquared(this.panTo) < 1e-6) {
+      this.panActive = false;
+      this.applyFollowPose();
+      return;
+    }
+    this.panElapsed = 0;
+    this.panDuration = Math.max(0.05, duration);
+    this.panActive = true;
+  }
+
+  /** 取消进行中的平滑拉回，下一帧恢复硬跟随 */
+  cancelSmoothPan(): void {
+    this.panActive = false;
+    this.panElapsed = 0;
+  }
+
+  get isSmoothPanning(): boolean {
+    return this.panActive;
   }
 
   private refreshCursor(): void {
@@ -447,12 +489,32 @@ export class CameraController {
 
   /**
    * 每帧调用：
-   * - 锁定：镜头跟随目标（英雄 WASD 在外部处理）
+   * - 锁定：镜头跟随目标（英雄 WASD 在外部处理）；复活时可平滑拉回
    * - 自由：按键移动镜头（朝向由鼠标控制）
    */
   update(delta: number): void {
     if (this.viewMode === 'locked') {
-      this.applyFollowPose();
+      if (this.panActive && this.followTarget && this.hasFollowSnapshot) {
+        // 终点随跟随目标更新（复活后英雄站定，基本不变）
+        this.panTo.copy(this.followTarget.position).add(this.followOffset);
+        this.panElapsed += Math.max(0, delta);
+        const t = THREE.MathUtils.clamp(
+          this.panElapsed / this.panDuration,
+          0,
+          1,
+        );
+        // ease-in-out cubic：慢起 → 快中 → 慢收
+        const ease =
+          t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+        this.camera.position.lerpVectors(this.panFrom, this.panTo, ease);
+        this.camera.quaternion.copy(this.followQuaternion);
+        if (t >= 1) {
+          this.panActive = false;
+          this.applyFollowPose();
+        }
+      } else {
+        this.applyFollowPose();
+      }
       return;
     }
 

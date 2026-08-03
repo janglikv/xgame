@@ -134,8 +134,8 @@ export class MainScene extends THREE.Scene {
     this.minionSpawner = new MinionWaveSpawner(this);
     this.projectiles = new ProjectileManager(this);
 
-    // 第一个角色：厄运小姐 @ x=0（独立模型、粉帽、三倍体型，无 AI）
-    this.missFortune = new MissFortune(0, 0);
+    // 第一个角色：厄运小姐 @ 蓝方水晶前（死亡后同点复活）
+    this.missFortune = new MissFortune(MinionWaveSpawner.BLUE_SPAWN_X, 0);
     this.add(this.missFortune);
 
     this.castIndicator = new GroundCastIndicator(
@@ -802,13 +802,16 @@ export class MainScene extends THREE.Scene {
   }
 
   private collectColliderBodies(): CircleBody[] {
-    return [
+    const bodies: CircleBody[] = [
       ...this.nexusCrystals.map((n) => n.collider),
       ...this.defenseTowers.map((t) => t.collider),
       ...this.minionSpawner.activeMinions
         .filter((m) => m.isAlive)
         .map((m) => m.collider),
-      this.missFortune.collider,
     ];
+    if (this.missFortune.isAlive) {
+      bodies.push(this.missFortune.collider);
+    }
+    return bodies;
   }
 }
