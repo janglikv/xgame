@@ -1,17 +1,19 @@
 import * as THREE from 'three';
 import { getGameAudio } from '../audio/GameAudio';
 import type { CombatUnit, TeamId } from '../world/combat/CombatUnit';
+import { BulletFan, type BulletFanSpawn } from './BulletFan';
 import { BulletRain, type BulletRainSpawn } from './BulletRain';
 import { HitSpark } from './HitSpark';
 import { HomingBolt, type HomingBoltSpawn } from './HomingBolt';
 
 /**
- * 管理追踪弹、区域落弹（枪林弹雨）与命中火花。
+ * 管理追踪弹、区域落弹（枪林弹雨）、扇形扫射与命中火花。
  */
 export class ProjectileManager {
   private readonly parent: THREE.Object3D;
   private readonly bolts: HomingBolt[] = [];
   private readonly rains: BulletRain[] = [];
+  private readonly fans: BulletFan[] = [];
   private readonly sparks: HitSpark[] = [];
 
   constructor(parent: THREE.Object3D) {
@@ -47,16 +49,26 @@ export class ProjectileManager {
     this.parent.add(rain);
   }
 
+  /** R 扇形扫射：锥形区域持续弹幕 + 周期伤害 */
+  spawnBulletFan(spawn: BulletFanSpawn): void {
+    const fan = new BulletFan(spawn);
+    this.fans.push(fan);
+    this.parent.add(fan);
+  }
+
   update(delta: number): void {
     for (let i = this.bolts.length - 1; i >= 0; i -= 1) {
       const bolt = this.bolts[i];
       const still = bolt.update(delta);
-      if (still) continue;
 
-      if (bolt.didHit) {
-        this.spawnSpark(bolt.position, bolt.team);
+      // 每次命中（含穿透中间段）出火花与音效
+      const hits = bolt.drainHitEvents();
+      for (const pos of hits) {
+        this.spawnSpark(pos, bolt.team);
         this.playHitSfx(bolt);
       }
+
+      if (still) continue;
 
       this.parent.remove(bolt);
       bolt.dispose();
@@ -69,6 +81,14 @@ export class ProjectileManager {
       this.parent.remove(rain);
       rain.dispose();
       this.rains.splice(i, 1);
+    }
+
+    for (let i = this.fans.length - 1; i >= 0; i -= 1) {
+      const fan = this.fans[i];
+      if (fan.update(delta)) continue;
+      this.parent.remove(fan);
+      fan.dispose();
+      this.fans.splice(i, 1);
     }
 
     for (let i = this.sparks.length - 1; i >= 0; i -= 1) {
@@ -91,6 +111,11 @@ export class ProjectileManager {
       rain.dispose();
     }
     this.rains.length = 0;
+    for (const fan of this.fans) {
+      this.parent.remove(fan);
+      fan.dispose();
+    }
+    this.fans.length = 0;
     for (const spark of this.sparks) {
       this.parent.remove(spark);
       spark.dispose();

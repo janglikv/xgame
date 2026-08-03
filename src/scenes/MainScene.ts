@@ -214,6 +214,49 @@ export class MainScene extends THREE.Scene {
     return this.targetingSkill;
   }
 
+  /**
+   * 按 Q：瞬发「一箭双雕」穿透弹。
+   * @param pointerXZ 指针地面坐标，用于选最近敌方
+   */
+  beginHeroSkillQ(pointerXZ?: { x: number; z: number } | null): boolean {
+    return this.commandHeroCastQ(pointerXZ);
+  }
+
+  /** 直接施放 Q（目标 = 指针附近最近敌人） */
+  commandHeroCastQ(pointerXZ?: { x: number; z: number } | null): boolean {
+    if (!this.missFortune.isAlive) return false;
+    return this.missFortune.castQ(
+      this.projectiles,
+      () => this.collectEnemyCombatUnits(this.missFortune.team),
+      pointerXZ,
+    );
+  }
+
+  /** 按 R：扇形弹幕扫射（朝指针方向） */
+  beginHeroSkillR(pointerXZ?: { x: number; z: number } | null): boolean {
+    return this.commandHeroCastR(pointerXZ);
+  }
+
+  commandHeroCastR(pointerXZ?: { x: number; z: number } | null): boolean {
+    if (!this.missFortune.isAlive) return false;
+    return this.missFortune.castR(
+      this.projectiles,
+      () => this.collectEnemyCombatUnits(this.missFortune.team),
+      pointerXZ,
+    );
+  }
+
+  /** 按 W：瞬发「热诚」双倍攻速 */
+  beginHeroSkillW(): boolean {
+    return this.commandHeroCastW();
+  }
+
+  /** 直接施放 W */
+  commandHeroCastW(): boolean {
+    if (!this.missFortune.isAlive) return false;
+    return this.missFortune.castW();
+  }
+
   /** 按 E：进入/取消「枪林弹雨」选点 */
   beginHeroSkillE(): boolean {
     if (!this.missFortune.canCastE()) return false;
@@ -273,7 +316,10 @@ export class MainScene extends THREE.Scene {
     return ok;
   }
 
-  /** 直接施放 E（不经选点 UI 时也可调用） */
+  /**
+   * 直接施放 E（不经选点 UI 时也可调用）。
+   * 超距时会排队走位，进入范围后在原瞄准点释放。
+   */
   commandHeroCastE(aimX: number, aimZ: number): boolean {
     if (!this.missFortune.isAlive) return false;
     const result = this.missFortune.castE(
@@ -283,6 +329,11 @@ export class MainScene extends THREE.Scene {
       () => this.collectEnemyCombatUnits(this.missFortune.team),
     );
     return result != null;
+  }
+
+  /** 英雄当前排队中的技能（超距走位施法） */
+  get heroQueuedSkill(): 'Q' | 'E' | null {
+    return this.missFortune.queuedSkill;
   }
 
   /**
@@ -662,7 +713,11 @@ export class MainScene extends THREE.Scene {
     }
 
     // 英雄：意图 → 位移 → 限速转向 → 对准后从枪口开火
-    this.missFortune.update(delta, this.projectiles);
+    this.missFortune.update(
+      delta,
+      this.projectiles,
+      this.collectEnemyCombatUnits(this.missFortune.team),
+    );
 
     // 选点中：施法距离圈跟着英雄走；死亡则取消
     if (this.targetingSkill) {

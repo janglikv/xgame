@@ -4,6 +4,11 @@ import type { CombatUnit, TeamId } from '../world/combat/CombatUnit';
 /** 命中音效来源：用于区分英雄 / 小兵 / 防御塔 */
 export type BoltHitSfx = 'hero' | 'minion' | 'tower';
 
+export type BoltPierceResult = {
+  target: CombatUnit;
+  damage: number;
+};
+
 export interface HomingBoltSpawn {
   origin: THREE.Vector3;
   target: CombatUnit;
@@ -19,10 +24,24 @@ export interface HomingBoltSpawn {
   emissive?: number;
   /** 命中音效类型；省略则不播或由发射方决定 */
   hitSfx?: BoltHitSfx;
+  /**
+   * 可穿透次数（命中后仍可再飞向下一目标的次数）。
+   * 与 getPierceTarget 同时提供时生效。
+   */
+  pierceRemaining?: number;
+  /**
+   * 命中后选取下一穿透目标；返回 null 则弹道结束。
+   * 仅在 pierceRemaining > 0 时调用。
+   */
+  getPierceTarget?: (
+    hitTarget: CombatUnit,
+    position: THREE.Vector3,
+  ) => BoltPierceResult | null;
 }
 
 /**
  * 锁定追踪弹道：飞向目标当前位置，命中碰撞半径后才结算伤害。
+ * 可选穿透：命中后可改锁定下一目标继续飞行。
  */
 export class HomingBolt extends THREE.Group {
   /** 弹道飞行速度（已翻 4 倍） */
@@ -33,10 +52,17 @@ export class HomingBolt extends THREE.Group {
   static readonly MAX_LIFE = 2.8 * 3;
 
   readonly team: TeamId;
-  /** 命中时播放的音效种类（无则不播专用命中音） */
+  /** 命中音效类型（无则不播专用命中音） */
   readonly hitSfx: BoltHitSfx | null;
-  private readonly target: CombatUnit;
-  private readonly damage: number;
+  private target: CombatUnit;
+  private damage: number;
+  private pierceRemaining: number;
+  private readonly getPierceTarget:
+    | ((
+        hitTarget: CombatUnit,
+        position: THREE.Vector3,
+      ) => BoltPierceResult | null)
+    | null;
   private readonly hitRadius: number;
   private readonly speed: number;
   private readonly core: THREE.Mesh;
@@ -44,6 +70,8 @@ export class HomingBolt extends THREE.Group {
   private age = 0;
   private _alive = true;
   private _didHit = false;
+  /** 本帧待播的命中事件（位置），供管理器出火花/音效 */
+  private readonly pendingHits: THREE.Vector3[] = [];
   private readonly aim = new THREE.Vector3();
   private readonly targetLastPos = new THREE.Vector3();
   private hasValidPos = false;
@@ -55,6 +83,8 @@ export class HomingBolt extends THREE.Group {
     this.hitSfx = spawn.hitSfx ?? null;
     this.target = spawn.target;
     this.damage = spawn.damage;
+    this.pierceRemaining = Math.max(0, Math.floor(spawn.pierceRemaining ?? 0));
+    this.getPierceTarget = spawn.getPierceTarget ?? null;
     this.speed = spawn.speed ?? HomingBolt.SPEED;
     this.position.copy(spawn.origin);
 
@@ -95,9 +125,16 @@ export class HomingBolt extends THREE.Group {
     return this._alive;
   }
 
-  /** 是否因命中目标而结束（超时/目标死亡消散为 false） */
+  /** 是否至少命中过一次（含穿透中间命中） */
   get didHit(): boolean {
     return this._didHit;
+  }
+
+  /** 取出并清空待处理命中位置（每点一次火花/音效） */
+  drainHitEvents(): THREE.Vector3[] {
+    if (this.pendingHits.length === 0) return [];
+    const out = this.pendingHits.splice(0, this.pendingHits.length);
+    return out;
   }
 
   /**
@@ -126,14 +163,14 @@ export class HomingBolt extends THREE.Group {
 
     if (dist <= this.hitRadius) {
       this.applyHit();
-      return false;
+      return this._alive;
     }
 
     const step = this.speed * delta;
     if (step >= dist) {
       this.position.copy(this.aim);
       this.applyHit();
-      return false;
+      return this._alive;
     }
 
     const inv = 1 / dist;
@@ -151,10 +188,44 @@ export class HomingBolt extends THREE.Group {
   }
 
   private applyHit(): void {
-    if (this.target.isAlive) {
-      this.target.takeDamage(this.damage);
-      this._didHit = true;
+    const hitTarget = this.target;
+    if (hitTarget.isAlive) {
+      hitTarget.takeDamage(this.damage);
     }
+    this._didHit = true;
+    this.pendingHits.push(this.position.clone());
+
+    // 穿透：以当前命中点为起点改锁定身后目标
+    if (this.pierceRemaining > 0 && this.getPierceTarget) {
+      const next = this.getPierceTarget(hitTarget, this.position);
+      if (
+        next &&
+        next.target.isAlive &&
+        next.target !== hitTarget &&
+        next.damage > 0
+      ) {
+        this.pierceRemaining -= 1;
+        this.target = next.target;
+        this.damage = next.damage;
+        this.hasValidPos = false;
+        this.target.getHitPoint(this.targetLastPos);
+        this.hasValidPos = true;
+        // 略向下一目标挪开，避免同一帧再次落在旧命中半径内
+        const nx = this.targetLastPos.x - this.position.x;
+        const ny = this.targetLastPos.y - this.position.y;
+        const nz = this.targetLastPos.z - this.position.z;
+        const nd = Math.hypot(nx, ny, nz);
+        if (nd > 1e-6) {
+          const nudge = Math.min(this.hitRadius * 1.2, nd * 0.35);
+          const inv = nudge / nd;
+          this.position.x += nx * inv;
+          this.position.y += ny * inv;
+          this.position.z += nz * inv;
+        }
+        return;
+      }
+    }
+
     this.kill();
   }
 

@@ -236,24 +236,15 @@ function bootstrap(): void {
   });
   escMenu.setSize(width, height);
 
-  // 底部技能栏 QWER（E = 枪林弹雨）
-  const skillBar = new SkillBar({
-    isInputBlocked: () => escMenu.isOpen,
-    onSkillPress: (slot) => {
-      if (slot === 'E') {
-        scene.beginHeroSkillE();
-        skillBar.setTargeting(scene.skillTargetingSlot);
-        refreshGameplayCursor();
-      }
-    },
-  });
-  skillBar.setSize(width, height);
-
   const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
   const raycaster = new THREE.Raycaster();
   const pointerNdc = new THREE.Vector2();
   const hitPoint = new THREE.Vector3();
   const wasdWish = new THREE.Vector3();
+  /** 最近一次指针对应的地面坐标（供 Q 选敌） */
+  let lastPointerGroundX = 0;
+  let lastPointerGroundZ = 0;
+  let hasPointerGround = false;
 
   const pickGround = (clientX: number, clientY: number): boolean => {
     const rect = renderer.domElement.getBoundingClientRect();
@@ -265,6 +256,39 @@ function bootstrap(): void {
     raycaster.setFromCamera(pointerNdc, camera);
     return raycaster.ray.intersectPlane(groundPlane, hitPoint) != null;
   };
+
+  const rememberPointerGroundFromHit = (): void => {
+    lastPointerGroundX = hitPoint.x;
+    lastPointerGroundZ = hitPoint.z;
+    hasPointerGround = true;
+  };
+
+  // 底部技能栏 QWER（Q/W/E/R）
+  const skillBar = new SkillBar({
+    isInputBlocked: () => escMenu.isOpen,
+    onSkillPress: (slot) => {
+      if (slot === 'Q') {
+        scene.beginHeroSkillQ(
+          hasPointerGround
+            ? { x: lastPointerGroundX, z: lastPointerGroundZ }
+            : null,
+        );
+      } else if (slot === 'W') {
+        scene.beginHeroSkillW();
+      } else if (slot === 'E') {
+        scene.beginHeroSkillE();
+        skillBar.setTargeting(scene.skillTargetingSlot);
+        refreshGameplayCursor();
+      } else if (slot === 'R') {
+        scene.beginHeroSkillR(
+          hasPointerGround
+            ? { x: lastPointerGroundX, z: lastPointerGroundZ }
+            : null,
+        );
+      }
+    },
+  });
+  skillBar.setSize(width, height);
 
   const onPointerDownCommand = (e: PointerEvent): void => {
     if (escMenu.isOpen) return;
@@ -295,17 +319,22 @@ function bootstrap(): void {
       e.preventDefault();
       if (!pickGround(e.clientX, e.clientY)) return;
 
-      // 统一按键控制：若点击目标为敌人则执行攻击，否则移动至指定位置
-      let enemy = scene.pickAttackHover(raycaster, hitPoint.x, hitPoint.z);
-      if (!enemy) {
-        enemy = scene.pickEnemyNear(hitPoint.x, hitPoint.z, 0.6);
-      }
+      // 与攻击指针同源：先刷新悬停描边，仅当短剑态才攻击，否则点地移动
+      // （不再用 pickEnemyNear 宽松兜底，避免点地板却被当成点附近小兵）
+      scene.updateAttackHover(raycaster);
+      syncHoverOutline();
+      const enemy = scene.pickAttackHover(
+        raycaster,
+        hitPoint.x,
+        hitPoint.z,
+      );
 
       if (enemy) {
         scene.commandHeroAttack(enemy);
       } else {
         scene.commandHeroMoveTo(hitPoint.x, hitPoint.z);
       }
+      refreshGameplayCursor(e.clientX, e.clientY);
       return;
     }
   };
@@ -358,6 +387,11 @@ function bootstrap(): void {
     }
 
     if (!updatePointerNdc(e.clientX, e.clientY)) return;
+
+    // 记录地面指针，供 Q 按「指针最近敌人」锁定
+    if (raycaster.ray.intersectPlane(groundPlane, hitPoint) != null) {
+      rememberPointerGroundFromHit();
+    }
 
     // 敌方塔 fullModel / 小兵 bodyRoot → 红描边；攻击指针同源
     scene.updateAttackHover(raycaster);
@@ -425,11 +459,31 @@ function bootstrap(): void {
     syncHoverOutline();
 
     skillBar.setCooldown(
+      'Q',
+      scene.hero.qCooldownRemaining,
+      scene.hero.qCooldownTotal,
+    );
+    skillBar.setCooldown(
+      'W',
+      scene.hero.wCooldownRemaining,
+      scene.hero.wCooldownTotal,
+    );
+    skillBar.setActive('W', scene.hero.isWBuffActive);
+    skillBar.setCooldown(
       'E',
       scene.hero.eCooldownRemaining,
       scene.hero.eCooldownTotal,
     );
-    skillBar.setTargeting(scene.skillTargetingSlot);
+    skillBar.setCooldown(
+      'R',
+      scene.hero.rCooldownRemaining,
+      scene.hero.rCooldownTotal,
+    );
+    skillBar.setActive('R', scene.hero.isRChanneling);
+    // 选点中优先；否则高亮排队走位施法的技能
+    skillBar.setTargeting(
+      scene.skillTargetingSlot ?? scene.heroQueuedSkill,
+    );
     skillBar.setHp(scene.hero.hp, scene.hero.maxHp);
 
     composer.render();

@@ -259,6 +259,19 @@ export class GameAudio {
     }, 110);
   }
 
+  /** W 技能激活：更高亢双响，提示攻速提升 */
+  playHeroWActivate(): void {
+    const base = 1.12 + (Math.random() * 0.05 - 0.02);
+    this.playHeroGunshot({ hand: 'left', pitch: base, gain: 0.82 });
+    window.setTimeout(() => {
+      this.playHeroGunshot({
+        hand: 'right',
+        pitch: base * 1.08,
+        gain: 0.72,
+      });
+    }, 48);
+  }
+
   /**
    * 预留采样播放：先 loadSample，再 playSample。
    * 未加载时静默失败（合成路径不受影响）。

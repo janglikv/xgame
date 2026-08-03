@@ -19,6 +19,8 @@ interface SlotState {
   cdTotal: number;
   /** 是否处于选点状态 */
   targeting: boolean;
+  /** 是否处于增益/持续激活中 */
+  active: boolean;
   /** 槽位是否已实现（未实现画十字） */
   ready: boolean;
   /** 简短技能名（可选） */
@@ -38,6 +40,7 @@ const DEFAULT_SLOT: SlotState = {
   cdRemaining: 0,
   cdTotal: 0,
   targeting: false,
+  active: false,
   ready: false,
   label: '',
 };
@@ -76,14 +79,26 @@ export class SkillBar {
   /** 当前按住的技能键 */
   private readonly pressed = new Set<SkillSlotId>();
   private readonly slots: Record<SkillSlotId, SlotState> = {
-    Q: { ...DEFAULT_SLOT },
-    W: { ...DEFAULT_SLOT },
+    Q: {
+      ...DEFAULT_SLOT,
+      ready: true,
+      label: '双雕',
+    },
+    W: {
+      ...DEFAULT_SLOT,
+      ready: true,
+      label: '热诚',
+    },
     E: {
       ...DEFAULT_SLOT,
       ready: true,
       label: '弹雨',
     },
-    R: { ...DEFAULT_SLOT },
+    R: {
+      ...DEFAULT_SLOT,
+      ready: true,
+      label: '扫射',
+    },
   };
   private dirty = true;
   private viewW = 1;
@@ -192,6 +207,14 @@ export class SkillBar {
       }
     }
     if (changed) this.dirty = true;
+  }
+
+  /** 标记增益/持续生效中的技能槽（可多槽并存） */
+  setActive(slot: SkillSlotId, active: boolean): void {
+    const s = this.slots[slot];
+    if (s.active === active) return;
+    s.active = active;
+    this.dirty = true;
   }
 
   /** 更新英雄生命值（显示在技能栏下方） */
@@ -374,12 +397,15 @@ export class SkillBar {
     const state = this.slots[slot];
     const pressed = this.pressed.has(slot);
     const targeting = state.targeting;
+    const active = state.active && !targeting;
     const onCd = state.cdRemaining > 0.02;
 
     // 外框
     this.roundRect(x, y, size, size, 7);
     if (targeting) {
       ctx.fillStyle = 'rgba(88, 40, 72, 0.95)';
+    } else if (active) {
+      ctx.fillStyle = 'rgba(40, 72, 48, 0.95)';
     } else if (pressed) {
       ctx.fillStyle = 'rgba(37, 72, 120, 0.95)';
     } else {
@@ -388,9 +414,11 @@ export class SkillBar {
     ctx.fill();
     ctx.strokeStyle = targeting
       ? 'rgba(244, 114, 182, 0.9)'
-      : pressed
-        ? 'rgba(96, 165, 250, 0.85)'
-        : 'rgba(148, 163, 184, 0.35)';
+      : active
+        ? 'rgba(74, 222, 128, 0.9)'
+        : pressed
+          ? 'rgba(96, 165, 250, 0.85)'
+          : 'rgba(148, 163, 184, 0.35)';
     ctx.lineWidth = 1.5;
     ctx.stroke();
 
@@ -401,6 +429,9 @@ export class SkillBar {
     if (targeting) {
       inner.addColorStop(0, 'rgba(120, 40, 90, 0.7)');
       inner.addColorStop(1, 'rgba(60, 20, 50, 0.8)');
+    } else if (active) {
+      inner.addColorStop(0, 'rgba(40, 96, 55, 0.75)');
+      inner.addColorStop(1, 'rgba(22, 50, 32, 0.85)');
     } else if (pressed) {
       inner.addColorStop(0, 'rgba(56, 96, 150, 0.55)');
       inner.addColorStop(1, 'rgba(30, 50, 80, 0.7)');
@@ -423,7 +454,11 @@ export class SkillBar {
     if (state.ready && state.label) {
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillStyle = targeting ? '#fbcfe8' : '#f9a8d4';
+      ctx.fillStyle = targeting
+        ? '#fbcfe8'
+        : active
+          ? '#bbf7d0'
+          : '#f9a8d4';
       ctx.font = '700 12px system-ui, -apple-system, "Segoe UI", sans-serif';
       ctx.fillText(state.label, cx, cy);
     } else {
@@ -485,21 +520,25 @@ export class SkillBar {
     this.roundRect(bx, by, badgeW, badgeH, 3);
     ctx.fillStyle = targeting
       ? 'rgba(219, 39, 119, 0.95)'
-      : pressed
-        ? 'rgba(59, 130, 246, 0.95)'
-        : 'rgba(30, 41, 59, 0.95)';
+      : active
+        ? 'rgba(22, 163, 74, 0.95)'
+        : pressed
+          ? 'rgba(59, 130, 246, 0.95)'
+          : 'rgba(30, 41, 59, 0.95)';
     ctx.fill();
     ctx.strokeStyle = targeting
       ? 'rgba(251, 207, 232, 0.75)'
-      : pressed
-        ? 'rgba(147, 197, 253, 0.7)'
-        : 'rgba(148, 163, 184, 0.35)';
+      : active
+        ? 'rgba(187, 247, 208, 0.75)'
+        : pressed
+          ? 'rgba(147, 197, 253, 0.7)'
+          : 'rgba(148, 163, 184, 0.35)';
     ctx.lineWidth = 1;
     ctx.stroke();
 
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillStyle = pressed || targeting ? '#eff6ff' : '#e2e8f0';
+    ctx.fillStyle = pressed || targeting || active ? '#eff6ff' : '#e2e8f0';
     ctx.font = '700 9px system-ui, -apple-system, "Segoe UI", sans-serif';
     ctx.fillText(slot, bx + badgeW / 2, by + badgeH / 2 + 0.5);
   }

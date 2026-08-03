@@ -4,7 +4,13 @@ import { HomingBolt } from '../../effects/HomingBolt';
 import type { ProjectileManager } from '../../effects/ProjectileManager';
 import { CircleBody } from '../collision/CircleBody';
 import type { CombatUnit, TeamId } from '../combat/CombatUnit';
-import { distXZ, isValidTarget } from '../combat/combatMath';
+import {
+  distXZ,
+  isValidTarget,
+  pickNearestEnemy,
+  pickNearestEnemyNearPoint,
+  pickPierceTargetBehind,
+} from '../combat/combatMath';
 import { HealthBar } from '../ui/HealthBar';
 
 /**
@@ -27,9 +33,9 @@ export class MissFortune extends THREE.Group implements CombatUnit {
   static readonly MAX_HP = 520;
   /** 与小兵同级，防御塔优先清兵时按距离选 */
   static readonly COMBAT_PRIORITY = 0;
-  /** 普攻射程（圆心距，远程 ADC） */
-  static readonly ATTACK_RANGE = 2.15;
-  static readonly ATTACK_DAMAGE = 52;
+  /** 普攻射程；需短于防御塔（DefenseTower.ATTACK_RANGE=2.0），进塔圈才能打塔 */
+  static readonly ATTACK_RANGE = 1.65;
+  static readonly ATTACK_DAMAGE = 26;
   /** 攻击间隔（秒，含前摇） */
   static readonly ATTACK_INTERVAL = 0.85;
   /** 出手前摇（秒） */
@@ -42,6 +48,37 @@ export class MissFortune extends THREE.Group implements CombatUnit {
   static readonly BOLT_COLOR = 0xf9a8d4;
   static readonly BOLT_EMISSIVE = 0xec4899;
 
+  // —— Q：一箭双雕（穿透弹） ——
+  /** 第一目标施法距离（圆心距） */
+  static readonly Q_RANGE = 1.85;
+  /**
+   * 超距时仍可锁定并走过去再放的最大距离。
+   * 超出则视为无目标。
+   */
+  static readonly Q_SEEK_RANGE = 6.5;
+  /**
+   * Q 按指针选敌：相对指针地面落点的最大吸附距离。
+   */
+  static readonly Q_POINTER_PICK_RADIUS = 2.4;
+  /** 第一段伤害 */
+  static readonly Q_DAMAGE = 38;
+  /** 穿透第二段伤害（略高） */
+  static readonly Q_BOUNCE_DAMAGE = 52;
+  /** 从第一目标起算的穿透搜索距离 */
+  static readonly Q_BOUNCE_RANGE = 1.7;
+  /** 穿透半锥角（度）：身后附近 */
+  static readonly Q_BOUNCE_HALF_ANGLE_DEG = 55;
+  /** 冷却（秒） */
+  static readonly Q_COOLDOWN = 5;
+
+  // —— W：热诚（双倍攻速） ——
+  /** 攻速倍率（2 = 双倍） */
+  static readonly W_AS_MULT = 2;
+  /** 增益持续（秒） */
+  static readonly W_DURATION = 4;
+  /** 冷却（秒） */
+  static readonly W_COOLDOWN = 10;
+
   // —— E：枪林弹雨 ——
   /** 施法距离（英雄圆心 → 落点圆心） */
   static readonly E_CAST_RANGE = 3.4;
@@ -52,11 +89,29 @@ export class MissFortune extends THREE.Group implements CombatUnit {
   /** 视觉落弹总数 */
   static readonly E_BOLT_COUNT = 52;
   /** 圈内敌方每次 tick 伤害 */
-  static readonly E_DAMAGE_PER_TICK = 14;
+  static readonly E_DAMAGE_PER_TICK = 7;
   /** 伤害 tick 间隔（秒） */
   static readonly E_TICK_INTERVAL = 0.28;
   /** 冷却（秒） */
   static readonly E_COOLDOWN = 7;
+
+  // —— R：弹幕扫射（扇形） ——
+  /** 扇形最大距离 */
+  static readonly R_RANGE = 4.4;
+  /** 半锥角（度） */
+  static readonly R_HALF_ANGLE_DEG = 40;
+  /** 扫射持续（秒） */
+  static readonly R_DURATION = 2.5;
+  /** 锥内每次 tick 伤害 */
+  static readonly R_DAMAGE_PER_TICK = 16;
+  /** 伤害 tick 间隔（秒） */
+  static readonly R_TICK_INTERVAL = 0.15;
+  /** 视觉弹波间隔 */
+  static readonly R_WAVE_INTERVAL = 0.085;
+  /** 每波子弹数 */
+  static readonly R_BOLTS_PER_WAVE = 8;
+  /** 冷却（秒） */
+  static readonly R_COOLDOWN = 16;
 
   /** 点地移动最大速度（世界单位/秒） */
   static readonly MOVE_SPEED = 1.35;
@@ -165,6 +220,19 @@ export class MissFortune extends THREE.Group implements CombatUnit {
 
   /** 当前普攻锁定目标 */
   private attackTarget: CombatUnit | null = null;
+  /**
+   * 攻击状态：右键点敌进入，点地 / WASD 取消。
+   * 开启期间目标死亡或暂无目标时，射程内新进敌人会自动锁定。
+   */
+  private attackStance = false;
+  /**
+   * 排队施法：目标/落点超距时先移动，进入范围后自动释放。
+   * 点地 / WASD / 新普攻指令会取消。
+   */
+  private pendingCast:
+    | { kind: 'Q'; target: CombatUnit }
+    | { kind: 'E'; aimX: number; aimZ: number }
+    | null = null;
   /** 攻击冷却：>0 时不能开始新前摇 */
   private attackCd = 0;
   /** 前摇计时；<0 表示不在前摇 */
@@ -175,8 +243,21 @@ export class MissFortune extends THREE.Group implements CombatUnit {
   /** 子弹发射瞬间的抬手动作倒计时 */
   private shootAnimTimer = 0;
   private readonly muzzleWorld = new THREE.Vector3();
+  /** Q 技能剩余冷却（秒） */
+  private qCd = 0;
+  /** W 技能剩余冷却（秒） */
+  private wCd = 0;
+  /** W 攻速增益剩余时间（秒） */
+  private wBuffRemaining = 0;
   /** E 技能剩余冷却（秒） */
   private eCd = 0;
+  /** R 技能剩余冷却（秒） */
+  private rCd = 0;
+  /** R 扫射引导剩余时间（>0 时定身扫射） */
+  private rChannelRemaining = 0;
+  /** R 扫射锁定朝向（世界 XZ） */
+  private rDirX = 1;
+  private rDirZ = 0;
   /**
    * 权威偏航角（弧度）。只由 applyFacing 推进；同步到 rotation.y。
    * 不回读 Three Euler，避免矩阵/四元数回写造成跳变。
@@ -382,8 +463,11 @@ export class MissFortune extends THREE.Group implements CombatUnit {
     this.hp = Math.max(0, this.hp - amount);
     this.healthBar.setHp(this.hp, this.maxHp);
     if (!this.isAlive) {
+      this.clearPendingCast();
       this.clearAttackTarget();
       this.stopMoving();
+      this.rChannelRemaining = 0;
+      this.wBuffRemaining = 0;
       this.respawnTimer = 5;
       this.visible = false;
       this.healthBar.visible = false;
@@ -395,8 +479,11 @@ export class MissFortune extends THREE.Group implements CombatUnit {
     this.healthBar.setHp(this.hp, this.maxHp);
     this.healthBar.visible = true;
     this.position.set(this.spawnX, 0, this.spawnZ);
+    this.clearPendingCast();
     this.clearAttackTarget();
     this.stopMoving();
+    this.rChannelRemaining = 0;
+    this.wBuffRemaining = 0;
     this.velX = 0;
     this.velZ = 0;
     this.yaw = Math.PI / 2;
@@ -411,11 +498,14 @@ export class MissFortune extends THREE.Group implements CombatUnit {
   }
 
   /**
-   * 锁定敌方单位普攻：射程内站桩开火，射程外追击。
-   * 点地移动会取消攻击目标。
+   * 锁定敌方单位普攻：进入攻击状态；射程内站桩开火，射程外追击。
+   * 点地 / WASD 会退出攻击状态。新普攻会取消排队技能。
    */
   setAttackTarget(target: CombatUnit): void {
     if (!this.isAlive || !isValidTarget(this, target)) return;
+    if (this.rChannelRemaining > 0) return;
+    this.clearPendingCast();
+    this.attackStance = true;
     this.attackTarget = target;
     this.windupElapsed = -1;
     // 只登记期望朝向，不改 yaw（由后续 applyFacing 限速转向）
@@ -431,13 +521,222 @@ export class MissFortune extends THREE.Group implements CombatUnit {
     }
   }
 
+  /** 退出攻击状态（玩家主动取消） */
   clearAttackTarget(): void {
+    this.attackStance = false;
     this.attackTarget = null;
     this.windupElapsed = -1;
   }
 
+  /** 取消排队中的 Q/E */
+  clearPendingCast(): void {
+    this.pendingCast = null;
+  }
+
   get hasAttackTarget(): boolean {
     return this.attackTarget != null;
+  }
+
+  /** 是否处于攻击状态（含等待射程内敌人进入） */
+  get isInAttackStance(): boolean {
+    return this.attackStance;
+  }
+
+  /** 当前排队施法的技能槽（技能栏高亮用） */
+  get queuedSkill(): 'Q' | 'E' | null {
+    return this.pendingCast?.kind ?? null;
+  }
+
+  /** Q 技能剩余冷却（秒） */
+  get qCooldownRemaining(): number {
+    return this.qCd;
+  }
+
+  get qCooldownTotal(): number {
+    return MissFortune.Q_COOLDOWN;
+  }
+
+  canCastQ(): boolean {
+    return this.isAlive && this.qCd <= 0 && this.rChannelRemaining <= 0;
+  }
+
+  /**
+   * 施放 Q「一箭双雕」：射程内立即发射；超距则追击目标，进入范围后自动释放。
+   * 目标锁定为指针地面落点最近的敌方（非当前普攻目标优先）。
+   * @param pointerXZ 指针对应的地面坐标；缺省则无法选敌
+   */
+  castQ(
+    projectiles: ProjectileManager,
+    getEnemyUnits: () => readonly CombatUnit[],
+    pointerXZ?: { x: number; z: number } | null,
+  ): boolean {
+    if (!this.canCastQ()) return false;
+
+    const enemies = getEnemyUnits();
+    const primary = this.resolveQTarget(enemies, pointerXZ);
+    if (!primary) return false;
+
+    // 相对英雄过远：不锁远处乱点的单位
+    const heroDist = distXZ(this.collider, primary.collider);
+    if (heroDist > MissFortune.Q_SEEK_RANGE) return false;
+
+    if (heroDist > MissFortune.Q_RANGE) {
+      // 超距：排队，先移动再放（冷却在真正释放时才进入）
+      this.queueCastQ(primary);
+      return true;
+    }
+
+    return this.executeQ(primary, projectiles, getEnemyUnits);
+  }
+
+  /**
+   * 解析 Q 目标：指针地面落点附近最近的敌方。
+   */
+  private resolveQTarget(
+    enemies: readonly CombatUnit[],
+    pointerXZ?: { x: number; z: number } | null,
+  ): CombatUnit | null {
+    if (
+      !pointerXZ ||
+      !Number.isFinite(pointerXZ.x) ||
+      !Number.isFinite(pointerXZ.z)
+    ) {
+      return null;
+    }
+    return pickNearestEnemyNearPoint(
+      this,
+      enemies,
+      pointerXZ.x,
+      pointerXZ.z,
+      MissFortune.Q_POINTER_PICK_RADIUS,
+    );
+  }
+
+  private queueCastQ(target: CombatUnit): void {
+    this.clearMoveInput();
+    this.pendingCast = { kind: 'Q', target };
+    this.attackStance = true;
+    this.attackTarget = target;
+    this.windupElapsed = -1;
+    this.requestFacing(
+      target.collider.x - this.position.x,
+      target.collider.z - this.position.z,
+    );
+    this.chaseTo(target.collider.x, target.collider.z);
+  }
+
+  /** 真正发出 Q 弹（调用方已确认在射程内且可施放） */
+  private executeQ(
+    primary: CombatUnit,
+    projectiles: ProjectileManager,
+    getEnemyUnits: () => readonly CombatUnit[],
+  ): boolean {
+    if (!this.canCastQ() || !isValidTarget(this, primary)) return false;
+    if (distXZ(this.collider, primary.collider) > MissFortune.Q_RANGE) {
+      return false;
+    }
+
+    this.pendingCast = null;
+    this.qCd = MissFortune.Q_COOLDOWN;
+    // 进入/保持攻击状态并锁定第一目标
+    this.attackStance = true;
+    this.attackTarget = primary;
+    this.windupElapsed = -1;
+    this.requestFacing(
+      primary.collider.x - this.position.x,
+      primary.collider.z - this.position.z,
+    );
+    this.stopMoving();
+
+    const muzzle = this.nextShotRight ? this.rightMuzzle : this.leftMuzzle;
+    this.activeShotRight = this.nextShotRight;
+    this.shootAnimTimer = 0.3;
+    const hand = this.nextShotRight ? 'right' : 'left';
+    this.nextShotRight = !this.nextShotRight;
+    muzzle.getWorldPosition(this.muzzleWorld);
+
+    getGameAudio().playHeroGunshot({
+      hand,
+      pitch: 1.05 + Math.random() * 0.08,
+      gain: 1.05,
+    });
+
+    const casterX = this.position.x;
+    const casterZ = this.position.z;
+    const halfAngle =
+      (MissFortune.Q_BOUNCE_HALF_ANGLE_DEG * Math.PI) / 180;
+
+    projectiles.fire({
+      origin: this.muzzleWorld.clone(),
+      target: primary,
+      damage: MissFortune.Q_DAMAGE,
+      team: this.team,
+      scale: MissFortune.BOLT_SCALE * 1.1,
+      color: MissFortune.BOLT_COLOR,
+      emissive: MissFortune.BOLT_EMISSIVE,
+      speed: MissFortune.BOLT_SPEED * 1.15,
+      hitSfx: 'hero',
+      pierceRemaining: 1,
+      getPierceTarget: (hitTarget) => {
+        const next = pickPierceTargetBehind(
+          casterX,
+          casterZ,
+          hitTarget,
+          getEnemyUnits(),
+          MissFortune.Q_BOUNCE_RANGE,
+          halfAngle,
+        );
+        if (!next) return null;
+        return {
+          target: next,
+          damage: MissFortune.Q_BOUNCE_DAMAGE,
+        };
+      },
+    });
+
+    return true;
+  }
+
+  /** W 技能剩余冷却（秒） */
+  get wCooldownRemaining(): number {
+    return this.wCd;
+  }
+
+  get wCooldownTotal(): number {
+    return MissFortune.W_COOLDOWN;
+  }
+
+  /** W 攻速增益是否生效 */
+  get isWBuffActive(): boolean {
+    return this.wBuffRemaining > 0;
+  }
+
+  get wBuffRemainingTime(): number {
+    return this.wBuffRemaining;
+  }
+
+  canCastW(): boolean {
+    return this.isAlive && this.wCd <= 0 && this.rChannelRemaining <= 0;
+  }
+
+  /**
+   * 施放 W「热诚」：瞬发，持续期间双倍攻速。
+   * @returns 是否成功施放
+   */
+  castW(): boolean {
+    if (!this.canCastW()) return false;
+
+    this.wCd = MissFortune.W_COOLDOWN;
+    this.wBuffRemaining = MissFortune.W_DURATION;
+    // 立即吃到攻速：缩短当前攻击冷却
+    if (this.attackCd > 0) {
+      this.attackCd /= MissFortune.W_AS_MULT;
+    }
+    this.shootAnimTimer = 0.28;
+    this.activeShotRight = this.nextShotRight;
+    this.nextShotRight = !this.nextShotRight;
+    getGameAudio().playHeroWActivate();
+    return true;
   }
 
   /** E 技能剩余冷却（秒） */
@@ -450,39 +749,159 @@ export class MissFortune extends THREE.Group implements CombatUnit {
   }
 
   canCastE(): boolean {
-    return this.isAlive && this.eCd <= 0;
+    return this.isAlive && this.eCd <= 0 && this.rChannelRemaining <= 0;
+  }
+
+  /** R 技能剩余冷却（秒） */
+  get rCooldownRemaining(): number {
+    return this.rCd;
+  }
+
+  get rCooldownTotal(): number {
+    return MissFortune.R_COOLDOWN;
+  }
+
+  /** 是否正在 R 扫射引导 */
+  get isRChanneling(): boolean {
+    return this.rChannelRemaining > 0;
+  }
+
+  canCastR(): boolean {
+    return this.isAlive && this.rCd <= 0 && this.rChannelRemaining <= 0;
   }
 
   /**
-   * 施放 E「枪林弹雨」：落点超距时钳到最大施法距离边缘。
-   * @returns 实际落点；不可施放时返回 null
+   * 施放 R「弹幕扫射」：朝指针方向扇形区域持续弹幕。
+   * 引导期间定身；方向取指针地面相对英雄，缺省用当前朝向。
+   */
+  castR(
+    projectiles: ProjectileManager,
+    getEnemyUnits: () => readonly CombatUnit[],
+    pointerXZ?: { x: number; z: number } | null,
+  ): boolean {
+    if (!this.canCastR()) return false;
+
+    let dirX = 0;
+    let dirZ = 0;
+    if (
+      pointerXZ &&
+      Number.isFinite(pointerXZ.x) &&
+      Number.isFinite(pointerXZ.z)
+    ) {
+      dirX = pointerXZ.x - this.position.x;
+      dirZ = pointerXZ.z - this.position.z;
+    }
+    if (Math.hypot(dirX, dirZ) < 1e-5) {
+      // 权威 yaw：本地 +Z 朝向
+      dirX = Math.sin(this.yaw);
+      dirZ = Math.cos(this.yaw);
+    }
+    const len = Math.hypot(dirX, dirZ);
+    dirX /= len;
+    dirZ /= len;
+
+    this.clearPendingCast();
+    this.clearAttackTarget();
+    this.stopMoving();
+    this.windupElapsed = -1;
+
+    this.rCd = MissFortune.R_COOLDOWN;
+    this.rChannelRemaining = MissFortune.R_DURATION;
+    this.rDirX = dirX;
+    this.rDirZ = dirZ;
+    this.requestFacing(dirX, dirZ);
+    this.shootAnimTimer = MissFortune.R_DURATION;
+    this.activeShotRight = this.nextShotRight;
+
+    // 枪口高度
+    const muzzle = this.nextShotRight ? this.rightMuzzle : this.leftMuzzle;
+    muzzle.getWorldPosition(this.muzzleWorld);
+    const originY = Math.max(0.35, this.muzzleWorld.y);
+
+    getGameAudio().playHeroGunshot({
+      hand: this.nextShotRight ? 'right' : 'left',
+      pitch: 1.08,
+      gain: 1.05,
+    });
+    this.nextShotRight = !this.nextShotRight;
+
+    projectiles.spawnBulletFan({
+      originX: this.position.x,
+      originZ: this.position.z,
+      originY,
+      dirX,
+      dirZ,
+      range: MissFortune.R_RANGE,
+      halfAngle: (MissFortune.R_HALF_ANGLE_DEG * Math.PI) / 180,
+      team: this.team,
+      damagePerTick: MissFortune.R_DAMAGE_PER_TICK,
+      tickInterval: MissFortune.R_TICK_INTERVAL,
+      duration: MissFortune.R_DURATION,
+      waveInterval: MissFortune.R_WAVE_INTERVAL,
+      boltsPerWave: MissFortune.R_BOLTS_PER_WAVE,
+      color: MissFortune.BOLT_COLOR,
+      emissive: MissFortune.BOLT_EMISSIVE,
+      boltScale: MissFortune.BOLT_SCALE * 0.7,
+      boltSpeed: MissFortune.BOLT_SPEED * 1.35,
+      getEnemyUnits,
+    });
+
+    return true;
+  }
+
+  /**
+   * 施放 E「枪林弹雨」：射程内立即释放；超距则走向落点，进入范围后在原瞄准点释放。
+   * @returns cast=已释放；queued=已排队走位；null=失败
    */
   castE(
     aimX: number,
     aimZ: number,
     projectiles: ProjectileManager,
     getEnemyUnits: () => readonly CombatUnit[],
-  ): { x: number; z: number } | null {
+  ): { status: 'cast'; x: number; z: number } | { status: 'queued' } | null {
     if (!this.canCastE()) return null;
     if (!Number.isFinite(aimX) || !Number.isFinite(aimZ)) return null;
 
-    let x = aimX;
-    let z = aimZ;
     const dx = aimX - this.position.x;
     const dz = aimZ - this.position.z;
     const dist = Math.hypot(dx, dz);
-    if (dist > MissFortune.E_CAST_RANGE && dist > 1e-6) {
-      const s = MissFortune.E_CAST_RANGE / dist;
-      x = this.position.x + dx * s;
-      z = this.position.z + dz * s;
+    if (dist > MissFortune.E_CAST_RANGE) {
+      this.queueCastE(aimX, aimZ);
+      return { status: 'queued' };
     }
 
+    const cast = this.executeE(aimX, aimZ, projectiles, getEnemyUnits);
+    return cast ? { status: 'cast', x: cast.x, z: cast.z } : null;
+  }
+
+  private queueCastE(aimX: number, aimZ: number): void {
+    this.clearMoveInput();
+    this.clearAttackTarget();
+    this.pendingCast = { kind: 'E', aimX, aimZ };
+    this.windupElapsed = -1;
+    this.requestFacing(aimX - this.position.x, aimZ - this.position.z);
+    // 走向落点；进入施法距离后由 tickPendingCast 释放
+    this.moveTargetX = aimX;
+    this.moveTargetZ = aimZ;
+  }
+
+  /** 在已确认射程内释放 E */
+  private executeE(
+    x: number,
+    z: number,
+    projectiles: ProjectileManager,
+    getEnemyUnits: () => readonly CombatUnit[],
+  ): { x: number; z: number } | null {
+    if (!this.canCastE()) return null;
+    if (!Number.isFinite(x) || !Number.isFinite(z)) return null;
+
+    this.pendingCast = null;
     this.eCd = MissFortune.E_COOLDOWN;
-    // 朝向落点；不取消普攻，登记期望朝向
     this.requestFacing(x - this.position.x, z - this.position.z);
     this.shootAnimTimer = 0.32;
     this.activeShotRight = this.nextShotRight;
     this.nextShotRight = !this.nextShotRight;
+    this.stopMoving();
     getGameAudio().playHeroBulletRainStart();
 
     projectiles.spawnBulletRain({
@@ -513,10 +932,15 @@ export class MissFortune extends THREE.Group implements CombatUnit {
 
   /**
    * WASD 连续移动（世界 XZ 方向，长度任意，内部归一化）。
-   * 有输入时取消普攻与点地目标；零向量表示松开。
+   * 有输入时取消普攻、排队技能与点地目标；零向量表示松开。
    */
   setMoveInput(dirX: number, dirZ: number): void {
     if (!this.isAlive) {
+      this.clearMoveInput();
+      return;
+    }
+    // R 引导中定身
+    if (this.rChannelRemaining > 0) {
       this.clearMoveInput();
       return;
     }
@@ -529,6 +953,7 @@ export class MissFortune extends THREE.Group implements CombatUnit {
       this.clearMoveInput();
       return;
     }
+    this.clearPendingCast();
     this.clearAttackTarget();
     this.moveTargetX = null;
     this.moveTargetZ = null;
@@ -537,10 +962,13 @@ export class MissFortune extends THREE.Group implements CombatUnit {
     this.moveInputZ = dirZ / len;
   }
 
-  /** 右键点地：设置地面目标（世界 XZ）；取消普攻锁定与 WASD 输入 */
+  /** 右键点地：设置地面目标（世界 XZ）；取消普攻、排队技能与 WASD 输入 */
   moveTo(x: number, z: number): void {
     if (!Number.isFinite(x) || !Number.isFinite(z)) return;
+    // R 引导中定身
+    if (this.rChannelRemaining > 0) return;
     this.clearMoveInput();
+    this.clearPendingCast();
     this.clearAttackTarget();
     this.moveTargetX = x;
     this.moveTargetZ = z;
@@ -578,8 +1006,13 @@ export class MissFortune extends THREE.Group implements CombatUnit {
   /**
    * 每帧推进：战斗意图 → 位移 → 唯一限速转向 → 对准后开火。
    * 场景只需调这一处（避免 movement/combat 顺序导致朝向突变或漏积分）。
+   * @param enemies 存活敌方列表；目标死亡时用于射程内自动换目标
    */
-  update(delta: number, projectiles: ProjectileManager): void {
+  update(
+    delta: number,
+    projectiles: ProjectileManager,
+    enemies: readonly CombatUnit[] = [],
+  ): void {
     if (!(delta > 0) || !Number.isFinite(delta)) return;
 
     if (!this.isAlive) {
@@ -594,32 +1027,158 @@ export class MissFortune extends THREE.Group implements CombatUnit {
 
     this.healthBar.setHp(this.hp, this.maxHp);
 
+    if (this.qCd > 0) {
+      this.qCd = Math.max(0, this.qCd - delta);
+    }
+    if (this.wCd > 0) {
+      this.wCd = Math.max(0, this.wCd - delta);
+    }
+    if (this.wBuffRemaining > 0) {
+      this.wBuffRemaining = Math.max(0, this.wBuffRemaining - delta);
+    }
     if (this.eCd > 0) {
       this.eCd = Math.max(0, this.eCd - delta);
     }
+    if (this.rCd > 0) {
+      this.rCd = Math.max(0, this.rCd - delta);
+    }
 
-    this.tickCombatIntent(delta);
+    // R 扇形扫射引导：定身、锁朝向，暂停普攻与其它排队
+    if (this.rChannelRemaining > 0) {
+      this.rChannelRemaining = Math.max(0, this.rChannelRemaining - delta);
+      this.stopMoving();
+      this.velX = 0;
+      this.velZ = 0;
+      this.requestFacing(this.rDirX, this.rDirZ);
+      this.shootAnimTimer = Math.max(this.shootAnimTimer, 0.12);
+      this.tickMovement(delta);
+      return;
+    }
+
+    // 排队技能优先：走位入圈后释放，期间暂停普攻意图
+    if (this.pendingCast) {
+      this.tickPendingCast(delta, projectiles, enemies);
+    } else {
+      this.tickCombatIntent(delta, enemies);
+    }
     this.tickMovement(delta);
-    this.tickCombatFire(delta, projectiles);
+    if (!this.pendingCast) {
+      this.tickCombatFire(delta, projectiles);
+    }
+  }
+
+  /**
+   * 处理超距排队的 Q/E：追击/走位，进入施法距离后立即释放。
+   */
+  private tickPendingCast(
+    delta: number,
+    projectiles: ProjectileManager,
+    enemies: readonly CombatUnit[],
+  ): void {
+    const pending = this.pendingCast;
+    if (!pending) return;
+
+    // 攻击冷却仍正常流逝
+    if (this.attackCd > 0) {
+      this.attackCd = Math.max(0, this.attackCd - delta);
+    }
+
+    if (pending.kind === 'Q') {
+      if (!this.canCastQ()) {
+        this.clearPendingCast();
+        return;
+      }
+      if (!isValidTarget(this, pending.target)) {
+        this.clearPendingCast();
+        this.stopMoving();
+        return;
+      }
+      const target = pending.target;
+      this.attackStance = true;
+      this.attackTarget = target;
+      const d = distXZ(this.collider, target.collider);
+      this.requestFacing(
+        target.collider.x - this.position.x,
+        target.collider.z - this.position.z,
+      );
+      if (d <= MissFortune.Q_RANGE) {
+        this.executeQ(target, projectiles, () => enemies);
+        return;
+      }
+      // 仍超距：继续追
+      this.chaseTo(target.collider.x, target.collider.z);
+      return;
+    }
+
+    // E：走向固定落点
+    if (!this.canCastE()) {
+      this.clearPendingCast();
+      return;
+    }
+    const { aimX, aimZ } = pending;
+    const dx = aimX - this.position.x;
+    const dz = aimZ - this.position.z;
+    const dist = Math.hypot(dx, dz);
+    this.requestFacing(dx, dz);
+    if (dist <= MissFortune.E_CAST_RANGE) {
+      this.executeE(aimX, aimZ, projectiles, () => enemies);
+      return;
+    }
+    // 未到施法距离：继续朝落点走（不提前刹停在圈边，进入范围即放）
+    if (!this.moveInputActive) {
+      this.moveTargetX = aimX;
+      this.moveTargetZ = aimZ;
+    }
+  }
+
+  /** 当前攻速倍率（W 生效时翻倍） */
+  private getAttackSpeedMult(): number {
+    return this.wBuffRemaining > 0 ? MissFortune.W_AS_MULT : 1;
+  }
+
+  /** 有效攻击间隔（秒，含前摇） */
+  private getAttackInterval(): number {
+    return MissFortune.ATTACK_INTERVAL / this.getAttackSpeedMult();
+  }
+
+  /** 有效出手前摇（秒）；与间隔同倍率缩放 */
+  private getWindup(): number {
+    return MissFortune.WINDUP / this.getAttackSpeedMult();
   }
 
   /**
    * 战斗意图：索敌距离、追击/停步、请求朝向。
+   * 攻击状态下持续自动索敌（目标死亡 / 敌人新进射程）。
    * 不写 rotation.y，不发射子弹。
    */
-  private tickCombatIntent(delta: number): void {
+  private tickCombatIntent(
+    delta: number,
+    enemies: readonly CombatUnit[],
+  ): void {
     if (!this.isAlive) return;
 
     if (this.attackCd > 0) {
       this.attackCd = Math.max(0, this.attackCd - delta);
     }
 
+    // 未进入攻击状态：不自动开打
+    if (!this.attackStance) return;
+
+    // 当前目标失效或暂无目标：射程内自动锁定最近敌人
     if (!isValidTarget(this, this.attackTarget)) {
-      this.clearAttackTarget();
-      return;
+      const hadTarget = this.attackTarget != null;
+      this.attackTarget = null;
+      this.windupElapsed = -1;
+      if (!this.acquireNearestInRange(enemies)) {
+        // 保持攻击状态，等待敌人进入射程；若刚丢目标则停追尸体
+        if (hadTarget) this.stopMoving();
+        return;
+      }
     }
 
     const target = this.attackTarget;
+    if (!target) return;
+
     const d = distXZ(this.collider, target.collider);
     const dx = target.collider.x - this.position.x;
     const dz = target.collider.z - this.position.z;
@@ -635,6 +1194,24 @@ export class MissFortune extends THREE.Group implements CombatUnit {
 
     // 射程内：停步，等待对准后再由 tickCombatFire 推进前摇
     this.stopMoving();
+  }
+
+  /**
+   * 攻击状态下：锁定攻击范围内最近的存活敌人。
+   * 不追击圈外目标；成功则不重置 attackCd。
+   */
+  private acquireNearestInRange(enemies: readonly CombatUnit[]): boolean {
+    const next = pickNearestEnemy(this, enemies, MissFortune.ATTACK_RANGE);
+    if (!next) return false;
+
+    this.attackTarget = next;
+    this.windupElapsed = -1;
+    this.requestFacing(
+      next.collider.x - this.position.x,
+      next.collider.z - this.position.z,
+    );
+    this.stopMoving();
+    return true;
   }
 
   /**
@@ -666,7 +1243,7 @@ export class MissFortune extends THREE.Group implements CombatUnit {
     }
     this.windupElapsed += delta;
 
-    if (this.windupElapsed >= MissFortune.WINDUP) {
+    if (this.windupElapsed >= this.getWindup()) {
       if (
         isValidTarget(this, target) &&
         distXZ(this.collider, target.collider) <= MissFortune.ATTACK_RANGE &&
@@ -675,10 +1252,7 @@ export class MissFortune extends THREE.Group implements CombatUnit {
         this.fireBasicAttack(projectiles, target);
       }
       this.windupElapsed = -1;
-      this.attackCd = Math.max(
-        0,
-        MissFortune.ATTACK_INTERVAL - MissFortune.WINDUP,
-      );
+      this.attackCd = Math.max(0, this.getAttackInterval() - this.getWindup());
     }
   }
 
