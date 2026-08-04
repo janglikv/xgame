@@ -16,6 +16,7 @@ import { FpsOverlay } from './ui/FpsOverlay';
 import { preloadGameCursors, setGameCursor } from './ui/GameCursor';
 import { ScreenBrightness } from './ui/ScreenBrightness';
 import { SkillBar } from './ui/SkillBar';
+import { VictoryOverlay } from './ui/VictoryOverlay';
 
 /** 防御塔悬停：屏幕空间整体外轮廓（深红） */
 const TOWER_OUTLINE_COLOR = 0x8b0000;
@@ -168,6 +169,10 @@ function bootstrap(): void {
     saveGameSettings(settings);
   };
 
+  // 胜负结算 HUD（须在 EscMenu / SkillBar 之前创建，供闭包引用）
+  const victoryOverlay = new VictoryOverlay();
+  victoryOverlay.setSize(width, height);
+
   // ESC 设置面板：游戏内 HUD（正交场景 + Canvas 纹理）
   const escMenu = new EscMenu(renderer.domElement, {
     getCameraParams: () => controls.getParams(),
@@ -232,7 +237,8 @@ function bootstrap(): void {
       persistSettings({ flashSkillEnabled: enabled });
     },
     onOpenChange: (open) => {
-      controls.setEnabled(!open);
+      // 结算后始终保持相机禁用，避免关 ESC 又把操作加回来
+      controls.setEnabled(!open && !victoryOverlay.isVisible);
       if (open) {
         scene.cancelSkillTargeting();
         skillBar.setTargeting(null);
@@ -270,7 +276,7 @@ function bootstrap(): void {
 
   // 底部技能栏 QWER（Q/W/E/R）
   const skillBar = new SkillBar({
-    isInputBlocked: () => escMenu.isOpen,
+    isInputBlocked: () => escMenu.isOpen || victoryOverlay.isVisible,
     onSkillPress: (slot) => {
       if (slot === 'Q') {
         scene.beginHeroSkillQ(
@@ -296,7 +302,7 @@ function bootstrap(): void {
   skillBar.setSize(width, height);
 
   const onPointerDownCommand = (e: PointerEvent): void => {
-    if (escMenu.isOpen) return;
+    if (escMenu.isOpen || victoryOverlay.isVisible) return;
 
     const mainBtn = settings.mouseControl === 'left' ? 0 : 2;
     const cancelBtn = settings.mouseControl === 'left' ? 2 : 0;
@@ -357,7 +363,7 @@ function bootstrap(): void {
 
   /** 两态指针：可攻击悬停（塔=红描边同源）→ 短剑，其余 → 小手 */
   const refreshGameplayCursor = (clientX?: number, clientY?: number): void => {
-    if (escMenu.isOpen) {
+    if (escMenu.isOpen || victoryOverlay.isVisible) {
       setGameCursor(renderer.domElement, 'default');
       return;
     }
@@ -384,7 +390,7 @@ function bootstrap(): void {
   };
 
   const onPointerMove = (e: PointerEvent): void => {
-    if (escMenu.isOpen) {
+    if (escMenu.isOpen || victoryOverlay.isVisible) {
       scene.clearAttackHover();
       syncHoverOutline();
       setGameCursor(renderer.domElement, 'default');
@@ -439,6 +445,7 @@ function bootstrap(): void {
     screenBrightness.setSize(w, h);
     escMenu.setSize(w, h);
     skillBar.setSize(w, h);
+    victoryOverlay.setSize(w, h);
   };
 
   window.addEventListener('resize', onResize);
@@ -453,7 +460,7 @@ function bootstrap(): void {
 
   window.addEventListener('keydown', (e: KeyboardEvent) => {
     if (e.repeat) return;
-    if (escMenu.isOpen) return;
+    if (escMenu.isOpen || victoryOverlay.isVisible) return;
     const targetEl = e.target as HTMLElement | null;
     const tag = targetEl?.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA') return;
@@ -471,61 +478,92 @@ function bootstrap(): void {
 
   const fpsOverlay = new FpsOverlay();
   const clock = new THREE.Clock();
+  /** 结算后只锁一次相机 / 技能输入 */
+  let controlsEnabledLockedByMatch = false;
+
+  const enterMatchOverUi = (): void => {
+    const outcome = scene.matchOutcome;
+    if (!outcome) return;
+    victoryOverlay.show(outcome);
+    if (controlsEnabledLockedByMatch) return;
+    controlsEnabledLockedByMatch = true;
+    controls.setEnabled(false);
+    scene.cancelSkillTargeting();
+    skillBar.setTargeting(null);
+    scene.clearAttackHover();
+    syncHoverOutline();
+    setGameCursor(renderer.domElement, 'default');
+  };
 
   const tick = (): void => {
     requestAnimationFrame(tick);
     fpsOverlay.update();
     const delta = Math.min(clock.getDelta(), 1 / 20);
 
-    if (controls.isLocked) {
-      controls.getWasdWishXZ(wasdWish);
-      scene.commandHeroMoveInput(wasdWish.x, wasdWish.z);
-    } else {
+    if (scene.isMatchOver) {
+      enterMatchOverUi();
       scene.commandHeroMoveInput(0, 0);
+    } else {
+      if (controls.isLocked) {
+        controls.getWasdWishXZ(wasdWish);
+        scene.commandHeroMoveInput(wasdWish.x, wasdWish.z);
+      } else {
+        scene.commandHeroMoveInput(0, 0);
+      }
+
+      scene.update(delta);
+      // 死亡动画结束后英雄已传送回水晶：锁定镜头从死亡点平滑拉回
+      if (scene.hero.consumeRespawnCameraPan()) {
+        controls.smoothPanToFollow(1.35);
+      }
+      // 本帧可能刚分出胜负
+      if (scene.isMatchOver) enterMatchOverUi();
     }
 
-    scene.update(delta);
-    // 死亡动画结束后英雄已传送回水晶：锁定镜头从死亡点平滑拉回
-    if (scene.hero.consumeRespawnCameraPan()) {
-      controls.smoothPanToFollow(1.35);
-    }
     controls.update(delta);
+    // 须在相机更新后：塔/水晶血条视口贴合
+    scene.updateStructureHealthBars(camera);
     // 目标死亡等逻辑可能清掉悬停，与 OutlinePass 同步
     syncHoverOutline();
 
-    skillBar.setCooldown(
-      'Q',
-      scene.hero.qCooldownRemaining,
-      scene.hero.qCooldownTotal,
-    );
-    skillBar.setCooldown(
-      'W',
-      scene.hero.wCooldownRemaining,
-      scene.hero.wCooldownTotal,
-    );
-    skillBar.setActive('W', scene.hero.isWBuffActive);
-    skillBar.setCooldown(
-      'E',
-      scene.hero.eCooldownRemaining,
-      scene.hero.eCooldownTotal,
-    );
-    skillBar.setCooldown(
-      'R',
-      scene.hero.rCooldownRemaining,
-      scene.hero.rCooldownTotal,
-    );
-    skillBar.setActive('R', scene.hero.isRChanneling);
-    // 选点中优先；否则高亮排队走位施法的技能
-    skillBar.setTargeting(
-      scene.skillTargetingSlot ?? scene.heroQueuedSkill,
-    );
-    skillBar.setHp(scene.hero.hp, scene.hero.maxHp);
+    if (!scene.isMatchOver) {
+      skillBar.setCooldown(
+        'Q',
+        scene.hero.qCooldownRemaining,
+        scene.hero.qCooldownTotal,
+      );
+      skillBar.setCooldown(
+        'W',
+        scene.hero.wCooldownRemaining,
+        scene.hero.wCooldownTotal,
+      );
+      skillBar.setActive('W', scene.hero.isWBuffActive);
+      skillBar.setCooldown(
+        'E',
+        scene.hero.eCooldownRemaining,
+        scene.hero.eCooldownTotal,
+      );
+      skillBar.setCooldown(
+        'R',
+        scene.hero.rCooldownRemaining,
+        scene.hero.rCooldownTotal,
+      );
+      skillBar.setActive('R', scene.hero.isRChanneling);
+      // 选点中优先；否则高亮排队走位施法的技能
+      skillBar.setTargeting(
+        scene.skillTargetingSlot ?? scene.heroQueuedSkill,
+      );
+      skillBar.setHp(scene.hero.hp, scene.hero.maxHp);
+    }
+
+    victoryOverlay.update(delta);
 
     composer.render();
     // 压暗世界画面，设置面板保持清晰可读
     screenBrightness.render(renderer);
     skillBar.render(renderer);
     escMenu.render(renderer);
+    victoryOverlay.render(renderer);
   };
 
   tick();

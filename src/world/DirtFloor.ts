@@ -55,6 +55,14 @@ export class DirtFloor extends THREE.Group {
     material: THREE.Material | THREE.Material[];
   }> = [];
 
+  /**
+   * 可走区外轮廓（与地板 / 围墙内侧共用）。
+   * 世界 XZ，俯视顺时针，不闭合重复首点。
+   */
+  static getWalkableOutline(): ReadonlyArray<{ x: number; z: number }> {
+    return getFloorOutline();
+  }
+
   constructor() {
     super();
     this.name = 'DirtFloor';

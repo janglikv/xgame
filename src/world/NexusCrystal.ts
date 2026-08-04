@@ -9,8 +9,12 @@ import { HealthBar } from './ui/HealthBar';
  * 可受伤、挡路；暂不主动攻击。
  */
 export class NexusCrystal extends THREE.Group implements CombatUnit {
-  /** 地面圆形碰撞半径 */
-  static readonly COLLIDER_RADIUS = 0.72;
+  /** 相对设计尺寸缩放（缩小三分之一 → 2/3） */
+  static readonly MODEL_SCALE = 2 / 3;
+  /** 地面圆形碰撞半径（世界单位，已含 MODEL_SCALE） */
+  static readonly COLLIDER_RADIUS = 0.72 * NexusCrystal.MODEL_SCALE;
+  /** 能量核心本地 Y（未缩放）；世界高度需乘 MODEL_SCALE */
+  private static readonly CRYSTAL_LOCAL_Y = 1.15;
   static readonly MAX_HP = 1800;
   /** 高于防御塔：小兵优先推水晶 */
   static readonly COMBAT_PRIORITY = 2;
@@ -46,6 +50,7 @@ export class NexusCrystal extends THREE.Group implements CombatUnit {
     super();
     this.name = `NexusCrystal_${x}_${z}`;
     this.position.set(x, 0, z);
+    this.scale.setScalar(NexusCrystal.MODEL_SCALE);
     this.team = x > 0 ? 'red' : 'blue';
 
     const isRed = this.team === 'red';
@@ -56,6 +61,7 @@ export class NexusCrystal extends THREE.Group implements CombatUnit {
       ? NexusCrystal.CRYSTAL_RED_CORE
       : NexusCrystal.CRYSTAL_BLUE_CORE;
 
+    // 碰撞体与白圈在 scale 之后创建，半径为世界单位
     this.collider = new CircleBody(this, NexusCrystal.COLLIDER_RADIUS, {
       isStatic: true,
     });
@@ -156,7 +162,7 @@ export class NexusCrystal extends THREE.Group implements CombatUnit {
 
     // —— 能量水晶（主体，比塔顶水晶大很多）——
     this.crystalGroup = new THREE.Group();
-    this.crystalGroup.position.y = 1.15;
+    this.crystalGroup.position.y = NexusCrystal.CRYSTAL_LOCAL_Y;
     this.upperRoot.add(this.crystalGroup);
 
     const crystalMat = new THREE.MeshStandardMaterial({
@@ -233,7 +239,10 @@ export class NexusCrystal extends THREE.Group implements CombatUnit {
   }
 
   getHitPoint(out: THREE.Vector3): THREE.Vector3 {
-    out.set(this.position.x, this.position.y + 1.15, this.position.z);
+    const y =
+      this.position.y +
+      NexusCrystal.CRYSTAL_LOCAL_Y * NexusCrystal.MODEL_SCALE;
+    out.set(this.position.x, y, this.position.z);
     return out;
   }
 
@@ -242,6 +251,17 @@ export class NexusCrystal extends THREE.Group implements CombatUnit {
     if (!this.isAlive) return;
     this.elapsed += delta;
     this.animateCrystal(delta);
+  }
+
+  /**
+   * 相机更新后调用：血条贴近视口安全区，尽量完整显示。
+   */
+  updateHealthBarViewport(camera: THREE.Camera): void {
+    if (!this.isAlive) {
+      this.healthBar.resetViewportFit();
+      return;
+    }
+    this.healthBar.updateViewportFit(camera);
   }
 
   private animateCrystal(delta: number): void {
@@ -254,12 +274,14 @@ export class NexusCrystal extends THREE.Group implements CombatUnit {
     const mat = this.crystal.material as THREE.MeshStandardMaterial;
     mat.emissiveIntensity = 0.7 + pulse * 0.5;
 
-    this.crystalGroup.position.y = 1.15 + Math.sin(this.elapsed * 1.4) * 0.05;
+    this.crystalGroup.position.y =
+      NexusCrystal.CRYSTAL_LOCAL_Y + Math.sin(this.elapsed * 1.4) * 0.05;
   }
 
   private onDestroyed(): void {
     this.upperRoot.visible = false;
     this.crystalLight.intensity = 0;
+    this.healthBar.resetViewportFit();
     this.healthBar.visible = false;
   }
 

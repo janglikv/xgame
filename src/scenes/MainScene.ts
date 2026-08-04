@@ -4,7 +4,10 @@ import { GroundCastIndicator } from '../effects/GroundCastIndicator';
 import { GroundClickEffect } from '../effects/GroundClickEffect';
 import { ProjectileManager } from '../effects/ProjectileManager';
 import { CircleBody } from '../world/collision/CircleBody';
-import { clampBodiesToFloor } from '../world/collision/clampBodiesToFloor';
+import {
+  clampBodiesToFloor,
+  clampPointToWalkable,
+} from '../world/collision/clampBodiesToFloor';
 import { resolveCircleCollisions } from '../world/collision/resolveCircleCollisions';
 import type { CombatUnit } from '../world/combat/CombatUnit';
 import { createSceneLights } from '../world/createSceneLights';
@@ -15,6 +18,7 @@ import { Minion } from '../world/Minion';
 import { MinionWaveSpawner } from '../world/MinionWaveSpawner';
 import { NexusCrystal } from '../world/NexusCrystal';
 import { SpatialAxesGrid } from '../world/SpatialAxesGrid';
+import type { MatchResult } from '../ui/VictoryOverlay';
 
 /** 指针拾取时忽略的 UI / 辅助节点（避免范围圈、血条误触攻击光标） */
 function isCursorPickIgnore(obj: THREE.Object3D): boolean {
@@ -83,6 +87,11 @@ export class MainScene extends THREE.Scene {
   private skipGameLeft = 0;
   /** 对应消耗的真实时间（秒） */
   private skipRealLeft = 0;
+  /**
+   * 对局结果：任一方水晶被摧毁后锁定。
+   * null = 进行中；victory = 敌方水晶破；defeat = 我方水晶破。
+   */
+  private matchResult: MatchResult | null = null;
 
   constructor() {
     super();
@@ -163,22 +172,27 @@ export class MainScene extends THREE.Scene {
     return this.missFortune;
   }
 
+  /** 对局结果；null 表示尚未结束 */
+  get matchOutcome(): MatchResult | null {
+    return this.matchResult;
+  }
+
+  get isMatchOver(): boolean {
+    return this.matchResult !== null;
+  }
+
   /**
    * 英雄点地移动：右键落点（世界 XZ）。
-   * Z 限制在兵线走廊内（考虑碰撞半径）；X 放宽到含两端平台。
+   * 落点夹到与围墙一致的可走区（走廊 + 两端八边形，考虑碰撞半径）。
    * 会取消当前普攻锁定。
    */
   commandHeroMoveTo(x: number, z: number): void {
     if (!Number.isFinite(x) || !Number.isFinite(z)) return;
     if (!this.missFortune.isAlive) return;
     const r = this.missFortune.collider.radius;
-    const halfZ = DirtFloor.HALF_Z;
-    // 走廊 + 两端八边形大致可达：水晶在 ±18 附近
-    const maxX = 20;
-    const clampedX = THREE.MathUtils.clamp(x, -maxX + r, maxX - r);
-    const clampedZ = THREE.MathUtils.clamp(z, -halfZ + r, halfZ - r);
-    this.missFortune.moveTo(clampedX, clampedZ);
-    this.spawnClickEffect(clampedX, clampedZ);
+    const p = clampPointToWalkable(x, z, r);
+    this.missFortune.moveTo(p.x, p.z);
+    this.spawnClickEffect(p.x, p.z);
   }
 
   /** 在地面指定位置触发点击特效 */
@@ -655,6 +669,7 @@ export class MainScene extends THREE.Scene {
    * 例：快进 1 分钟 → skipTime(60, 1)；快进 3 分钟 → skipTime(180, 3)。
    */
   skipTime(gameSeconds: number, realSeconds: number): void {
+    if (this.matchResult) return;
     if (!(gameSeconds > 0) || !(realSeconds > 0)) return;
     if (!Number.isFinite(gameSeconds) || !Number.isFinite(realSeconds)) return;
     this.skipGameLeft += gameSeconds;
@@ -671,6 +686,8 @@ export class MainScene extends THREE.Scene {
    */
   update(realDelta: number): void {
     if (!(realDelta > 0) || !Number.isFinite(realDelta)) return;
+    // 胜负已分：冻结逻辑（镜头 / HUD 仍由外部驱动）
+    if (this.matchResult) return;
 
     let realLeft = realDelta;
 
@@ -699,6 +716,7 @@ export class MainScene extends THREE.Scene {
   /** 以固定小步长推进游戏逻辑，避免单帧游戏 delta 过大 */
   private simulate(gameDelta: number): void {
     if (!(gameDelta > 0) || !Number.isFinite(gameDelta)) return;
+    if (this.matchResult) return;
 
     const step = MainScene.SKIP_STEP;
     let remaining = gameDelta;
@@ -709,12 +727,15 @@ export class MainScene extends THREE.Scene {
       this.tick(step);
       remaining -= step;
       n += 1;
+      if (this.matchResult) return;
     }
-    if (remaining > 1e-8) this.tick(remaining);
+    if (remaining > 1e-8 && !this.matchResult) this.tick(remaining);
   }
 
   /** 单步游戏逻辑（游戏时间 delta） */
   private tick(delta: number): void {
+    if (this.matchResult) return;
+
     // 本帧开战前的存活单位（水晶 + 塔 + 小兵 + 英雄），供双方索敌
     const structures = [
       ...this.nexusCrystals.filter((n) => n.isAlive),
@@ -763,6 +784,9 @@ export class MainScene extends THREE.Scene {
     this.projectiles.update(delta);
     this.minionSpawner.pruneDead();
 
+    // 水晶摧毁 → 锁定胜负（优先判定敌方水晶：同帧双破时算胜利）
+    this.tryResolveMatch();
+
     // 须在 takeDamage 之后清悬停：否则同帧仍 OutlinePass 选中已隐藏的 fullModel
     if (this.hoverAttackUnit && !this.hoverAttackUnit.isAlive) {
       this.clearAttackHover();
@@ -781,8 +805,8 @@ export class MainScene extends THREE.Scene {
     // 移动后再做地面圆碰撞（死兵已 prune；死塔/死水晶仍挡路；英雄挡路）
     const bodies = this.collectColliderBodies();
     resolveCircleCollisions(bodies);
-    // 兵线两侧夹紧：圆心+半径不得超出地板 Z 范围
-    clampBodiesToFloor(bodies, { halfZ: DirtFloor.HALF_Z });
+    // 夹到与围墙一致的可走区（走廊 + 两端八边形）
+    clampBodiesToFloor(bodies);
   }
 
   /**
@@ -797,6 +821,48 @@ export class MainScene extends THREE.Scene {
     renderer.compile(this, camera);
     for (const tower of this.defenseTowers) {
       tower.restoreAfterGpuWarmup();
+    }
+  }
+
+  /**
+   * 任一方基地水晶死亡后写入 matchResult。
+   * 敌方水晶破 → victory；我方水晶破 → defeat。
+   */
+  private tryResolveMatch(): void {
+    if (this.matchResult) return;
+    const heroTeam = this.missFortune.team;
+    let enemyDead = false;
+    let allyDead = false;
+    for (const nexus of this.nexusCrystals) {
+      if (nexus.isAlive) continue;
+      if (nexus.team === heroTeam) allyDead = true;
+      else enemyDead = true;
+    }
+    if (enemyDead) {
+      this.matchResult = 'victory';
+      this.cancelSkillTargeting();
+      this.clearAttackHover();
+      this.skipGameLeft = 0;
+      this.skipRealLeft = 0;
+    } else if (allyDead) {
+      this.matchResult = 'defeat';
+      this.cancelSkillTargeting();
+      this.clearAttackHover();
+      this.skipGameLeft = 0;
+      this.skipRealLeft = 0;
+    }
+  }
+
+  /**
+   * 相机位姿更新后、渲染前调用：
+   * 防御塔 / 水晶在镜头内时，血条做视口贴合偏移，尽量完整出现在画面中。
+   */
+  updateStructureHealthBars(camera: THREE.Camera): void {
+    for (const nexus of this.nexusCrystals) {
+      nexus.updateHealthBarViewport(camera);
+    }
+    for (const tower of this.defenseTowers) {
+      tower.updateHealthBarViewport(camera);
     }
   }
 

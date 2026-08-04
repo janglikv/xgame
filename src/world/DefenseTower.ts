@@ -412,6 +412,17 @@ export class DefenseTower extends THREE.Group implements CombatUnit {
     this.tickCombat(delta, units, projectiles);
   }
 
+  /**
+   * 相机更新后调用：血条贴近视口安全区，尽量完整显示。
+   */
+  updateHealthBarViewport(camera: THREE.Camera): void {
+    if (!this.isAlive) {
+      this.healthBar.resetViewportFit();
+      return;
+    }
+    this.healthBar.updateViewportFit(camera);
+  }
+
   private animateCrystal(_delta: number): void {
     this.crystal.rotation.y += _delta * 0.6;
     this.crystal.rotation.x = Math.sin(this.elapsed * 0.8) * 0.08;
@@ -495,6 +506,7 @@ export class DefenseTower extends THREE.Group implements CombatUnit {
     this.brokenModel.visible = true;
     this.crystalLight.intensity = 0;
     this.rangeMarker.visible = false;
+    this.healthBar.resetViewportFit();
     this.healthBar.visible = false;
     this.clearTarget();
   }

@@ -25,10 +25,33 @@ export class HealthBar extends THREE.Sprite {
   private static readonly CANVAS_H = 24;
   private static readonly BORDER = 3;
 
+  /** 视口边距（NDC）；0 = 紧贴屏幕边缘 */
+  private static readonly VIEW_MARGIN_NDC = 0;
+  /**
+   * 判定「父物体在镜头内」时的 NDC 外扩；
+   * 略大于 1 以便塔身刚进画、头顶血条尚未进画时也能开始贴边。
+   */
+  private static readonly STRUCTURE_IN_VIEW_PAD = 0.28;
+  /** 血条相对理想头顶位的最大世界偏移（米），避免飞离主体过远 */
+  private static readonly MAX_FIT_OFFSET_WORLD = 1.35;
+
+  private static readonly _parentWorld = new THREE.Vector3();
+  private static readonly _homeWorld = new THREE.Vector3();
+  private static readonly _ndc = new THREE.Vector3();
+  private static readonly _probe = new THREE.Vector3();
+  private static readonly _camRight = new THREE.Vector3();
+  private static readonly _camUp = new THREE.Vector3();
+  private static readonly _worldScale = new THREE.Vector3();
+  private static readonly _targetWorld = new THREE.Vector3();
+  private static readonly _offsetWorld = new THREE.Vector3();
+  private static readonly _local = new THREE.Vector3();
+
   private readonly ctx: CanvasRenderingContext2D;
   private readonly texture: THREE.CanvasTexture;
   private readonly team: TeamId;
   private readonly hideWhenFull: boolean;
+  /** 构造时的本地位置（理想头顶位）；视口贴合在此基础上偏移 */
+  private readonly homePosition = new THREE.Vector3();
 
   private lastRatio = -1;
   private lastVisible: boolean | null = null;
@@ -70,6 +93,7 @@ export class HealthBar extends THREE.Sprite {
     this.center.set(centerX, 0.5);
     this.scale.set(width, height, 1);
     this.position.set(0, yOffset, 0);
+    this.homePosition.copy(this.position);
     this.renderOrder = 10;
 
     this.draw(1);
@@ -93,9 +117,203 @@ export class HealthBar extends THREE.Sprite {
     this.draw(ratio);
   }
 
+  /**
+   * 父物体在镜头内时，把血条投影夹到安全边距内，尽量完整出现在画面中。
+   * 应在相机位姿更新之后、渲染之前调用。
+   */
+  updateViewportFit(camera: THREE.Camera): void {
+    if (!this.visible) {
+      this.position.copy(this.homePosition);
+      return;
+    }
+    const parent = this.parent;
+    if (!parent) {
+      this.position.copy(this.homePosition);
+      return;
+    }
+
+    parent.updateWorldMatrix(true, false);
+    parent.getWorldPosition(HealthBar._parentWorld);
+    HealthBar._local.copy(this.homePosition);
+    parent.localToWorld(HealthBar._homeWorld.copy(HealthBar._local));
+
+    // 父物体（脚底 + 理想血条位）任一点靠近视口 → 视为「镜头包含该建筑」
+    if (
+      !HealthBar.isNearViewport(HealthBar._parentWorld, camera) &&
+      !HealthBar.isNearViewport(HealthBar._homeWorld, camera)
+    ) {
+      this.position.copy(this.homePosition);
+      return;
+    }
+
+    // 理想血条中心 NDC；在相机后或过远裁剪外则不贴合
+    HealthBar._ndc.copy(HealthBar._homeWorld).project(camera);
+    if (
+      !Number.isFinite(HealthBar._ndc.x) ||
+      !Number.isFinite(HealthBar._ndc.y) ||
+      HealthBar._ndc.z < -1 ||
+      HealthBar._ndc.z > 1
+    ) {
+      this.position.copy(this.homePosition);
+      return;
+    }
+
+    const centerNdcX = HealthBar._ndc.x;
+    const centerNdcY = HealthBar._ndc.y;
+    const centerNdcZ = HealthBar._ndc.z;
+
+    // 相机 right / up（Sprite 朝向相机，半宽高沿这两轴）
+    camera.matrixWorld.extractBasis(
+      HealthBar._camRight,
+      HealthBar._camUp,
+      HealthBar._probe,
+    );
+    parent.getWorldScale(HealthBar._worldScale);
+    const worldW = Math.abs(this.scale.x * HealthBar._worldScale.x);
+    const worldH = Math.abs(this.scale.y * HealthBar._worldScale.y);
+    // center 锚点：向左/下延伸 center 比例，向右/上延伸 (1-center)
+    const leftW = worldW * this.center.x;
+    const rightW = worldW * (1 - this.center.x);
+    const downH = worldH * this.center.y;
+    const upH = worldH * (1 - this.center.y);
+
+    // 探测 NDC 半宽/半高（取边缘投影与中心差）
+    const ndcLeft = HealthBar.edgeNdcDelta(
+      HealthBar._homeWorld,
+      HealthBar._camRight,
+      -leftW,
+      camera,
+      centerNdcX,
+      centerNdcY,
+      'x',
+    );
+    const ndcRight = HealthBar.edgeNdcDelta(
+      HealthBar._homeWorld,
+      HealthBar._camRight,
+      rightW,
+      camera,
+      centerNdcX,
+      centerNdcY,
+      'x',
+    );
+    const ndcDown = HealthBar.edgeNdcDelta(
+      HealthBar._homeWorld,
+      HealthBar._camUp,
+      -downH,
+      camera,
+      centerNdcX,
+      centerNdcY,
+      'y',
+    );
+    const ndcUp = HealthBar.edgeNdcDelta(
+      HealthBar._homeWorld,
+      HealthBar._camUp,
+      upH,
+      camera,
+      centerNdcX,
+      centerNdcY,
+      'y',
+    );
+
+    const margin = HealthBar.VIEW_MARGIN_NDC;
+    const minX = -1 + margin + ndcLeft;
+    const maxX = 1 - margin - ndcRight;
+    const minY = -1 + margin + ndcDown;
+    const maxY = 1 - margin - ndcUp;
+
+    // 安全区退化（血条比屏还大）时仍尽量贴中心
+    const clampX =
+      minX <= maxX
+        ? THREE.MathUtils.clamp(centerNdcX, minX, maxX)
+        : 0;
+    const clampY =
+      minY <= maxY
+        ? THREE.MathUtils.clamp(centerNdcY, minY, maxY)
+        : 0;
+
+    if (
+      Math.abs(clampX - centerNdcX) < 1e-5 &&
+      Math.abs(clampY - centerNdcY) < 1e-5
+    ) {
+      this.position.copy(this.homePosition);
+      return;
+    }
+
+    // 同深度 unproject → 目标世界坐标
+    HealthBar._targetWorld
+      .set(clampX, clampY, centerNdcZ)
+      .unproject(camera);
+
+    HealthBar._offsetWorld
+      .subVectors(HealthBar._targetWorld, HealthBar._homeWorld);
+    const maxOff = HealthBar.MAX_FIT_OFFSET_WORLD;
+    const offLen = HealthBar._offsetWorld.length();
+    if (offLen > maxOff && offLen > 1e-8) {
+      HealthBar._offsetWorld.multiplyScalar(maxOff / offLen);
+    }
+
+    HealthBar._targetWorld
+      .copy(HealthBar._homeWorld)
+      .add(HealthBar._offsetWorld);
+    parent.worldToLocal(HealthBar._targetWorld);
+    this.position.copy(HealthBar._targetWorld);
+  }
+
+  /** 恢复理想头顶位（隐藏/销毁时调用） */
+  resetViewportFit(): void {
+    this.position.copy(this.homePosition);
+  }
+
   dispose(): void {
     this.texture.dispose();
     (this.material as THREE.SpriteMaterial).dispose();
+  }
+
+  private static isNearViewport(
+    worldPos: THREE.Vector3,
+    camera: THREE.Camera,
+  ): boolean {
+    HealthBar._ndc.copy(worldPos).project(camera);
+    if (
+      !Number.isFinite(HealthBar._ndc.x) ||
+      !Number.isFinite(HealthBar._ndc.y) ||
+      HealthBar._ndc.z < -1 ||
+      HealthBar._ndc.z > 1
+    ) {
+      return false;
+    }
+    const pad = HealthBar.STRUCTURE_IN_VIEW_PAD;
+    return (
+      HealthBar._ndc.x >= -1 - pad &&
+      HealthBar._ndc.x <= 1 + pad &&
+      HealthBar._ndc.y >= -1 - pad &&
+      HealthBar._ndc.y <= 1 + pad
+    );
+  }
+
+  /**
+   * 从中心沿 camera 轴偏移 worldOffset 后投影，返回该轴上相对中心的 NDC 正距离。
+   */
+  private static edgeNdcDelta(
+    centerWorld: THREE.Vector3,
+    axis: THREE.Vector3,
+    worldOffset: number,
+    camera: THREE.Camera,
+    centerNdcX: number,
+    centerNdcY: number,
+    axisKey: 'x' | 'y',
+  ): number {
+    if (Math.abs(worldOffset) < 1e-8) return 0;
+    HealthBar._probe
+      .copy(centerWorld)
+      .addScaledVector(axis, worldOffset)
+      .project(camera);
+    const delta =
+      axisKey === 'x'
+        ? HealthBar._probe.x - centerNdcX
+        : HealthBar._probe.y - centerNdcY;
+    // 取与偏移同号侧的幅度；异常时给一个小默认，避免 clamp 区间反转
+    return Math.max(Math.abs(delta), 0.01);
   }
 
   private draw(ratio: number): void {
