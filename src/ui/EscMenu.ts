@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { BGM_TRACKS, type BgmTrackId } from '../audio/BgmSynth';
 import type { CameraParams } from '../controls/CameraController';
 import { setGameCursor } from './GameCursor';
 
@@ -31,6 +32,19 @@ export interface EscMenuOptions {
   onMouseControlChange?: (mode: 'right' | 'left') => void;
   /** 闪现技能开关回调 */
   onFlashSkillChange?: (enabled: boolean) => void;
+  /** 背景音乐音量 0~1 */
+  onBgmVolumeChange?: (value: number) => void;
+  /** 音效音量 0~1 */
+  onSfxVolumeChange?: (value: number) => void;
+  /** 背景音乐风格 ('calm' | 'battle') */
+  onBgmModeChange?: (mode: 'calm' | 'battle') => void;
+  /** 背景音乐选定曲目 */
+  onBgmTrackChange?: (track: BgmTrackId) => void;
+  /**
+   * 清空所有本地缓存并初始化游戏。
+   * 由宿主清除 localStorage 后刷新/重建场景。
+   */
+  onResetGame?: () => void;
   /** 面板开/关（用于暂停相机等） */
   onOpenChange?: (open: boolean) => void;
   /** 获取当前相机实时参数 */
@@ -39,6 +53,10 @@ export interface EscMenuOptions {
   initialAxesVisible?: boolean;
   initialColliderMarkersVisible?: boolean;
   initialBrightness?: number;
+  initialBgmVolume?: number;
+  initialSfxVolume?: number;
+  initialBgmMode?: 'calm' | 'battle';
+  initialBgmTrack?: BgmTrackId;
   initialCameraLocked?: boolean;
   initialFixedCamera?: boolean;
   initialGodMode?: boolean;
@@ -59,8 +77,13 @@ type HitId =
   | 'mouseControl'
   | 'flashSkill'
   | 'brightness'
+  | 'bgmVolume'
+  | 'sfxVolume'
+  | 'bgmMode'
+  | 'bgmTrack'
   | 'skip1m'
   | 'skip3m'
+  | 'resetGame'
   | 'close'
   | 'dim';
 
@@ -132,6 +155,11 @@ export class EscMenu {
   private readonly onTowerInvincibleChange?: (invincible: boolean) => void;
   private readonly onMouseControlChange?: (mode: 'right' | 'left') => void;
   private readonly onFlashSkillChange?: (enabled: boolean) => void;
+  private readonly onBgmVolumeChange?: (value: number) => void;
+  private readonly onSfxVolumeChange?: (value: number) => void;
+  private readonly onBgmModeChange?: (mode: 'calm' | 'battle') => void;
+  private readonly onBgmTrackChange?: (track: BgmTrackId) => void;
+  private readonly onResetGame?: () => void;
   private readonly onOpenChange?: (open: boolean) => void;
   private readonly getCameraParams?: () => CameraParams;
 
@@ -157,9 +185,18 @@ export class EscMenu {
   private flashSkillOn: boolean;
   /** 全局亮度 0~1 */
   private brightness: number;
+  /** BGM 音量 0~1 */
+  private bgmVolume: number;
+  /** SFX 音量 0~1 */
+  private sfxVolume: number;
+  /** BGM 风格 */
+  private bgmMode: 'calm' | 'battle';
+  /** BGM 曲目 */
+  private bgmTrack: BgmTrackId;
+
   private hoverId: HitId | null = null;
   private pressId: HitId | null = null;
-  private draggingBrightness = false;
+  private draggingSlider: 'brightness' | 'bgmVolume' | 'sfxVolume' | null = null;
   private viewW = 1;
   private viewH = 1;
   private regions: HitRegion[] = [];
@@ -171,6 +208,10 @@ export class EscMenu {
     this.onColliderMarkersChange = options.onColliderMarkersChange;
     this.onSkipTime = options.onSkipTime;
     this.onBrightnessChange = options.onBrightnessChange;
+    this.onBgmVolumeChange = options.onBgmVolumeChange;
+    this.onSfxVolumeChange = options.onSfxVolumeChange;
+    this.onBgmModeChange = options.onBgmModeChange;
+    this.onBgmTrackChange = options.onBgmTrackChange;
     this.onCameraLockChange = options.onCameraLockChange;
     this.onFixedCameraChange = options.onFixedCameraChange;
     this.onGodModeChange = options.onGodModeChange;
@@ -178,6 +219,7 @@ export class EscMenu {
     this.onTowerInvincibleChange = options.onTowerInvincibleChange;
     this.onMouseControlChange = options.onMouseControlChange;
     this.onFlashSkillChange = options.onFlashSkillChange;
+    this.onResetGame = options.onResetGame;
     this.onOpenChange = options.onOpenChange;
     this.getCameraParams = options.getCameraParams;
     this.axesOn = options.initialAxesVisible ?? true;
@@ -194,6 +236,18 @@ export class EscMenu {
       0,
       1,
     );
+    this.bgmVolume = THREE.MathUtils.clamp(
+      options.initialBgmVolume ?? 0.65,
+      0,
+      1,
+    );
+    this.sfxVolume = THREE.MathUtils.clamp(
+      options.initialSfxVolume ?? 0.72,
+      0,
+      1,
+    );
+    this.bgmMode = options.initialBgmMode ?? 'battle';
+    this.bgmTrack = options.initialBgmTrack ?? 'upbeat';
 
     this.uiCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
     this.uiCamera.position.z = 1;
@@ -269,21 +323,21 @@ export class EscMenu {
       const id = this.hitTest(e.clientX, e.clientY);
       this.pressId = id;
       this.setHover(id);
-      if (id === 'brightness') {
-        this.draggingBrightness = true;
+      if (id === 'brightness' || id === 'bgmVolume' || id === 'sfxVolume') {
+        this.draggingSlider = id;
         try {
           this.domElement.setPointerCapture(e.pointerId);
         } catch {
           // ignore capture failures
         }
-        this.applyBrightnessFromPointer(e.clientX, e.clientY);
+        this.applySliderFromPointer(id, e.clientX, e.clientY);
       }
     };
 
     this.onPointerMove = (e: PointerEvent) => {
       if (!this.open) return;
-      if (this.draggingBrightness) {
-        this.applyBrightnessFromPointer(e.clientX, e.clientY);
+      if (this.draggingSlider) {
+        this.applySliderFromPointer(this.draggingSlider, e.clientX, e.clientY);
         setGameCursor(this.domElement, 'default');
         return;
       }
@@ -293,8 +347,8 @@ export class EscMenu {
 
     this.onPointerUp = (e: PointerEvent) => {
       if (!this.open || e.button !== 0) return;
-      if (this.draggingBrightness) {
-        this.draggingBrightness = false;
+      if (this.draggingSlider) {
+        this.draggingSlider = null;
         this.pressId = null;
         try {
           if (this.domElement.hasPointerCapture(e.pointerId)) {
@@ -315,7 +369,7 @@ export class EscMenu {
     };
 
     this.onPointerLeave = () => {
-      this.draggingBrightness = false;
+      this.draggingSlider = null;
       this.pressId = null;
       this.setHover(null);
       if (this.open) setGameCursor(this.domElement, 'default');
@@ -338,7 +392,7 @@ export class EscMenu {
     this.root.visible = open;
     this.hoverId = null;
     this.pressId = null;
-    this.draggingBrightness = false;
+    this.draggingSlider = null;
     this.dirty = true;
     if (!open) {
       // 实际光标由 CameraController.setEnabled 在 onOpenChange 中刷新
@@ -460,6 +514,18 @@ export class EscMenu {
         this.dirty = true;
         this.onFlashSkillChange?.(this.flashSkillOn);
         break;
+      case 'bgmMode':
+        this.bgmMode = this.bgmMode === 'battle' ? 'calm' : 'battle';
+        this.dirty = true;
+        this.onBgmModeChange?.(this.bgmMode);
+        break;
+      case 'bgmTrack':
+        const tracks: BgmTrackId[] = ['upbeat', 'cyber', 'lofi', 'epic'];
+        const nextIndex = (tracks.indexOf(this.bgmTrack) + 1) % tracks.length;
+        this.bgmTrack = tracks[nextIndex];
+        this.dirty = true;
+        this.onBgmTrackChange?.(this.bgmTrack);
+        break;
       case 'skip1m':
         this.onSkipTime(60, 1);
         this.setOpen(false);
@@ -468,7 +534,12 @@ export class EscMenu {
         this.onSkipTime(180, 3);
         this.setOpen(false);
         break;
+      case 'resetGame':
+        this.onResetGame?.();
+        break;
       case 'brightness':
+      case 'bgmVolume':
+      case 'sfxVolume':
         break;
       case 'close':
       case 'dim':
@@ -488,18 +559,32 @@ export class EscMenu {
     setGameCursor(this.domElement, 'default');
   }
 
-  private applyBrightnessFromPointer(clientX: number, clientY: number): void {
+  private applySliderFromPointer(
+    id: 'brightness' | 'bgmVolume' | 'sfxVolume',
+    clientX: number,
+    clientY: number,
+  ): void {
     const canvasPos = this.clientToCanvas(clientX, clientY);
     if (!canvasPos) return;
-    const region = this.region('brightness');
+    const region = this.region(id);
     const trackX = region.x + EscMenu.SLIDER_PAD_X;
     const trackW = region.w - EscMenu.SLIDER_PAD_X * 2;
     if (trackW <= 0) return;
     const t = THREE.MathUtils.clamp((canvasPos.x - trackX) / trackW, 0, 1);
-    if (Math.abs(t - this.brightness) < 1e-4) return;
-    this.brightness = t;
+    if (id === 'brightness') {
+      if (Math.abs(t - this.brightness) < 1e-4) return;
+      this.brightness = t;
+      this.onBrightnessChange(this.brightness);
+    } else if (id === 'bgmVolume') {
+      if (Math.abs(t - this.bgmVolume) < 1e-4) return;
+      this.bgmVolume = t;
+      this.onBgmVolumeChange?.(this.bgmVolume);
+    } else if (id === 'sfxVolume') {
+      if (Math.abs(t - this.sfxVolume) < 1e-4) return;
+      this.sfxVolume = t;
+      this.onSfxVolumeChange?.(this.sfxVolume);
+    }
     this.dirty = true;
-    this.onBrightnessChange(this.brightness);
   }
 
   private clientToCanvas(
@@ -576,19 +661,31 @@ export class EscMenu {
     const rowGap = 5;
     const listY = 86;
 
-    // 右栏：相机卡片 → 亮度 → 快进
-    const brightY = 318;
-    const brightH = 100;
+    // 右栏：相机卡片 (86 ~ 240) → 音频 (250 ~ 460) → 亮度 (470 ~ 520) → 快进 & 清空 (530 ~ 610)
+    const audioStartY = 252;
+    const bgmVolY = audioStartY + 20;
+    const sfxVolY = bgmVolY + 38;
+    const bgmTrackY = sfxVolY + 38;
+    const bgmModeY = bgmTrackY + 42;
 
-    const skipY = 456;
-    const skipH = 56;
+    const brightY = bgmModeY + 44;
+    const brightH = 50;
+
+    const skipY = brightY + brightH + 14;
+    const skipH = 40;
     const skipGap = 12;
     const skipBtnW = (colW - skipGap) / 2;
 
-    const closeH = 54;
-    // 贴在左栏底部下方
+    const resetY = skipY + skipH + 10;
+    const resetH = 38;
+
+    const closeH = 50;
     const listEnd = listY + (rowH + rowGap) * 8 + rowH;
-    const closeY = Math.min(H - pad - closeH, listEnd + 12);
+    const resetBottom = resetY + resetH;
+    const closeY = Math.min(
+      H - pad - closeH,
+      Math.max(listEnd + 12, resetBottom + 12),
+    );
 
     this.regions = [
       { id: 'axes', x: leftX, y: listY, w: colW, h: rowH },
@@ -648,6 +745,10 @@ export class EscMenu {
         w: colW,
         h: rowH,
       },
+      { id: 'bgmVolume', x: rightX, y: bgmVolY, w: colW, h: 36 },
+      { id: 'sfxVolume', x: rightX, y: sfxVolY, w: colW, h: 36 },
+      { id: 'bgmTrack', x: rightX, y: bgmTrackY, w: colW, h: 38 },
+      { id: 'bgmMode', x: rightX, y: bgmModeY, w: colW, h: 38 },
       { id: 'brightness', x: rightX, y: brightY, w: colW, h: brightH },
       { id: 'skip1m', x: rightX, y: skipY, w: skipBtnW, h: skipH },
       {
@@ -657,6 +758,7 @@ export class EscMenu {
         w: skipBtnW,
         h: skipH,
       },
+      { id: 'resetGame', x: rightX, y: resetY, w: colW, h: resetH },
       {
         id: 'close',
         x: pad,
@@ -794,21 +896,65 @@ export class EscMenu {
     const rightX = pad + colW + gap;
     this.drawCameraParamsSection(rightX, 96, colW);
 
-    // 右栏 2：全局亮度
-    this.drawBrightnessRow(
-      this.region('brightness'),
-      this.brightness,
-      this.hoverId === 'brightness' || this.draggingBrightness,
-      this.draggingBrightness,
+    // 右栏 2：音频与背景音乐
+    const bgmRegion = this.region('bgmVolume');
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '600 15px system-ui, -apple-system, "Segoe UI", sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillText('音频与背景音乐 (AUDIO & MUSIC)', rightX, bgmRegion.y - 8);
+
+    this.drawSliderRow(
+      bgmRegion,
+      '🎵 背景音乐音量 (BGM)',
+      this.bgmVolume,
+      this.hoverId === 'bgmVolume' || this.draggingSlider === 'bgmVolume',
+      this.draggingSlider === 'bgmVolume',
+    );
+    this.drawSliderRow(
+      this.region('sfxVolume'),
+      '🔊 游戏音效音量 (SFX)',
+      this.sfxVolume,
+      this.hoverId === 'sfxVolume' || this.draggingSlider === 'sfxVolume',
+      this.draggingSlider === 'sfxVolume',
     );
 
-    // 右栏 3：时间快进
+    // 备选曲目与曲风模式
+    const currentTrackMeta = BGM_TRACKS[this.bgmTrack] || BGM_TRACKS.upbeat;
+    this.drawToggleRow(
+      this.region('bgmTrack'),
+      '备选音乐曲目 (点击切换)',
+      `当前：${currentTrackMeta.name}`,
+      true,
+      this.hoverId === 'bgmTrack',
+      this.pressId === 'bgmTrack',
+    );
+
+    this.drawToggleRow(
+      this.region('bgmMode'),
+      '背景音乐曲风强度',
+      this.bgmMode === 'battle' ? '当前：🎉 激进满编战局 (高能鼓点与对位主音)' : '当前：🍃 惬意轻快探索 (跳跃韵律)',
+      this.bgmMode === 'battle',
+      this.hoverId === 'bgmMode',
+      this.pressId === 'bgmMode',
+    );
+
+    // 右栏 3：全局亮度
+    this.drawSliderRow(
+      this.region('brightness'),
+      '☀️ 全局画面亮度',
+      this.brightness,
+      this.hoverId === 'brightness' || this.draggingSlider === 'brightness',
+      this.draggingSlider === 'brightness',
+    );
+
+    // 右栏 4：时间快进
     const skip1 = this.region('skip1m');
     ctx.fillStyle = '#94a3b8';
     ctx.font = '600 15px system-ui, -apple-system, "Segoe UI", sans-serif';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'alphabetic';
-    ctx.fillText('时间快进 (TIME WARP)', rightX, skip1.y - 10);
+    ctx.fillText('时间快进 (TIME WARP)', rightX, skip1.y - 6);
 
     this.drawActionButton(
       skip1,
@@ -823,6 +969,22 @@ export class EscMenu {
       this.hoverId === 'skip3m',
       this.pressId === 'skip3m',
       'secondary',
+    );
+
+    // 右栏 4：清空缓存并初始化
+    const reset = this.region('resetGame');
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '600 15px system-ui, -apple-system, "Segoe UI", sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillText('数据管理 (DATA)', rightX, reset.y - 10);
+
+    this.drawActionButton(
+      reset,
+      '清空缓存并初始化游戏',
+      this.hoverId === 'resetGame',
+      this.pressId === 'resetGame',
+      'danger',
     );
 
     // 底部全宽：继续游戏按钮
@@ -991,8 +1153,9 @@ export class EscMenu {
     ctx.fill();
   }
 
-  private drawBrightnessRow(
+  private drawSliderRow(
     region: HitRegion,
+    title: string,
     value: number,
     hover: boolean,
     active: boolean,
@@ -1001,7 +1164,7 @@ export class EscMenu {
     const { x, y, w, h } = region;
     const t = THREE.MathUtils.clamp(value, 0, 1);
 
-    this.roundRect(x, y, w, h, 10);
+    this.roundRect(x, y, w, h, 8);
     ctx.fillStyle =
       hover || active ? 'rgba(28, 44, 66, 0.88)' : 'rgba(15, 23, 34, 0.72)';
     ctx.fill();
@@ -1015,44 +1178,48 @@ export class EscMenu {
     ctx.textAlign = 'left';
     ctx.textBaseline = 'alphabetic';
     ctx.fillStyle = '#e8eef6';
-    ctx.font = '600 18px system-ui, -apple-system, "Segoe UI", sans-serif';
-    ctx.fillText('全局画面亮度', x + 16, y + 26);
+    ctx.font = '600 14px system-ui, -apple-system, "Segoe UI", sans-serif';
+    ctx.fillText(title, x + 14, y + 18);
 
     const pct = `${Math.round(t * 100)}%`;
     ctx.textAlign = 'right';
-    ctx.fillStyle = '#93c5fd';
-    ctx.font = '600 18px system-ui, -apple-system, "Segoe UI", sans-serif';
-    ctx.fillText(pct, x + w - 16, y + 26);
+    ctx.fillStyle = active ? '#93c5fd' : '#94a3b8';
+    ctx.font = '600 13px monospace, system-ui, sans-serif';
+    ctx.fillText(pct, x + w - 14, y + 18);
 
-    ctx.textAlign = 'left';
-    ctx.fillStyle = '#94a3b8';
-    ctx.font = '400 13px system-ui, -apple-system, "Segoe UI", sans-serif';
-    ctx.fillText('拖动滑条实时调暗 / 调亮画面', x + 16, y + 46);
-
-    const trackX = x + EscMenu.SLIDER_PAD_X;
-    const trackW = w - EscMenu.SLIDER_PAD_X * 2;
+    const padX = EscMenu.SLIDER_PAD_X;
+    const trackX = x + padX;
+    const trackW = w - padX * 2;
     const trackH = EscMenu.SLIDER_TRACK_H;
-    const trackY = y + h - 20;
+    const trackY = y + 26;
+    const fillW = trackW * t;
+
     this.roundRect(trackX, trackY, trackW, trackH, trackH / 2);
-    ctx.fillStyle = 'rgba(51, 65, 85, 0.95)';
+    ctx.fillStyle = 'rgba(30, 41, 59, 0.95)';
     ctx.fill();
 
-    const fillW = Math.max(trackH, trackW * t);
-    this.roundRect(trackX, trackY, fillW, trackH, trackH / 2);
-    const fillGrad = ctx.createLinearGradient(trackX, 0, trackX + trackW, 0);
-    fillGrad.addColorStop(0, '#1e3a5f');
-    fillGrad.addColorStop(1, '#60a5fa');
-    ctx.fillStyle = fillGrad;
-    ctx.fill();
+    if (fillW > 0) {
+      this.roundRect(trackX, trackY, fillW, trackH, trackH / 2);
+      const fillGrad = ctx.createLinearGradient(
+        trackX,
+        trackY,
+        trackX + trackW,
+        trackY,
+      );
+      fillGrad.addColorStop(0, '#3b82f6');
+      fillGrad.addColorStop(1, '#60a5fa');
+      ctx.fillStyle = fillGrad;
+      ctx.fill();
+    }
 
-    const knobR = 10;
-    const knobX = trackX + trackW * t;
-    const knobY = trackY + trackH / 2;
+    const kRadius = active ? 7 : 6;
+    const kx = trackX + fillW;
+    const ky = trackY + trackH / 2;
     ctx.beginPath();
-    ctx.arc(knobX, knobY, knobR, 0, Math.PI * 2);
-    ctx.fillStyle = '#e2e8f0';
+    ctx.arc(kx, ky, kRadius, 0, Math.PI * 2);
+    ctx.fillStyle = '#f8fafc';
     ctx.fill();
-    ctx.strokeStyle = active ? '#93c5fd' : 'rgba(15, 23, 42, 0.45)';
+    ctx.strokeStyle = active ? '#60a5fa' : 'rgba(148, 163, 184, 0.6)';
     ctx.lineWidth = 1.5;
     ctx.stroke();
   }
@@ -1062,7 +1229,7 @@ export class EscMenu {
     label: string,
     hover: boolean,
     pressed: boolean,
-    variant: 'primary' | 'secondary',
+    variant: 'primary' | 'secondary' | 'danger',
   ): void {
     const { ctx } = this;
     const { x, y, w, h } = region;
@@ -1084,6 +1251,26 @@ export class EscMenu {
       ctx.fillStyle = grad;
       ctx.fill();
       ctx.fillStyle = '#0b1220';
+    } else if (variant === 'danger') {
+      const grad = ctx.createLinearGradient(x, y, x, y + h);
+      if (pressed) {
+        grad.addColorStop(0, '#b91c1c');
+        grad.addColorStop(1, '#991b1b');
+      } else if (hover) {
+        grad.addColorStop(0, '#f87171');
+        grad.addColorStop(1, '#ef4444');
+      } else {
+        grad.addColorStop(0, '#dc2626');
+        grad.addColorStop(1, '#b91c1c');
+      }
+      ctx.fillStyle = grad;
+      ctx.fill();
+      ctx.strokeStyle = hover
+        ? 'rgba(254, 202, 202, 0.55)'
+        : 'rgba(248, 113, 113, 0.35)';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.fillStyle = '#fef2f2';
     } else {
       if (pressed) {
         ctx.fillStyle = 'rgba(37, 60, 92, 0.95)';

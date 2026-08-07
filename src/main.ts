@@ -6,7 +6,9 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { getGameAudio } from './audio/GameAudio';
 import { CameraController } from './controls/CameraController';
 import { MainScene } from './scenes/MainScene';
+import { clearCameraState } from './storage/cameraState';
 import {
+  clearGameSettings,
   loadGameSettings,
   saveGameSettings,
   type GameSettingsSnapshot,
@@ -166,8 +168,26 @@ function bootstrap(): void {
       settings.sfxVolume = patch.sfxVolume;
       audio.setSfxVolume(patch.sfxVolume);
     }
+    if (patch.bgmVolume !== undefined) {
+      settings.bgmVolume = patch.bgmVolume;
+      audio.setBgmVolume(patch.bgmVolume);
+    }
+    if (patch.bgmMode !== undefined) {
+      settings.bgmMode = patch.bgmMode;
+      audio.setBgmMode(patch.bgmMode);
+    }
+    if (patch.bgmTrack !== undefined) {
+      settings.bgmTrack = patch.bgmTrack;
+      audio.setBgmTrack(patch.bgmTrack);
+    }
     saveGameSettings(settings);
   };
+
+  // 初始同步音量与 BGM
+  audio.setSfxVolume(settings.sfxVolume);
+  audio.setBgmVolume(settings.bgmVolume);
+  audio.setBgmMode(settings.bgmMode);
+  audio.setBgmTrack(settings.bgmTrack);
 
   // 胜负结算 HUD（须在 EscMenu / SkillBar 之前创建，供闭包引用）
   const victoryOverlay = new VictoryOverlay();
@@ -179,6 +199,10 @@ function bootstrap(): void {
     initialAxesVisible: settings.showAxes,
     initialColliderMarkersVisible: settings.showColliderMarkers,
     initialBrightness: settings.brightnessUi,
+    initialBgmVolume: settings.bgmVolume,
+    initialSfxVolume: settings.sfxVolume,
+    initialBgmMode: settings.bgmMode,
+    initialBgmTrack: settings.bgmTrack,
     initialCameraLocked: settings.cameraLocked,
     initialFixedCamera: settings.fixedCamera,
     initialGodMode: settings.godMode,
@@ -198,6 +222,22 @@ function bootstrap(): void {
     onBrightnessChange: (ui01) => {
       applyBrightnessUi(screenBrightness, ui01);
       persistSettings({ brightnessUi: ui01 });
+    },
+    onBgmVolumeChange: (vol) => {
+      audio.setBgmVolume(vol);
+      persistSettings({ bgmVolume: vol });
+    },
+    onSfxVolumeChange: (vol) => {
+      audio.setSfxVolume(vol);
+      persistSettings({ sfxVolume: vol });
+    },
+    onBgmModeChange: (mode) => {
+      audio.setBgmMode(mode);
+      persistSettings({ bgmMode: mode });
+    },
+    onBgmTrackChange: (track) => {
+      audio.setBgmTrack(track);
+      persistSettings({ bgmTrack: track });
     },
     onCameraLockChange: (locked) => {
       controls.setViewMode(locked ? 'locked' : 'free');
@@ -236,9 +276,16 @@ function bootstrap(): void {
       scene.setFlashSkillEnabled(enabled);
       persistSettings({ flashSkillEnabled: enabled });
     },
+    onResetGame: () => {
+      // 清空设置 / 相机等本地缓存，刷新页面以默认状态重新初始化
+      clearGameSettings();
+      clearCameraState();
+      window.location.reload();
+    },
     onOpenChange: (open) => {
       // 结算后始终保持相机禁用，避免关 ESC 又把操作加回来
       controls.setEnabled(!open && !victoryOverlay.isVisible);
+      audio.setBgmInMenu(open);
       if (open) {
         scene.cancelSkillTargeting();
         skillBar.setTargeting(null);

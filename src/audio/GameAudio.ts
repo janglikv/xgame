@@ -5,6 +5,7 @@
  * 须在用户手势后 unlock（Tone.start）。
  */
 import * as Tone from 'tone';
+import { BgmSynth, type BgmMode, type BgmTrackId } from './BgmSynth';
 
 export type GunHand = 'left' | 'right';
 
@@ -29,16 +30,19 @@ export interface ProjectileHitOptions {
 }
 
 const DEFAULT_SFX_VOLUME = 0.72;
+const DEFAULT_BGM_VOLUME = 0.65;
 
 /**
  * 全局游戏音频（Tone.js）。
- * 对外 API 保持稳定，场景侧只调 play* / setSfxVolume / unlock。
+ * 对外 API 保持稳定，场景侧只调 play* / setSfxVolume / unlock / BGM 控制。
  */
 export class GameAudio {
   private ready = false;
   private unlocked = false;
   private sfxVolume = DEFAULT_SFX_VOLUME;
+  private bgmVolume = DEFAULT_BGM_VOLUME;
   private muted = false;
+  private bgmSynth = new BgmSynth();
 
   private sfxBus: Tone.Volume | null = null;
   private gunPanner: Tone.Panner | null = null;
@@ -85,9 +89,49 @@ export class GameAudio {
     this.applySfxGain();
   }
 
+  getBgmVolume(): number {
+    return this.bgmVolume;
+  }
+
+  setBgmVolume(value: number): void {
+    this.bgmVolume = clamp01(value);
+    this.bgmSynth.setVolume(this.muted ? 0 : this.bgmVolume);
+  }
+
+  getBgmMode(): BgmMode {
+    return this.bgmSynth.getMode();
+  }
+
+  setBgmMode(mode: BgmMode): void {
+    this.bgmSynth.setMode(mode);
+  }
+
+  getBgmTrack(): BgmTrackId {
+    return this.bgmSynth.getTrack();
+  }
+
+  setBgmTrack(trackId: BgmTrackId): void {
+    this.bgmSynth.setTrack(trackId);
+  }
+
+  setBgmInMenu(inMenu: boolean): void {
+    this.bgmSynth.setInMenu(inMenu);
+  }
+
+  startBgm(): void {
+    if (this.isRunning()) {
+      this.bgmSynth.start();
+    }
+  }
+
+  stopBgm(): void {
+    this.bgmSynth.stop();
+  }
+
   setMuted(muted: boolean): void {
     this.muted = muted;
     this.applySfxGain();
+    this.bgmSynth.setVolume(muted ? 0 : this.bgmVolume);
   }
 
   /**
@@ -101,6 +145,11 @@ export class GameAudio {
     }
     this.ensureGraph();
     this.unlocked = Tone.getContext().state === 'running';
+    if (this.unlocked) {
+      this.bgmSynth.initGraph(Tone.getDestination());
+      this.bgmSynth.setVolume(this.muted ? 0 : this.bgmVolume);
+      this.bgmSynth.start();
+    }
   }
 
   /**
@@ -334,6 +383,7 @@ export class GameAudio {
   }
 
   dispose(): void {
+    this.bgmSynth.dispose();
     for (const p of this.samplePlayers.values()) p.dispose();
     this.samplePlayers.clear();
 

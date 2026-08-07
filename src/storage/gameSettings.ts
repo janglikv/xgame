@@ -1,3 +1,5 @@
+import type { BgmTrackId } from '../audio/BgmSynth';
+
 /** localStorage 键；改字段结构时递增版本 */
 const STORAGE_KEY = 'xgame.settings.v1';
 
@@ -30,6 +32,12 @@ export interface GameSettingsSnapshot {
   flashSkillEnabled: boolean;
   /** 音效音量 0~1 */
   sfxVolume: number;
+  /** 背景音乐音量 0~1 */
+  bgmVolume: number;
+  /** 背景音乐风格模式 ('calm' | 'battle') */
+  bgmMode: 'calm' | 'battle';
+  /** 背景音乐选定曲目 */
+  bgmTrack: BgmTrackId;
 }
 
 export const DEFAULT_GAME_SETTINGS: GameSettingsSnapshot = {
@@ -44,6 +52,9 @@ export const DEFAULT_GAME_SETTINGS: GameSettingsSnapshot = {
   mouseControl: 'right',
   flashSkillEnabled: true,
   sfxVolume: 0.72,
+  bgmVolume: 0.65,
+  bgmMode: 'battle',
+  bgmTrack: 'upbeat',
 };
 
 export function loadGameSettings(): GameSettingsSnapshot {
@@ -98,6 +109,16 @@ export function loadGameSettings(): GameSettingsSnapshot {
           ? data.sfxVolume
           : DEFAULT_GAME_SETTINGS.sfxVolume,
       ),
+      bgmVolume: clamp01(
+        typeof data.bgmVolume === 'number' && Number.isFinite(data.bgmVolume)
+          ? data.bgmVolume
+          : DEFAULT_GAME_SETTINGS.bgmVolume,
+      ),
+      bgmMode: data.bgmMode === 'calm' ? 'calm' : DEFAULT_GAME_SETTINGS.bgmMode,
+      bgmTrack:
+        data.bgmTrack && ['upbeat', 'cyber', 'lofi', 'epic'].includes(data.bgmTrack)
+          ? data.bgmTrack
+          : DEFAULT_GAME_SETTINGS.bgmTrack,
     };
   } catch {
     return { ...DEFAULT_GAME_SETTINGS };
@@ -118,10 +139,22 @@ export function saveGameSettings(state: GameSettingsSnapshot): void {
       mouseControl: state.mouseControl === 'left' ? 'left' : 'right',
       flashSkillEnabled: typeof state.flashSkillEnabled === 'boolean' ? state.flashSkillEnabled : true,
       sfxVolume: clamp01(state.sfxVolume),
+      bgmVolume: clamp01(state.bgmVolume),
+      bgmMode: state.bgmMode === 'calm' ? 'calm' : 'battle',
+      bgmTrack: state.bgmTrack || 'upbeat',
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
   } catch {
     // 隐私模式 / 配额满时忽略
+  }
+}
+
+/** 清除设置缓存（localStorage） */
+export function clearGameSettings(): void {
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // ignore
   }
 }
 
