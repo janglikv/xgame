@@ -1,13 +1,15 @@
 /**
- * Tone.js 多风格/多曲目程序化背景音乐引擎 (Multi-Track Procedural BGM Engine)
+ * Tone.js 多风格/多曲目背景音乐引擎 (Multi-Track BGM Engine)
  *
- * 内置 4 首不同风格与情绪的备选背景音乐曲目：
- * 1. upbeat (🎉 欢快极速竞技): C大调欢快复调交响 (136 BPM)
- * 2. cyber   (🌆 赛博霓虹狂想): 80s 赛博 Synthwave/Neon Electro (128 BPM)
- * 3. lofi    (🍃 惬意峡谷漫步): Lofi/Pixel RPG 舒缓温润钢琴与木琴 (114 BPM)
- * 4. epic    (⚔️ 史诗英雄决战): D小调重锤史诗交响与 Brass 冲击 (138 BPM)
+ * 支持播放自定义外部 MP3 原声文件与程序化合成音轨：
+ * 1. last_lap (🏁 热血冲刺 - The Last Lap MP3 原声)
+ * 2. upbeat   (🎉 欢快极速竞技 - C大调欢快复调交响 136 BPM)
+ * 3. cyber    (🌆 赛博霓虹狂想 - 80s 赛博 Synthwave 128 BPM)
+ * 4. lofi     (🍃 惬意峡谷漫步 - Lofi/Pixel RPG 114 BPM)
+ * 5. epic     (⚔️ 史诗英雄决战 - D小调重锤史诗交响 138 BPM)
  *
  * 支持：
+ * - MP3 音频 Player 与合成器全流程混音
  * - 动态曲目切换 (setTrack)
  * - 动能模式切换 (setMode: 'calm' | 'battle')
  * - ESC 菜单沉浸 Lowpass 滤波 (setInMenu)
@@ -16,7 +18,7 @@ import * as Tone from 'tone';
 
 export type BgmMode = 'calm' | 'battle';
 
-export type BgmTrackId = 'upbeat' | 'cyber' | 'lofi' | 'epic';
+export type BgmTrackId = 'last_lap' | 'upbeat' | 'cyber' | 'lofi' | 'epic';
 
 export interface BgmTrackMeta {
   id: BgmTrackId;
@@ -26,6 +28,12 @@ export interface BgmTrackMeta {
 }
 
 export const BGM_TRACKS: Record<BgmTrackId, BgmTrackMeta> = {
+  last_lap: {
+    id: 'last_lap',
+    name: '🏁 热血冲刺 (The Last Lap · MP3 原声)',
+    desc: '原装摇滚赛车热血原声 · 节奏狂欢与极限竞技感',
+    bpm: 140,
+  },
   upbeat: {
     id: 'upbeat',
     name: '🎉 欢快极速竞技 (Upbeat Champion)',
@@ -57,7 +65,7 @@ export class BgmSynth {
   private playing = false;
   private volumeValue = 0.65;
   private mode: BgmMode = 'battle';
-  private trackId: BgmTrackId = 'upbeat';
+  private trackId: BgmTrackId = 'last_lap';
   private inMenu = false;
 
   private bgmBus: Tone.Volume | null = null;
@@ -78,6 +86,10 @@ export class BgmSynth {
   private snareSynth: Tone.NoiseSynth | null = null;
   private hihatSynth: Tone.MetalSynth | null = null;
   private crashSynth: Tone.MetalSynth | null = null;
+
+  // MP3 音频 Player (支持 The_Last_Lap.mp3 等外部音频)
+  private mp3Player: Tone.Player | null = null;
+  private mp3Loaded = false;
 
   // 动态序列
   private sequences: Tone.Sequence[] = [];
@@ -100,7 +112,7 @@ export class BgmSynth {
       Q: 1.0,
     });
 
-    // 欢快立体声效果器链：Chorus + Delay + Reverb
+    // 效果器链：Chorus + Delay + Reverb
     this.chorusNode = new Tone.Chorus({
       frequency: 2.5,
       delayTime: 3.5,
@@ -127,7 +139,26 @@ export class BgmSynth {
     this.chorusNode.connect(this.reverbNode);
     this.delayNode.connect(this.chorusNode);
 
-    // 2. 乐器声部实例化
+    // 2. MP3 Player 准备并挂载到混音总线
+    this.mp3Player = new Tone.Player({
+      url: '/audio/The_Last_Lap.mp3',
+      loop: true,
+      autostart: false,
+      onload: () => {
+        this.mp3Loaded = true;
+        if (this.playing && this.trackId === 'last_lap' && this.mp3Player) {
+          try {
+            if (this.mp3Player.state !== 'started') {
+              this.mp3Player.start();
+            }
+          } catch {
+            // ignore audio timing jitter
+          }
+        }
+      },
+    }).connect(this.bgmBus);
+
+    // 3. 乐器声部实例化 (供程序化曲目使用)
     this.bassSynth = new Tone.MonoSynth({
       oscillator: { type: 'square' },
       filter: { Q: 2.5, type: 'lowpass' },
@@ -218,24 +249,42 @@ export class BgmSynth {
     this.crashSynth.connect(this.bgmBus);
     this.crashSynth.connect(this.reverbNode);
 
-    // 3. 构建当前曲目的序列
+    // 4. 构建当前曲目的序列
     this.rebuildTrackSequences();
     this.ready = true;
   }
 
-  /** 重建并启动当前 TrackId 对应的 Sequence 阵列 */
+  /** 重建并启动当前 TrackId 对应的 Sequence / Audio Player */
   private rebuildTrackSequences(): void {
-    // 先清理旧 Sequence
+    // 停止合成器 Sequence
     for (const seq of this.sequences) {
       seq.stop();
       seq.dispose();
     }
     this.sequences = [];
 
+    // 停止 MP3 音频
+    if (this.mp3Player && this.mp3Player.state === 'started') {
+      try {
+        this.mp3Player.stop();
+      } catch {
+        // ignore
+      }
+    }
+
     const meta = BGM_TRACKS[this.trackId];
     Tone.getTransport().bpm.value = meta.bpm;
 
-    if (this.trackId === 'upbeat') {
+    if (this.trackId === 'last_lap') {
+      // 播放 MP3 专属音频
+      if (this.playing && this.mp3Player && this.mp3Loaded) {
+        try {
+          this.mp3Player.start();
+        } catch {
+          // ignore
+        }
+      }
+    } else if (this.trackId === 'upbeat') {
       this.setupUpbeatTrack();
     } else if (this.trackId === 'cyber') {
       this.setupCyberTrack();
@@ -245,7 +294,7 @@ export class BgmSynth {
       this.setupEpicTrack();
     }
 
-    if (this.playing) {
+    if (this.playing && this.trackId !== 'last_lap') {
       for (const seq of this.sequences) {
         seq.start(0);
       }
@@ -338,7 +387,6 @@ export class BgmSynth {
     ];
     const bassNotes = ['F1', 'Eb1', 'Db1', 'C1'];
 
-    // 复古 Synthwave 反拍 16 分音符 Low-end Bass
     const cyberBass: (string | null)[] = [];
     for (let i = 0; i < 4; i++) {
       const b = bassNotes[i];
@@ -357,7 +405,6 @@ export class BgmSynth {
       }
     }, cyberChords, '1m'));
 
-    // 赛博 16 分音符 FM 霓虹琶音
     const cyberArp = [
       ['F4', 'Ab4', 'C5', 'F5'], ['Eb4', 'G4', 'Bb4', 'Eb5'], ['Db4', 'F4', 'Ab4', 'Db5'], ['C4', 'Eb4', 'G4', 'C5']
     ];
@@ -372,7 +419,6 @@ export class BgmSynth {
       }
     }, flatCyberArp, '16n'));
 
-    // Synthwave 经典四拍鼓点 (Kick on 1, 5, 9, 13; Snare on 5, 13)
     this.sequences.push(new Tone.Sequence((time, step) => {
       if (!this.playing) return;
       if ((step === 0 || step === 4 || step === 8 || step === 12) && this.kickSynth) {
@@ -386,7 +432,6 @@ export class BgmSynth {
       }
     }, Array.from({ length: 16 }, (_, i) => i), '16n'));
 
-    // 赛博飘逸主旋律
     const cyberLead = [
       'F5', null, 'C6', 'Bb5', 'Ab5', null, 'F5', 'G5',
       'Ab5', null, 'Eb5', null, 'F5', null, null, null,
@@ -420,7 +465,6 @@ export class BgmSynth {
       }
     }, lofiChords, '1m'));
 
-    // 晶莹清澈的木琴点拨
     const marimbaLofi = [
       'G4', 'B4', 'D5', 'G5', 'E4', 'G4', 'B4', 'E5',
       'C4', 'E4', 'G4', 'C5', 'D4', 'F#4', 'A4', 'D5'
@@ -432,7 +476,6 @@ export class BgmSynth {
       }
     }, marimbaLofi, '8n'));
 
-    // 极简轻松 Lofi 鼓点
     this.sequences.push(new Tone.Sequence((time, step) => {
       if (!this.playing) return;
       if (step === 0 && this.kickSynth) {
@@ -454,7 +497,6 @@ export class BgmSynth {
     ];
     const bassNotes = ['D1', 'Bb0', 'G0', 'A0'];
 
-    // 8th 音符雷霆低音
     const epicBass: (string | null)[] = [];
     for (let i = 0; i < 4; i++) {
       const b = bassNotes[i];
@@ -473,7 +515,6 @@ export class BgmSynth {
       }
     }, epicChords, '1m'));
 
-    // Brass Hits 铜管决战切分
     this.sequences.push(new Tone.Sequence((time, step) => {
       if (!this.playing || !this.brassStabSynth || this.mode !== 'battle') return;
       if (step === 0 || step === 6 || step === 12) {
@@ -481,7 +522,6 @@ export class BgmSynth {
       }
     }, Array.from({ length: 16 }, (_, i) => i), '16n'));
 
-    // 重锤战场鼓点
     this.sequences.push(new Tone.Sequence((time, step) => {
       if (!this.playing) return;
       if ((step === 0 || step === 4 || step === 8 || step === 12) && this.kickSynth) {
@@ -495,7 +535,6 @@ export class BgmSynth {
       }
     }, Array.from({ length: 16 }, (_, i) => i), '16n'));
 
-    // 史诗英雄决战主旋律
     const epicLead = [
       'D5', null, 'A5', null, 'F5', 'G5', 'A5', null,
       'Bb5', null, 'F5', null, 'G5', 'F5', 'E5', null,
@@ -517,12 +556,21 @@ export class BgmSynth {
     if (this.playing) return;
     this.playing = true;
 
-    for (const seq of this.sequences) {
-      seq.start(0);
-    }
-
-    if (Tone.getTransport().state !== 'started') {
-      Tone.getTransport().start();
+    if (this.trackId === 'last_lap') {
+      if (this.mp3Player && this.mp3Loaded && this.mp3Player.state !== 'started') {
+        try {
+          this.mp3Player.start();
+        } catch {
+          // ignore
+        }
+      }
+    } else {
+      for (const seq of this.sequences) {
+        seq.start(0);
+      }
+      if (Tone.getTransport().state !== 'started') {
+        Tone.getTransport().start();
+      }
     }
   }
 
@@ -532,6 +580,15 @@ export class BgmSynth {
   public stop(): void {
     if (!this.playing) return;
     this.playing = false;
+
+    if (this.mp3Player && this.mp3Player.state === 'started') {
+      try {
+        this.mp3Player.stop();
+      } catch {
+        // ignore
+      }
+    }
+
     for (const seq of this.sequences) {
       seq.stop();
     }
@@ -555,7 +612,7 @@ export class BgmSynth {
   }
 
   /**
-   * 切换备选音乐曲目 ('upbeat' | 'cyber' | 'lofi' | 'epic')
+   * 切换备选音乐曲目 ('last_lap' | 'upbeat' | 'cyber' | 'lofi' | 'epic')
    */
   public setTrack(trackId: BgmTrackId): void {
     if (this.trackId === trackId) return;
@@ -601,6 +658,10 @@ export class BgmSynth {
       seq.dispose();
     }
     this.sequences = [];
+
+    this.mp3Player?.dispose();
+    this.mp3Player = null;
+    this.mp3Loaded = false;
 
     this.bassSynth?.dispose();
     this.padSynth?.dispose();

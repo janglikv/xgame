@@ -54,7 +54,7 @@ export const DEFAULT_GAME_SETTINGS: GameSettingsSnapshot = {
   sfxVolume: 0.72,
   bgmVolume: 0.65,
   bgmMode: 'battle',
-  bgmTrack: 'upbeat',
+  bgmTrack: 'last_lap',
 };
 
 export function loadGameSettings(): GameSettingsSnapshot {

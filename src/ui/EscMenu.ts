@@ -520,7 +520,7 @@ export class EscMenu {
         this.onBgmModeChange?.(this.bgmMode);
         break;
       case 'bgmTrack':
-        const tracks: BgmTrackId[] = ['upbeat', 'cyber', 'lofi', 'epic'];
+        const tracks: BgmTrackId[] = ['last_lap', 'upbeat', 'cyber', 'lofi', 'epic'];
         const nextIndex = (tracks.indexOf(this.bgmTrack) + 1) % tracks.length;
         this.bgmTrack = tracks[nextIndex];
         this.dirty = true;
