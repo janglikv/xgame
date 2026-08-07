@@ -113,10 +113,10 @@ export class MissFortune extends THREE.Group implements CombatUnit {
   /** 冷却（秒） */
   static readonly R_COOLDOWN = 16;
 
-  /** 点地移动最大速度（世界单位/秒） */
-  static readonly MOVE_SPEED = 1.35;
+  /** 点地移动最大速度（世界单位/秒，适度放缓以提升控制沉浸感） */
+  static readonly MOVE_SPEED = 0.92;
   /** 0→满速 / 满速→0 的目标时间（秒） */
-  static readonly MOVE_RAMP_TIME = 0.1;
+  static readonly MOVE_RAMP_TIME = 0.08;
   /**
    * 加速度 = 最大速度 / 爬升时间 → 约 0.1s 到满速。
    */
@@ -1309,11 +1309,15 @@ export class MissFortune extends THREE.Group implements CombatUnit {
     this.moveTargetZ = z;
   }
 
-  /** 取消点地目标与 WASD 输入（速度会自然刹停，不清零） */
+  /** 取消点地目标、WASD 输入与普攻追击，立即静止在原地（S 键 Stop） */
   stopMoving(): void {
     this.clearMoveInput();
     this.moveTargetX = null;
     this.moveTargetZ = null;
+    this.attackTarget = null;
+    this.velX = 0;
+    this.velZ = 0;
+    this.moveAnimWeight = 0;
   }
 
   private clearMoveInput(): void {

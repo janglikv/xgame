@@ -492,7 +492,11 @@ function bootstrap(): void {
     const tag = targetEl?.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA') return;
 
-    if (e.code === 'KeyD') {
+    if (e.code === 'KeyS') {
+      scene.commandHeroStop();
+      scene.cancelSkillTargeting();
+      skillBar.setTargeting(null);
+    } else if (e.code === 'KeyD') {
       scene.castHeroGhost();
     } else if (e.code === 'KeyF') {
       if (pickGround(currentClientX, currentClientY)) {

@@ -220,6 +220,12 @@ export class MainScene extends THREE.Scene {
     this.missFortune.setAttackTarget(target);
   }
 
+  /** 英雄停止移动（按 S 键）：取消目标位移、攻击意图与技能吟唱 */
+  commandHeroStop(): void {
+    if (!this.missFortune.isAlive) return;
+    this.missFortune.stopMoving();
+  }
+
   /** 是否处于技能地面选点状态 */
   get isSkillTargeting(): boolean {
     return this.targetingSkill != null;
