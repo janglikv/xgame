@@ -65,6 +65,8 @@ export class GameAudio {
   private hitBody: Tone.MembraneSynth | null = null;
   /** 命中金属叮 */
   private hitMetal: Tone.MetalSynth | null = null;
+  /** 小兵攻击轻量音效 */
+  private minionSynth: Tone.Synth | null = null;
 
   /** 预留：按名缓存的采样（未来 drop-in wav） */
   private readonly samplePlayers = new Map<string, Tone.Player>();
@@ -75,6 +77,8 @@ export class GameAudio {
   private static readonly MIN_HIT_GAP = 0.03;
   private lastAoeHitAt = 0;
   private static readonly MIN_AOE_HIT_GAP = 0.085;
+  private lastMinionAttackAt = 0;
+  private static readonly MIN_MINION_ATTACK_GAP = 0.015;
 
   get isUnlocked(): boolean {
     return this.unlocked;
@@ -164,10 +168,10 @@ export class GameAudio {
       options.hand === 'left' ? -0.28 : options.hand === 'right' ? 0.28 : 0;
 
     this.gunPanner.pan.rampTo(pan, 0.01);
-    this.setInstrumentGain(this.gunNoise, 0.55 * gainMul);
-    this.setInstrumentGain(this.gunAir, 0.28 * gainMul);
-    this.setInstrumentGain(this.gunBody, 0.7 * gainMul);
-    this.setInstrumentGain(this.gunMetal, 0.22 * gainMul);
+    this.setInstrumentGain(this.gunNoise, 1.25 * gainMul);
+    this.setInstrumentGain(this.gunAir, 0.65 * gainMul);
+    this.setInstrumentGain(this.gunBody, 1.55 * gainMul);
+    this.setInstrumentGain(this.gunMetal, 0.55 * gainMul);
 
     // 主体气爆
     this.gunNoise.noise.type = 'white';
@@ -436,7 +440,7 @@ export class GameAudio {
         sustain: 0,
         release: 0.04,
       },
-      volume: -8,
+      volume: 0,
     }).connect(gunFilter);
 
     const airFilter = new Tone.Filter({
@@ -454,7 +458,7 @@ export class GameAudio {
         sustain: 0,
         release: 0.02,
       },
-      volume: -14,
+      volume: -6,
     }).connect(airFilter);
 
     this.gunBody = new Tone.MembraneSynth({
@@ -467,7 +471,7 @@ export class GameAudio {
         sustain: 0,
         release: 0.04,
       },
-      volume: -6,
+      volume: 2,
     }).connect(gunComp);
 
     this.gunMetal = new Tone.MetalSynth({
@@ -480,7 +484,7 @@ export class GameAudio {
       modulationIndex: 28,
       resonance: 3800,
       octaves: 1.2,
-      volume: -18,
+      volume: -8,
     }).connect(gunComp);
 
     // —— 命中链 ——
@@ -529,8 +533,92 @@ export class GameAudio {
       volume: -20,
     }).connect(hitComp);
 
+    // 小兵出弹/挥砍专用轻量音效 (提升基础响度至 -3dB)
+    this.minionSynth = new Tone.Synth({
+      oscillator: { type: 'sawtooth' },
+      envelope: { attack: 0.001, decay: 0.09, sustain: 0, release: 0.03 },
+      volume: -3,
+    }).connect(this.hitPanner);
+
     this.ready = true;
     this.applySfxGain();
+  }
+
+  /**
+   * 小兵攻击/出弹音效：响亮清晰的程序化射击/挥砍声。
+   * isRanged: true 远程魔法弹 (Pew)，false 近战打击。
+   */
+  playMinionAttack(isRanged = true, pan = 0): void {
+    if (this.muted || this.sfxVolume <= 1e-4) return;
+    if (!this.isRunning()) {
+      void this.unlock().then(() => {
+        if (this.isRunning()) this.playMinionAttack(isRanged, pan);
+      });
+      return;
+    }
+    this.ensureGraph();
+    if (!this.minionSynth || !this.hitPanner) return;
+
+    const now = Tone.now();
+    if (now - this.lastMinionAttackAt < GameAudio.MIN_MINION_ATTACK_GAP) return;
+    this.lastMinionAttackAt = now;
+
+    const jitter = 0.96 + Math.random() * 0.08;
+    this.hitPanner.pan.rampTo(clamp(pan, -1, 1), 0.01);
+
+    if (isRanged) {
+      // 远程魔法微弹：高频穿透弹射声 (720Hz -> Decay 0.08s)
+      this.minionSynth.oscillator.type = 'sawtooth';
+      this.minionSynth.envelope.decay = 0.08;
+      this.minionSynth.triggerAttackRelease(720 * jitter, 0.08, now, 0.95);
+    } else {
+      // 近战挥砍钝击：扎实干脆的微打击声 (280Hz)
+      this.minionSynth.oscillator.type = 'square';
+      this.minionSynth.envelope.decay = 0.06;
+      this.minionSynth.triggerAttackRelease(280 * jitter, 0.06, now, 0.9);
+    }
+  }
+
+  /**
+   * 小兵死亡音效：响亮清晰的 KO 金币碎裂声、消散冲击与倒地噗通声。
+   */
+  playMinionDeath(pan = 0): void {
+    if (this.muted || this.sfxVolume <= 1e-4) return;
+    if (!this.isRunning()) {
+      void this.unlock().then(() => {
+        if (this.isRunning()) this.playMinionDeath(pan);
+      });
+      return;
+    }
+    this.ensureGraph();
+    if (!this.hitNoise || !this.hitBody || !this.hitMetal || !this.hitPanner) return;
+
+    const now = Tone.now();
+    this.hitPanner.pan.rampTo(clamp(pan, -1, 1), 0.01);
+    this.setInstrumentGain(this.hitNoise, 1.4);
+    this.setInstrumentGain(this.hitBody, 1.6);
+    this.setInstrumentGain(this.hitMetal, 0.85);
+
+    // 1. 清晰爆破消散噪声
+    this.hitNoise.noise.type = 'white';
+    this.hitNoise.envelope.attack = 0.001;
+    this.hitNoise.envelope.decay = 0.16;
+    this.hitNoise.envelope.release = 0.05;
+    this.hitNoise.triggerAttackRelease(0.16, now);
+
+    // 2. 补刀 KO 金属清脆碎裂声 (类似于掉落金币啪嚓声)
+    this.hitMetal.frequency.value = 750;
+    this.hitMetal.envelope.attack = 0.0008;
+    this.hitMetal.envelope.decay = 0.12;
+    this.hitMetal.envelope.release = 0.04;
+    this.hitMetal.harmonicity = 4.2;
+    this.hitMetal.modulationIndex = 18;
+    this.hitMetal.triggerAttackRelease(0.12, now + 0.002);
+
+    // 3. 倒地扎实低音冲击
+    this.hitBody.pitchDecay = 0.028;
+    this.hitBody.octaves = 3.2;
+    this.hitBody.triggerAttackRelease('F2', 0.14, now, 0.95);
   }
 
   private applySfxGain(): void {
@@ -540,8 +628,8 @@ export class GameAudio {
 
   private volumeDb(): number {
     if (this.muted || this.sfxVolume <= 1e-4) return -Infinity;
-    // 感知响度略抬：0.72 → 约 -3dB
-    return Tone.gainToDb(Math.max(0.0001, this.sfxVolume * 0.95));
+    // 主角与战场音效基础输出大幅提升：1.85x
+    return Tone.gainToDb(Math.max(0.0001, this.sfxVolume * 1.85));
   }
 
   /** 按 0~1 线性增益设置乐器 volume（dB） */
@@ -595,15 +683,15 @@ interface HitProfile {
 const HIT_PROFILES: Record<HitSfxKind, HitProfile> = {
   hero: {
     noiseType: 'white',
-    noiseGain: 0.55,
+    noiseGain: 1.15,
     noiseDecay: 0.055,
     noiseDur: 0.07,
-    bodyGain: 0.65,
+    bodyGain: 1.35,
     bodyMidi: 52,
     bodyDur: 0.08,
     pitchDecay: 0.016,
     octaves: 2.6,
-    metalGain: 0.28,
+    metalGain: 0.6,
     metalFreq: 420,
     metalDecay: 0.045,
     metalDur: 0.05,

@@ -1309,15 +1309,21 @@ export class MissFortune extends THREE.Group implements CombatUnit {
     this.moveTargetZ = z;
   }
 
-  /** 取消点地目标、WASD 输入与普攻追击，立即静止在原地（S 键 Stop） */
+  /** 玩家按 S 键全停：清空位移目标、WASD 输入、打断普攻姿态与技能吟唱，瞬间刹停 */
+  stopAllCommands(): void {
+    this.stopMoving();
+    this.clearAttackTarget();
+    this.attackStance = false;
+    this.velX = 0;
+    this.velZ = 0;
+    this.moveAnimWeight = 0;
+  }
+
+  /** 取消位移目标与 WASD 输入（内部停步保留攻击目标与攻击姿态） */
   stopMoving(): void {
     this.clearMoveInput();
     this.moveTargetX = null;
     this.moveTargetZ = null;
-    this.attackTarget = null;
-    this.velX = 0;
-    this.velZ = 0;
-    this.moveAnimWeight = 0;
   }
 
   private clearMoveInput(): void {

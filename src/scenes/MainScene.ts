@@ -223,7 +223,7 @@ export class MainScene extends THREE.Scene {
   /** 英雄停止移动（按 S 键）：取消目标位移、攻击意图与技能吟唱 */
   commandHeroStop(): void {
     if (!this.missFortune.isAlive) return;
-    this.missFortune.stopMoving();
+    this.missFortune.stopAllCommands();
   }
 
   /** 是否处于技能地面选点状态 */
@@ -262,7 +262,11 @@ export class MainScene extends THREE.Scene {
     if (!this.missFortune.isAlive) return false;
     return this.missFortune.castR(
       this.projectiles,
-      () => this.collectEnemyCombatUnits(this.missFortune.team),
+      // R 扇形扫射不伤害防御塔
+      () =>
+        this.collectEnemyCombatUnits(this.missFortune.team).filter(
+          (u) => !(u instanceof DefenseTower),
+        ),
       pointerXZ,
     );
   }

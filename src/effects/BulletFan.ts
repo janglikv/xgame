@@ -65,7 +65,6 @@ export class BulletFan extends THREE.Group {
   private readonly dirX: number;
   private readonly dirZ: number;
 
-  private readonly groundFan: THREE.Mesh;
   private readonly bolts: FanBolt[] = [];
 
   private age = 0;
@@ -108,22 +107,6 @@ export class BulletFan extends THREE.Group {
 
     this.position.set(spawn.originX, 0, spawn.originZ);
 
-    // 地面扇形指示（几何已在 XZ 面，仅 yaw 对准射击方向）
-    this.groundFan = new THREE.Mesh(
-      createFanGeometry(this.range, this.halfAngle, 28),
-      new THREE.MeshBasicMaterial({
-        color: this.emissive,
-        transparent: true,
-        opacity: 0.18,
-        depthWrite: false,
-        side: THREE.DoubleSide,
-      }),
-    );
-    this.groundFan.rotation.y = Math.atan2(this.dirX, this.dirZ);
-    this.groundFan.position.y = 0.025;
-    this.groundFan.renderOrder = 1;
-    this.add(this.groundFan);
-
     // 开场立刻一 tick + 一波弹
     this.applyDamageTick();
     this.spawnWave();
@@ -141,16 +124,6 @@ export class BulletFan extends THREE.Group {
     if (!(delta > 0)) return true;
 
     this.age += delta;
-
-    const lifeFade = THREE.MathUtils.clamp(
-      1 - this.age / this.duration,
-      0,
-      1,
-    );
-    const pulse = 0.94 + Math.sin(this.age * 14) * 0.06;
-    this.groundFan.scale.setScalar(pulse);
-    (this.groundFan.material as THREE.MeshBasicMaterial).opacity =
-      0.08 + 0.16 * lifeFade;
 
     // 扫射期间持续出波
     if (this.age <= this.duration) {
@@ -221,8 +194,6 @@ export class BulletFan extends THREE.Group {
       (b.glow.material as THREE.Material).dispose();
     }
     this.bolts.length = 0;
-    this.groundFan.geometry.dispose();
-    (this.groundFan.material as THREE.Material).dispose();
   }
 
   private applyDamageTick(): void {
@@ -325,36 +296,4 @@ export class BulletFan extends THREE.Group {
       gain: 0.42 + Math.random() * 0.18,
     });
   }
-}
-
-/** 本地扇形：中轴 +Z，张角 2*halfAngle，半径 range */
-function createFanGeometry(
-  range: number,
-  halfAngle: number,
-  segments: number,
-): THREE.BufferGeometry {
-  const segs = Math.max(4, segments);
-  const positions: number[] = [];
-  const indices: number[] = [];
-
-  // 顶点 0 = 原点
-  positions.push(0, 0, 0);
-  for (let i = 0; i <= segs; i += 1) {
-    const t = i / segs;
-    const a = -halfAngle + t * halfAngle * 2;
-    // 本地 XZ 平面：x = sin(a)*r, z = cos(a)*r
-    positions.push(Math.sin(a) * range, 0, Math.cos(a) * range);
-  }
-  for (let i = 0; i < segs; i += 1) {
-    indices.push(0, i + 1, i + 2);
-  }
-
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute(
-    'position',
-    new THREE.Float32BufferAttribute(positions, 3),
-  );
-  geo.setIndex(indices);
-  geo.computeVertexNormals();
-  return geo;
 }

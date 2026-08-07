@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { getGameAudio } from '../audio/GameAudio';
 import { HomingBolt } from '../effects/HomingBolt';
 import type { ProjectileManager } from '../effects/ProjectileManager';
 import { CircleBody } from './collision/CircleBody';
@@ -47,9 +48,9 @@ const MELEE_STATS: MinionStats = {
   attackRange: 0.55,
   aggroRange: 1.4,
   leashRange: 3.2,
-  windup: 0.28,
+  windup: 0.35,
   attackInterval: 1.15,
-  moveSpeed: 0.45,
+  moveSpeed: 0.675,
   boltScale: 1,
 };
 
@@ -62,9 +63,9 @@ const RANGED_STATS: MinionStats = {
   attackRange: 1.45,
   aggroRange: 2.1,
   leashRange: 3.8,
-  windup: 0.32,
+  windup: 0.38,
   attackInterval: 1.25,
-  moveSpeed: 0.45,
+  moveSpeed: 0.675,
   boltScale: 1.6,
 };
 
@@ -289,6 +290,9 @@ export class Minion extends THREE.Group implements CombatUnit {
     // 魔法杖：握在中下段，杖身近直立、宝珠略朝前上
     const { group: staff, orb } = createMagicStaff();
     this.staff = staff;
+    if (this.kind === 'ranged') {
+      staff.scale.setScalar(2.0);
+    }
     staff.position.set(0, -0.06, 0);
     staff.rotation.order = 'YXZ';
     staff.rotation.set(
@@ -345,6 +349,9 @@ export class Minion extends THREE.Group implements CombatUnit {
     this.healthBar.visible = false;
     this.collider.setMarkerVisible(false);
     this.clearCombat();
+
+    // 播放小兵死亡倒地与消散音效
+    getGameAudio().playMinionDeath((this.position.x - 0) * 0.05);
 
     // 切换为死亡 KO 晕眩可爱表情贴图（倒八字眉 + 黑叉眼 + 吐粉红舌）
     if (!Minion.deadFaceTexture) {
@@ -690,6 +697,10 @@ export class Minion extends THREE.Group implements CombatUnit {
     }
     this.windupElapsed += delta;
 
+    // 挥舞法杖前摇姿态：高举蓄力 -> 猛力下甩前击
+    const progress = Math.min(1, this.windupElapsed / this.stats.windup);
+    this.applyAttackWindupPose(progress);
+
     if (this.windupElapsed >= this.stats.windup) {
       // 前摇结束：发射锁定弹，伤害在命中时结算
       if (
@@ -703,6 +714,21 @@ export class Minion extends THREE.Group implements CombatUnit {
         0,
         this.stats.attackInterval - this.stats.windup,
       );
+    }
+  }
+
+  /** 攻击前摇姿态：仅挥舞手臂（右手抬起蓄力 -> 向前下挥出击） */
+  private applyAttackWindupPose(progress: number): void {
+    if (progress < 0.65) {
+      // 0~0.65 阶段：右手手臂向上向后抬起
+      const t = progress / 0.65;
+      this.rightHand.position.y = this.baseRightHand.y + 0.12 * t;
+      this.rightHand.position.z = this.baseRightHand.z - 0.08 * t;
+    } else {
+      // 0.65~1.0 阶段：手臂向前下方猛力下挥
+      const t = (progress - 0.65) / 0.35;
+      this.rightHand.position.y = (this.baseRightHand.y + 0.12) - 0.16 * t;
+      this.rightHand.position.z = (this.baseRightHand.z - 0.08) + 0.18 * t;
     }
   }
 
@@ -720,6 +746,7 @@ export class Minion extends THREE.Group implements CombatUnit {
       this.stats.boltScale,
       { speed: HomingBolt.SPEED * 0.3, hitSfx: 'minion' },
     );
+    getGameAudio().playMinionAttack(this.kind === 'ranged', (this.position.x - 0) * 0.05);
   }
 
   /** 默认沿兵线推进（蓝 +X / 红 -X） */
