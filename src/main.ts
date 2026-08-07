@@ -18,6 +18,7 @@ import { FpsOverlay } from './ui/FpsOverlay';
 import { preloadGameCursors, setGameCursor } from './ui/GameCursor';
 import { ScreenBrightness } from './ui/ScreenBrightness';
 import { SkillBar } from './ui/SkillBar';
+import { StartOverlay } from './ui/StartOverlay';
 import { VictoryOverlay } from './ui/VictoryOverlay';
 
 /** 防御塔悬停：屏幕空间整体外轮廓（深红） */
@@ -107,6 +108,9 @@ function bootstrap(): void {
     lookSpeed: 0.002,
   });
   controls.setFollowTarget(scene.hero);
+  /** 开局暂停：点击播放后才推进逻辑与接受操作 */
+  let gameStarted = false;
+  controls.setEnabled(false);
 
   // 从本地恢复设置
   const settings: GameSettingsSnapshot = loadGameSettings();
@@ -183,6 +187,22 @@ function bootstrap(): void {
   const victoryOverlay = new VictoryOverlay();
   victoryOverlay.setSize(width, height);
 
+  // 开局暂停 HUD：点击播放后才开始对局
+  const startOverlay = new StartOverlay(renderer.domElement, {
+    onStart: () => {
+      if (gameStarted) return;
+      gameStarted = true;
+      // 丢掉暂停期间积累的 delta，避免首帧跳变
+      clock.getDelta();
+      controls.setEnabled(!escMenu.isOpen && !victoryOverlay.isVisible);
+      void audio.unlock();
+      scene.clearAttackHover();
+      syncHoverOutline();
+      setGameCursor(renderer.domElement, 'default');
+    },
+  });
+  startOverlay.setSize(width, height);
+
   // ESC 设置面板：游戏内 HUD（正交场景 + Canvas 纹理）
   const escMenu = new EscMenu(renderer.domElement, {
     getCameraParams: () => controls.getParams(),
@@ -205,8 +225,10 @@ function bootstrap(): void {
       scene.setColliderMarkersVisible(visible);
       persistSettings({ showColliderMarkers: visible });
     },
-    onSkipTime: (gameSeconds, realSeconds) =>
-      scene.skipTime(gameSeconds, realSeconds),
+    onSkipTime: (gameSeconds, realSeconds) => {
+      if (!gameStarted) return;
+      scene.skipTime(gameSeconds, realSeconds);
+    },
     onBrightnessChange: (ui01) => {
       applyBrightnessUi(screenBrightness, ui01);
       persistSettings({ brightnessUi: ui01 });
@@ -263,8 +285,10 @@ function bootstrap(): void {
       window.location.reload();
     },
     onOpenChange: (open) => {
-      // 结算后始终保持相机禁用，避免关 ESC 又把操作加回来
-      controls.setEnabled(!open && !victoryOverlay.isVisible);
+      // 未开局 / 结算后始终保持相机禁用，避免关 ESC 又把操作加回来
+      controls.setEnabled(
+        gameStarted && !open && !victoryOverlay.isVisible,
+      );
       audio.setBgmInMenu(open);
       if (open) {
         scene.cancelSkillTargeting();
@@ -303,7 +327,8 @@ function bootstrap(): void {
 
   // 底部技能栏 QWER（Q/W/E/R）
   const skillBar = new SkillBar({
-    isInputBlocked: () => escMenu.isOpen || victoryOverlay.isVisible,
+    isInputBlocked: () =>
+      !gameStarted || escMenu.isOpen || victoryOverlay.isVisible,
     onSkillPress: (slot) => {
       if (slot === 'Q') {
         scene.beginHeroSkillQ(
@@ -329,7 +354,7 @@ function bootstrap(): void {
   skillBar.setSize(width, height);
 
   const onPointerDownCommand = (e: PointerEvent): void => {
-    if (escMenu.isOpen || victoryOverlay.isVisible) return;
+    if (!gameStarted || escMenu.isOpen || victoryOverlay.isVisible) return;
 
     const mainBtn = settings.mouseControl === 'left' ? 0 : 2;
     const cancelBtn = settings.mouseControl === 'left' ? 2 : 0;
@@ -390,7 +415,7 @@ function bootstrap(): void {
 
   /** 两态指针：可攻击悬停（塔=红描边同源）→ 短剑，其余 → 小手 */
   const refreshGameplayCursor = (clientX?: number, clientY?: number): void => {
-    if (escMenu.isOpen || victoryOverlay.isVisible) {
+    if (!gameStarted || escMenu.isOpen || victoryOverlay.isVisible) {
       setGameCursor(renderer.domElement, 'default');
       return;
     }
@@ -417,7 +442,7 @@ function bootstrap(): void {
   };
 
   const onPointerMove = (e: PointerEvent): void => {
-    if (escMenu.isOpen || victoryOverlay.isVisible) {
+    if (!gameStarted || escMenu.isOpen || victoryOverlay.isVisible) {
       scene.clearAttackHover();
       syncHoverOutline();
       setGameCursor(renderer.domElement, 'default');
@@ -470,6 +495,7 @@ function bootstrap(): void {
     outlinePass.resolution.set(w * pr, h * pr);
     scene.resize(w, h);
     screenBrightness.setSize(w, h);
+    startOverlay.setSize(w, h);
     escMenu.setSize(w, h);
     skillBar.setSize(w, h);
     victoryOverlay.setSize(w, h);
@@ -487,7 +513,7 @@ function bootstrap(): void {
 
   window.addEventListener('keydown', (e: KeyboardEvent) => {
     if (e.repeat) return;
-    if (escMenu.isOpen || victoryOverlay.isVisible) return;
+    if (!gameStarted || escMenu.isOpen || victoryOverlay.isVisible) return;
     const targetEl = e.target as HTMLElement | null;
     const tag = targetEl?.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA') return;
@@ -530,6 +556,24 @@ function bootstrap(): void {
     requestAnimationFrame(tick);
     fpsOverlay.update();
     const delta = Math.min(clock.getDelta(), 1 / 20);
+
+    // 开局未点播放：冻结对局逻辑，仅渲染场景 + 开始界面
+    if (!gameStarted) {
+      scene.commandHeroMoveInput(0, 0);
+      startOverlay.update(delta);
+      // 相机仍可微跟，但 controls 已禁用，不会飞镜头
+      controls.update(0);
+      scene.updateStructureHealthBars(camera);
+      syncHoverOutline();
+      skillBar.setHp(scene.hero.hp, scene.hero.maxHp);
+
+      composer.render();
+      screenBrightness.render(renderer);
+      skillBar.render(renderer);
+      startOverlay.render(renderer);
+      escMenu.render(renderer);
+      return;
+    }
 
     if (scene.isMatchOver) {
       enterMatchOverUi();

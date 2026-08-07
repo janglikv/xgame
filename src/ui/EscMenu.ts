@@ -205,15 +205,15 @@ export class EscMenu {
     this.onResetGame = options.onResetGame;
     this.onOpenChange = options.onOpenChange;
     this.getCameraParams = options.getCameraParams;
-    this.axesOn = options.initialAxesVisible ?? true;
-    this.collidersOn = options.initialColliderMarkersVisible ?? true;
-    this.cameraLocked = options.initialCameraLocked ?? false;
-    this.fixedCameraOn = options.initialFixedCamera ?? false;
+    this.axesOn = options.initialAxesVisible ?? false;
+    this.collidersOn = options.initialColliderMarkersVisible ?? false;
+    this.cameraLocked = options.initialCameraLocked ?? true;
+    this.fixedCameraOn = options.initialFixedCamera ?? true;
     this.godModeOn = options.initialGodMode ?? false;
     this.minionSpawnOn = options.initialMinionSpawn ?? true;
     this.towerInvincibleOn = options.initialTowerInvincible ?? false;
-    this.mouseControl = options.initialMouseControl ?? 'right';
-    this.flashSkillOn = options.initialFlashSkill ?? true;
+    this.mouseControl = options.initialMouseControl ?? 'left';
+    this.flashSkillOn = options.initialFlashSkill ?? false;
     this.brightness = THREE.MathUtils.clamp(
       options.initialBrightness ?? 1,
       0,

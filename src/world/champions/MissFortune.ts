@@ -13,10 +13,21 @@ import {
 } from '../combat/combatMath';
 import { HealthBar } from '../ui/HealthBar';
 
+/** 厄运小姐生成参数（阵营 / 属性倍率，供玩家与 AI 克隆共用） */
+export interface MissFortuneSpawnOptions {
+  /** 阵营；默认蓝方（玩家） */
+  team?: TeamId;
+  /** 伤害倍率（普攻 + 技能统一） */
+  damageMult?: number;
+  /** 移速倍率 */
+  moveSpeedMult?: number;
+}
+
 /**
  * 第一个英雄：厄运小姐。
  * 独立模型（起步形态参考小兵五球+巫师帽，但与小兵代码完全分离，后续可自由改型）。
  * 锁定视角：右键点地 / WASD 移动；右键敌方单位普通攻击（双枪交替、弹从枪口出）。
+ * 也可作为红方 AI 克隆体（team/damageMult/moveSpeedMult）。
  */
 export class MissFortune extends THREE.Group implements CombatUnit {
   static readonly DISPLAY_NAME = '厄运小姐';
@@ -28,7 +39,7 @@ export class MissFortune extends THREE.Group implements CombatUnit {
   static readonly SCALE = 0.375;
   /** 地面圆碰撞半径 */
   static readonly COLLIDER_RADIUS = 0.22;
-  /** 玩家英雄：蓝方 */
+  /** 玩家英雄默认：蓝方 */
   static readonly TEAM: TeamId = 'blue';
   static readonly MAX_HP = 520;
   /** 与小兵同级，防御塔优先清兵时按距离选 */
@@ -175,13 +186,19 @@ export class MissFortune extends THREE.Group implements CombatUnit {
   private static readonly HAT_PINK = 0xec4899;
   private static readonly HAT_PINK_BAND = 0xbe185d;
 
-  readonly team: TeamId = MissFortune.TEAM;
+  readonly team: TeamId;
   readonly collider: CircleBody;
   readonly combatPriority = MissFortune.COMBAT_PRIORITY;
   readonly maxHp = MissFortune.MAX_HP;
   hp = MissFortune.MAX_HP;
 
-  private readonly bodyRoot: THREE.Group;
+  /** 伤害倍率（构造时写入） */
+  private readonly damageMult: number;
+  /** 移速倍率（构造时写入） */
+  private readonly moveSpeedMult: number;
+
+  /** 身体根节点（描边 / 射线拾取用） */
+  readonly bodyRoot: THREE.Group;
   private readonly bodyMesh: THREE.Mesh;
   private readonly leftHand: THREE.Mesh;
   private readonly rightHand: THREE.Mesh;
@@ -296,15 +313,21 @@ export class MissFortune extends THREE.Group implements CombatUnit {
 
   private readonly healthBar: HealthBar;
 
-  constructor(x = 0, z = 0) {
+  constructor(x = 0, z = 0, options: MissFortuneSpawnOptions = {}) {
     super();
-    this.name = MissFortune.DISPLAY_NAME;
+    this.team = options.team ?? MissFortune.TEAM;
+    this.damageMult = Math.max(0, options.damageMult ?? 1);
+    this.moveSpeedMult = Math.max(0.05, options.moveSpeedMult ?? 1);
+    this.name =
+      this.team === 'red'
+        ? `${MissFortune.DISPLAY_NAME}·克隆`
+        : MissFortune.DISPLAY_NAME;
     this.spawnX = x;
     this.spawnZ = z;
     this.position.set(x, 0, z);
     this.scale.setScalar(MissFortune.SCALE);
-    // 面朝 +X（本地 +Z → 世界 +X）
-    this.yaw = Math.PI / 2;
+    // 蓝方面朝 +X，红方面朝 -X（各自朝中路）
+    this.yaw = this.team === 'red' ? -Math.PI / 2 : Math.PI / 2;
     this.desiredYaw = this.yaw;
     this.rotation.set(0, this.yaw, 0);
 
@@ -659,7 +682,7 @@ export class MissFortune extends THREE.Group implements CombatUnit {
     this.wBuffRemaining = 0;
     this.velX = 0;
     this.velZ = 0;
-    this.yaw = Math.PI / 2;
+    this.yaw = this.team === 'red' ? -Math.PI / 2 : Math.PI / 2;
     this.desiredYaw = this.yaw;
     this.turnActive = false;
     this.rotation.set(0, this.yaw, 0);
@@ -709,14 +732,16 @@ export class MissFortune extends THREE.Group implements CombatUnit {
   /**
    * 锁定敌方单位普攻：进入攻击状态；射程内站桩开火，射程外追击。
    * 点地 / WASD 会退出攻击状态。新普攻会取消排队技能。
+   * 重复锁定同一目标不打断当前前摇。
    */
   setAttackTarget(target: CombatUnit): void {
     if (!this.isAlive || !isValidTarget(this, target)) return;
     if (this.rChannelRemaining > 0) return;
     this.clearPendingCast();
+    const sameTarget = this.attackStance && this.attackTarget === target;
     this.attackStance = true;
     this.attackTarget = target;
-    this.windupElapsed = -1;
+    if (!sameTarget) this.windupElapsed = -1;
     // 只登记期望朝向，不改 yaw（由后续 applyFacing 限速转向）
     this.requestFacing(
       target.collider.x - this.position.x,
@@ -728,6 +753,11 @@ export class MissFortune extends THREE.Group implements CombatUnit {
     } else {
       this.stopMoving();
     }
+  }
+
+  /** 当前普攻锁定目标（AI 换目标判定用） */
+  get currentAttackTarget(): CombatUnit | null {
+    return this.attackTarget;
   }
 
   /** 退出攻击状态（玩家主动取消） */
@@ -878,7 +908,7 @@ export class MissFortune extends THREE.Group implements CombatUnit {
     projectiles.fire({
       origin: this.muzzleWorld.clone(),
       target: primary,
-      damage: MissFortune.Q_DAMAGE,
+      damage: this.scaleDamage(MissFortune.Q_DAMAGE),
       team: this.team,
       scale: MissFortune.BOLT_SCALE * 1.1,
       color: MissFortune.BOLT_COLOR,
@@ -898,7 +928,7 @@ export class MissFortune extends THREE.Group implements CombatUnit {
         if (!next) return null;
         return {
           target: next,
-          damage: MissFortune.Q_BOUNCE_DAMAGE,
+          damage: this.scaleDamage(MissFortune.Q_BOUNCE_DAMAGE),
         };
       },
     });
@@ -1043,7 +1073,7 @@ export class MissFortune extends THREE.Group implements CombatUnit {
       range: MissFortune.R_RANGE,
       halfAngle: (MissFortune.R_HALF_ANGLE_DEG * Math.PI) / 180,
       team: this.team,
-      damagePerTick: MissFortune.R_DAMAGE_PER_TICK,
+      damagePerTick: this.scaleDamage(MissFortune.R_DAMAGE_PER_TICK),
       tickInterval: MissFortune.R_TICK_INTERVAL,
       duration: MissFortune.R_DURATION,
       waveInterval: MissFortune.R_WAVE_INTERVAL,
@@ -1118,7 +1148,7 @@ export class MissFortune extends THREE.Group implements CombatUnit {
       centerZ: z,
       radius: MissFortune.E_RADIUS,
       team: this.team,
-      damagePerTick: MissFortune.E_DAMAGE_PER_TICK,
+      damagePerTick: this.scaleDamage(MissFortune.E_DAMAGE_PER_TICK),
       tickInterval: MissFortune.E_TICK_INTERVAL,
       duration: MissFortune.E_DURATION,
       boltCount: MissFortune.E_BOLT_COUNT,
@@ -1607,10 +1637,13 @@ export class MissFortune extends THREE.Group implements CombatUnit {
     let moveFaceX: number | null = null;
     let moveFaceZ: number | null = null;
 
-    // 疾跑与 W 技能叠加加速度
+    // 疾跑与 W 技能叠加加速度；克隆体等可带移速倍率
     const ghostMult = this.ghostTimer > 0 ? 1.85 : 1.0;
     const wMult = this.wBuffRemaining > 0 ? 1.45 : 1.0;
-    const currentMaxSpeed = MissFortune.MOVE_SPEED * wMult * ghostMult;
+    const baseSpeed = this.getBaseMoveSpeed();
+    const moveAccel = this.getMoveAccel();
+    const moveDecel = this.getMoveDecel();
+    const currentMaxSpeed = baseSpeed * wMult * ghostMult;
 
     if (this.moveInputActive) {
       // WASD：相对镜头的连续方向，满速
@@ -1641,12 +1674,12 @@ export class MissFortune extends THREE.Group implements CombatUnit {
         let desiredSpeed = currentMaxSpeed;
         const spd = this.speed();
         const brakeDist =
-          (spd * spd) / (2 * Math.max(MissFortune.MOVE_DECEL, 1e-4));
+          (spd * spd) / (2 * Math.max(moveDecel, 1e-4));
         if (dist <= brakeDist && brakeDist > 1e-6) {
           desiredSpeed = Math.min(
             desiredSpeed,
             Math.sqrt(
-              Math.max(0, 2 * MissFortune.MOVE_DECEL * dist),
+              Math.max(0, 2 * moveDecel * dist),
             ),
           );
         }
@@ -1659,10 +1692,7 @@ export class MissFortune extends THREE.Group implements CombatUnit {
     // 加速用 ACCEL，减速/改向用 DECEL
     const curSpd = this.speed();
     const desSpd = Math.hypot(desiredVelX, desiredVelZ);
-    const rate =
-      desSpd >= curSpd - 1e-4
-        ? MissFortune.MOVE_ACCEL
-        : MissFortune.MOVE_DECEL;
+    const rate = desSpd >= curSpd - 1e-4 ? moveAccel : moveDecel;
     const maxDeltaV = rate * delta;
     const dvx = desiredVelX - this.velX;
     const dvz = desiredVelZ - this.velZ;
@@ -1726,7 +1756,7 @@ export class MissFortune extends THREE.Group implements CombatUnit {
 
     // 走路权重平滑追速度比，禁止站/走硬切
     const speedRatio = THREE.MathUtils.clamp(
-      spd / MissFortune.MOVE_SPEED,
+      spd / Math.max(this.getBaseMoveSpeed(), 1e-4),
       0,
       1,
     );
@@ -1859,7 +1889,7 @@ export class MissFortune extends THREE.Group implements CombatUnit {
     projectiles.fireAt(
       this.muzzleWorld,
       target,
-      MissFortune.ATTACK_DAMAGE,
+      this.scaleDamage(MissFortune.ATTACK_DAMAGE),
       this.team,
       MissFortune.BOLT_SCALE,
       {
@@ -1869,6 +1899,24 @@ export class MissFortune extends THREE.Group implements CombatUnit {
         hitSfx: 'hero',
       },
     );
+  }
+
+  /** 按克隆体倍率缩放伤害 */
+  private scaleDamage(base: number): number {
+    return base * this.damageMult;
+  }
+
+  /** 基础移速（含倍率，不含 W / 疾跑） */
+  private getBaseMoveSpeed(): number {
+    return MissFortune.MOVE_SPEED * this.moveSpeedMult;
+  }
+
+  private getMoveAccel(): number {
+    return this.getBaseMoveSpeed() / MissFortune.MOVE_RAMP_TIME;
+  }
+
+  private getMoveDecel(): number {
+    return this.getBaseMoveSpeed() / MissFortune.MOVE_RAMP_TIME;
   }
 
   /**

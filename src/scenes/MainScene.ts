@@ -13,6 +13,7 @@ import type { CombatUnit } from '../world/combat/CombatUnit';
 import { createSceneLights } from '../world/createSceneLights';
 import { DefenseTower } from '../world/DefenseTower';
 import { DirtFloor } from '../world/DirtFloor';
+import { HeroAI } from '../world/champions/HeroAI';
 import { MissFortune } from '../world/champions/MissFortune';
 import { Minion } from '../world/Minion';
 import { MinionWaveSpawner } from '../world/MinionWaveSpawner';
@@ -61,15 +62,18 @@ export class MainScene extends THREE.Scene {
   private readonly defenseTowers: DefenseTower[];
   private readonly minionSpawner: MinionWaveSpawner;
   private readonly projectiles: ProjectileManager;
-  /** 第一个英雄：厄运小姐（独立模型；锁定视角下可点地移动） */
+  /** 玩家英雄：蓝方厄运小姐（独立模型；锁定视角下可点地移动） */
   private readonly missFortune: MissFortune;
+  /** 红方 AI 克隆体：同模型，伤害与移速翻倍 */
+  private readonly enemyHero: MissFortune;
+  private readonly enemyHeroAi: HeroAI;
   /** 技能地面选点指示（E 枪林弹雨） */
   private readonly castIndicator: GroundCastIndicator;
   /** 点击地面移动特效 */
   private readonly clickEffects: GroundClickEffect[] = [];
 
-  private axesVisible = true;
-  private colliderMarkersVisible = true;
+  private axesVisible = false;
+  private colliderMarkersVisible = false;
   /** 当前地面技能选点：'E' | null */
   private targetingSkill: 'E' | null = null;
   /** 最近一次鼠标地面落点（选点中跟随英雄时用） */
@@ -144,9 +148,23 @@ export class MainScene extends THREE.Scene {
     this.minionSpawner = new MinionWaveSpawner(this);
     this.projectiles = new ProjectileManager(this);
 
-    // 第一个角色：厄运小姐 @ 蓝方水晶前（死亡后同点复活）
+    // 玩家：蓝方厄运小姐 @ 蓝方水晶前（死亡后同点复活）
     this.missFortune = new MissFortune(MinionWaveSpawner.BLUE_SPAWN_X, 0);
     this.add(this.missFortune);
+
+    // 红方 AI 克隆体：同模型，伤害 / 移速 ×2，从红方水晶前推线
+    this.enemyHero = new MissFortune(MinionWaveSpawner.RED_SPAWN_X, 0, {
+      team: 'red',
+      damageMult: 2,
+      moveSpeedMult: 2,
+    });
+    this.add(this.enemyHero);
+    this.enemyHeroAi = new HeroAI(
+      this.enemyHero,
+      this.projectiles,
+      () => this.collectEnemyCombatUnits(this.enemyHero.team),
+      MinionWaveSpawner.BLUE_NEXUS_X,
+    );
 
     this.castIndicator = new GroundCastIndicator(
       MissFortune.BOLT_COLOR,
@@ -281,7 +299,7 @@ export class MainScene extends THREE.Scene {
     return this.missFortune.castW();
   }
 
-  private flashSkillEnabled = true;
+  private flashSkillEnabled = false;
 
   setFlashSkillEnabled(enabled: boolean): void {
     this.flashSkillEnabled = enabled;
@@ -440,13 +458,18 @@ export class MainScene extends THREE.Scene {
   }
 
   /**
-   * 根据射线更新悬停：敌方塔优先，其次敌方小兵。
+   * 根据射线更新悬停：敌方塔优先，其次敌方英雄，再敌方小兵。
    * 红描边与攻击短剑共用此结果（有描边才出剑）。
    */
   updateAttackHover(raycaster: THREE.Raycaster): void {
     const tower = this.pickTowerAtRay(raycaster);
     if (tower) {
       this.setAttackHover(tower, tower.fullModel);
+      return;
+    }
+    const enemyHero = this.pickEnemyHeroAtRay(raycaster);
+    if (enemyHero) {
+      this.setAttackHover(enemyHero, enemyHero.bodyRoot);
       return;
     }
     const minion = this.pickMinionAtRay(raycaster);
@@ -579,6 +602,35 @@ export class MainScene extends THREE.Scene {
   }
 
   /**
+   * 射线拾取可攻击的敌方英雄（bodyRoot，不含血条/碰撞圈）。
+   */
+  pickEnemyHeroAtRay(raycaster: THREE.Raycaster): MissFortune | null {
+    const heroTeam = this.missFortune.team;
+    const roots: THREE.Object3D[] = [];
+    for (const h of this.allHeroes()) {
+      if (h.isAlive && h.team !== heroTeam) roots.push(h.bodyRoot);
+    }
+    if (roots.length === 0) return null;
+
+    const hits = raycaster.intersectObjects(roots, true);
+    for (const hit of hits) {
+      if (isCursorPickIgnore(hit.object)) continue;
+      let obj: THREE.Object3D | null = hit.object;
+      while (obj) {
+        if (obj instanceof MissFortune) {
+          return obj.isAlive && obj.team !== heroTeam ? obj : null;
+        }
+        if (obj.parent instanceof MissFortune) {
+          const h = obj.parent;
+          return h.isAlive && h.team !== heroTeam ? h : null;
+        }
+        obj = obj.parent;
+      }
+    }
+    return null;
+  }
+
+  /**
    * 射线拾取可攻击的敌方小兵（bodyRoot，不含血条/碰撞圈）。
    */
   pickMinionAtRay(raycaster: THREE.Raycaster): Minion | null {
@@ -627,7 +679,7 @@ export class MainScene extends THREE.Scene {
     return this.hoverOutlineRoot;
   }
 
-  /** 存活敌方：小兵 + 塔 + 水晶 */
+  /** 存活敌方：小兵 + 塔 + 水晶 + 敌方英雄 */
   private collectEnemyCombatUnits(team: CombatUnit['team']): CombatUnit[] {
     const out: CombatUnit[] = [];
     for (const n of this.nexusCrystals) {
@@ -639,7 +691,15 @@ export class MainScene extends THREE.Scene {
     for (const m of this.minionSpawner.activeMinions) {
       if (m.isAlive && m.team !== team) out.push(m);
     }
+    for (const h of this.allHeroes()) {
+      if (h.isAlive && h.team !== team) out.push(h);
+    }
     return out;
+  }
+
+  /** 场上所有英雄（玩家 + AI 克隆） */
+  private allHeroes(): readonly MissFortune[] {
+    return [this.missFortune, this.enemyHero];
   }
 
   /** 开关坐标参考线（XYZ 轴 / 网格 / 刻度） */
@@ -746,7 +806,7 @@ export class MainScene extends THREE.Scene {
   private tick(delta: number): void {
     if (this.matchResult) return;
 
-    // 本帧开战前的存活单位（水晶 + 塔 + 小兵 + 英雄），供双方索敌
+    // 本帧开战前的存活单位（水晶 + 塔 + 小兵 + 双方英雄），供双方索敌
     const structures = [
       ...this.nexusCrystals.filter((n) => n.isAlive),
       ...this.defenseTowers.filter((t) => t.isAlive),
@@ -755,8 +815,8 @@ export class MainScene extends THREE.Scene {
       ...structures,
       ...this.minionSpawner.activeMinions.filter((m) => m.isAlive),
     ];
-    if (this.missFortune.isAlive) {
-      combatUnits.push(this.missFortune);
+    for (const h of this.allHeroes()) {
+      if (h.isAlive) combatUnits.push(h);
     }
 
     // 基地水晶：悬浮脉动动画
@@ -769,11 +829,19 @@ export class MainScene extends THREE.Scene {
       tower.update(delta, combatUnits, this.projectiles);
     }
 
-    // 英雄：意图 → 位移 → 限速转向 → 对准后从枪口开火
+    // 红方 AI：先下指令，再跑英雄 update（与玩家同一套移动/开火管线）
+    this.enemyHeroAi.update(delta);
+
+    // 双方英雄：意图 → 位移 → 限速转向 → 对准后从枪口开火
     this.missFortune.update(
       delta,
       this.projectiles,
       this.collectEnemyCombatUnits(this.missFortune.team),
+    );
+    this.enemyHero.update(
+      delta,
+      this.projectiles,
+      this.collectEnemyCombatUnits(this.enemyHero.team),
     );
 
     // 选点中：施法距离圈跟着英雄走；死亡则取消
@@ -785,9 +853,11 @@ export class MainScene extends THREE.Scene {
       }
     }
 
-    // 小兵 AI：索敌建筑 + 英雄 + 互打；前摇结束只发射弹道
+    // 小兵 AI：索敌建筑 + 双方英雄 + 互打；前摇结束只发射弹道
     const minionHostiles: CombatUnit[] = [...structures];
-    if (this.missFortune.isAlive) minionHostiles.push(this.missFortune);
+    for (const h of this.allHeroes()) {
+      if (h.isAlive) minionHostiles.push(h);
+    }
     this.minionSpawner.update(delta, minionHostiles, this.projectiles);
 
     // 弹道追踪与命中结算（命中才 takeDamage；塔在此帧可能被摧毁）
@@ -894,6 +964,8 @@ export class MainScene extends THREE.Scene {
     this.castIndicator.dispose();
     this.remove(this.missFortune);
     this.missFortune.dispose();
+    this.remove(this.enemyHero);
+    this.enemyHero.dispose();
     this.minionSpawner.dispose();
     this.projectiles.dispose();
     for (const effect of this.clickEffects) {
@@ -911,8 +983,8 @@ export class MainScene extends THREE.Scene {
         .filter((m) => m.isAlive)
         .map((m) => m.collider),
     ];
-    if (this.missFortune.isAlive) {
-      bodies.push(this.missFortune.collider);
+    for (const h of this.allHeroes()) {
+      if (h.isAlive) bodies.push(h.collider);
     }
     return bodies;
   }

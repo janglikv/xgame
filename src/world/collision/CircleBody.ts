@@ -6,7 +6,7 @@ import * as THREE from 'three';
  */
 export class CircleBody {
   /** 全局白圈可见性（新创建体也会继承） */
-  static markersVisible = true;
+  static markersVisible = false;
 
   /** 判定「本帧有位移」的平方阈值（米²），过滤浮点噪声 */
   private static readonly MOVE_EPS_SQ = 1e-10;

@@ -34,17 +34,18 @@ export interface GameSettingsSnapshot {
   bgmVolume: number;
 }
 
+/** 默认设置与系统设置面板推荐态一致（锁定+固定视角、左键操作等） */
 export const DEFAULT_GAME_SETTINGS: GameSettingsSnapshot = {
-  showAxes: true,
-  showColliderMarkers: true,
+  showAxes: false,
+  showColliderMarkers: false,
   brightnessUi: 1,
-  cameraLocked: false,
-  fixedCamera: false,
+  cameraLocked: true,
+  fixedCamera: true,
   godMode: false,
   minionSpawn: true,
   towerInvincible: false,
-  mouseControl: 'right',
-  flashSkillEnabled: true,
+  mouseControl: 'left',
+  flashSkillEnabled: false,
   sfxVolume: 0.72,
   bgmVolume: 0.65,
 };
@@ -91,7 +92,9 @@ export function loadGameSettings(): GameSettingsSnapshot {
           ? data.towerInvincible
           : DEFAULT_GAME_SETTINGS.towerInvincible,
       mouseControl:
-        data.mouseControl === 'left' ? 'left' : DEFAULT_GAME_SETTINGS.mouseControl,
+        data.mouseControl === 'left' || data.mouseControl === 'right'
+          ? data.mouseControl
+          : DEFAULT_GAME_SETTINGS.mouseControl,
       flashSkillEnabled:
         typeof data.flashSkillEnabled === 'boolean'
           ? data.flashSkillEnabled
@@ -124,7 +127,7 @@ export function saveGameSettings(state: GameSettingsSnapshot): void {
       minionSpawn: !!state.minionSpawn,
       towerInvincible: !!state.towerInvincible,
       mouseControl: state.mouseControl === 'left' ? 'left' : 'right',
-      flashSkillEnabled: typeof state.flashSkillEnabled === 'boolean' ? state.flashSkillEnabled : true,
+      flashSkillEnabled: typeof state.flashSkillEnabled === 'boolean' ? state.flashSkillEnabled : false,
       sfxVolume: clamp01(state.sfxVolume),
       bgmVolume: clamp01(state.bgmVolume),
     };
