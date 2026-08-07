@@ -5,7 +5,7 @@
  * 须在用户手势后 unlock（Tone.start）。
  */
 import * as Tone from 'tone';
-import { BgmSynth, type BgmMode, type BgmTrackId } from './BgmSynth';
+import { BgmSynth } from './BgmSynth';
 
 export type GunHand = 'left' | 'right';
 
@@ -96,22 +96,6 @@ export class GameAudio {
   setBgmVolume(value: number): void {
     this.bgmVolume = clamp01(value);
     this.bgmSynth.setVolume(this.muted ? 0 : this.bgmVolume);
-  }
-
-  getBgmMode(): BgmMode {
-    return this.bgmSynth.getMode();
-  }
-
-  setBgmMode(mode: BgmMode): void {
-    this.bgmSynth.setMode(mode);
-  }
-
-  getBgmTrack(): BgmTrackId {
-    return this.bgmSynth.getTrack();
-  }
-
-  setBgmTrack(trackId: BgmTrackId): void {
-    this.bgmSynth.setTrack(trackId);
   }
 
   setBgmInMenu(inMenu: boolean): void {

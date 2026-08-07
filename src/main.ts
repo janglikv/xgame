@@ -172,22 +172,12 @@ function bootstrap(): void {
       settings.bgmVolume = patch.bgmVolume;
       audio.setBgmVolume(patch.bgmVolume);
     }
-    if (patch.bgmMode !== undefined) {
-      settings.bgmMode = patch.bgmMode;
-      audio.setBgmMode(patch.bgmMode);
-    }
-    if (patch.bgmTrack !== undefined) {
-      settings.bgmTrack = patch.bgmTrack;
-      audio.setBgmTrack(patch.bgmTrack);
-    }
     saveGameSettings(settings);
   };
 
   // 初始同步音量与 BGM
   audio.setSfxVolume(settings.sfxVolume);
   audio.setBgmVolume(settings.bgmVolume);
-  audio.setBgmMode(settings.bgmMode);
-  audio.setBgmTrack(settings.bgmTrack);
 
   // 胜负结算 HUD（须在 EscMenu / SkillBar 之前创建，供闭包引用）
   const victoryOverlay = new VictoryOverlay();
@@ -201,8 +191,6 @@ function bootstrap(): void {
     initialBrightness: settings.brightnessUi,
     initialBgmVolume: settings.bgmVolume,
     initialSfxVolume: settings.sfxVolume,
-    initialBgmMode: settings.bgmMode,
-    initialBgmTrack: settings.bgmTrack,
     initialCameraLocked: settings.cameraLocked,
     initialFixedCamera: settings.fixedCamera,
     initialGodMode: settings.godMode,
@@ -230,14 +218,6 @@ function bootstrap(): void {
     onSfxVolumeChange: (vol) => {
       audio.setSfxVolume(vol);
       persistSettings({ sfxVolume: vol });
-    },
-    onBgmModeChange: (mode) => {
-      audio.setBgmMode(mode);
-      persistSettings({ bgmMode: mode });
-    },
-    onBgmTrackChange: (track) => {
-      audio.setBgmTrack(track);
-      persistSettings({ bgmTrack: track });
     },
     onCameraLockChange: (locked) => {
       controls.setViewMode(locked ? 'locked' : 'free');

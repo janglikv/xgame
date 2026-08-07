@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import { BGM_TRACKS, type BgmTrackId } from '../audio/BgmSynth';
 import type { CameraParams } from '../controls/CameraController';
 import { setGameCursor } from './GameCursor';
 
@@ -36,10 +35,6 @@ export interface EscMenuOptions {
   onBgmVolumeChange?: (value: number) => void;
   /** 音效音量 0~1 */
   onSfxVolumeChange?: (value: number) => void;
-  /** 背景音乐风格 ('calm' | 'battle') */
-  onBgmModeChange?: (mode: 'calm' | 'battle') => void;
-  /** 背景音乐选定曲目 */
-  onBgmTrackChange?: (track: BgmTrackId) => void;
   /**
    * 清空所有本地缓存并初始化游戏。
    * 由宿主清除 localStorage 后刷新/重建场景。
@@ -55,8 +50,6 @@ export interface EscMenuOptions {
   initialBrightness?: number;
   initialBgmVolume?: number;
   initialSfxVolume?: number;
-  initialBgmMode?: 'calm' | 'battle';
-  initialBgmTrack?: BgmTrackId;
   initialCameraLocked?: boolean;
   initialFixedCamera?: boolean;
   initialGodMode?: boolean;
@@ -79,8 +72,6 @@ type HitId =
   | 'brightness'
   | 'bgmVolume'
   | 'sfxVolume'
-  | 'bgmMode'
-  | 'bgmTrack'
   | 'skip1m'
   | 'skip3m'
   | 'resetGame'
@@ -157,8 +148,6 @@ export class EscMenu {
   private readonly onFlashSkillChange?: (enabled: boolean) => void;
   private readonly onBgmVolumeChange?: (value: number) => void;
   private readonly onSfxVolumeChange?: (value: number) => void;
-  private readonly onBgmModeChange?: (mode: 'calm' | 'battle') => void;
-  private readonly onBgmTrackChange?: (track: BgmTrackId) => void;
   private readonly onResetGame?: () => void;
   private readonly onOpenChange?: (open: boolean) => void;
   private readonly getCameraParams?: () => CameraParams;
@@ -189,10 +178,6 @@ export class EscMenu {
   private bgmVolume: number;
   /** SFX 音量 0~1 */
   private sfxVolume: number;
-  /** BGM 风格 */
-  private bgmMode: 'calm' | 'battle';
-  /** BGM 曲目 */
-  private bgmTrack: BgmTrackId;
 
   private hoverId: HitId | null = null;
   private pressId: HitId | null = null;
@@ -210,8 +195,6 @@ export class EscMenu {
     this.onBrightnessChange = options.onBrightnessChange;
     this.onBgmVolumeChange = options.onBgmVolumeChange;
     this.onSfxVolumeChange = options.onSfxVolumeChange;
-    this.onBgmModeChange = options.onBgmModeChange;
-    this.onBgmTrackChange = options.onBgmTrackChange;
     this.onCameraLockChange = options.onCameraLockChange;
     this.onFixedCameraChange = options.onFixedCameraChange;
     this.onGodModeChange = options.onGodModeChange;
@@ -246,8 +229,6 @@ export class EscMenu {
       0,
       1,
     );
-    this.bgmMode = options.initialBgmMode ?? 'battle';
-    this.bgmTrack = options.initialBgmTrack ?? 'upbeat';
 
     this.uiCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
     this.uiCamera.position.z = 1;
@@ -514,18 +495,6 @@ export class EscMenu {
         this.dirty = true;
         this.onFlashSkillChange?.(this.flashSkillOn);
         break;
-      case 'bgmMode':
-        this.bgmMode = this.bgmMode === 'battle' ? 'calm' : 'battle';
-        this.dirty = true;
-        this.onBgmModeChange?.(this.bgmMode);
-        break;
-      case 'bgmTrack':
-        const tracks: BgmTrackId[] = ['last_lap', 'upbeat', 'cyber', 'lofi', 'epic'];
-        const nextIndex = (tracks.indexOf(this.bgmTrack) + 1) % tracks.length;
-        this.bgmTrack = tracks[nextIndex];
-        this.dirty = true;
-        this.onBgmTrackChange?.(this.bgmTrack);
-        break;
       case 'skip1m':
         this.onSkipTime(60, 1);
         this.setOpen(false);
@@ -661,18 +630,16 @@ export class EscMenu {
     const rowGap = 5;
     const listY = 86;
 
-    // 右栏：相机卡片 (86 ~ 240) → 音频 (250 ~ 460) → 亮度 (470 ~ 520) → 快进 & 清空 (530 ~ 610)
-    const audioStartY = 252;
-    const bgmVolY = audioStartY + 20;
-    const sfxVolY = bgmVolY + 38;
-    const bgmTrackY = sfxVolY + 38;
-    const bgmModeY = bgmTrackY + 42;
+    // 右栏：相机卡片 (86 ~ 250) → 音频 (260 ~ 370) → 亮度 (380 ~ 450) → 快进 & 清空 (460 ~ 560)
+    const audioStartY = 260;
+    const bgmVolY = audioStartY + 24;
+    const sfxVolY = bgmVolY + 48;
 
-    const brightY = bgmModeY + 44;
+    const brightY = sfxVolY + 54;
     const brightH = 50;
 
-    const skipY = brightY + brightH + 14;
-    const skipH = 40;
+    const skipY = brightY + brightH + 16;
+    const skipH = 42;
     const skipGap = 12;
     const skipBtnW = (colW - skipGap) / 2;
 
@@ -745,10 +712,8 @@ export class EscMenu {
         w: colW,
         h: rowH,
       },
-      { id: 'bgmVolume', x: rightX, y: bgmVolY, w: colW, h: 36 },
-      { id: 'sfxVolume', x: rightX, y: sfxVolY, w: colW, h: 36 },
-      { id: 'bgmTrack', x: rightX, y: bgmTrackY, w: colW, h: 38 },
-      { id: 'bgmMode', x: rightX, y: bgmModeY, w: colW, h: 38 },
+      { id: 'bgmVolume', x: rightX, y: bgmVolY, w: colW, h: 42 },
+      { id: 'sfxVolume', x: rightX, y: sfxVolY, w: colW, h: 42 },
       { id: 'brightness', x: rightX, y: brightY, w: colW, h: brightH },
       { id: 'skip1m', x: rightX, y: skipY, w: skipBtnW, h: skipH },
       {
@@ -917,26 +882,6 @@ export class EscMenu {
       this.sfxVolume,
       this.hoverId === 'sfxVolume' || this.draggingSlider === 'sfxVolume',
       this.draggingSlider === 'sfxVolume',
-    );
-
-    // 备选曲目与曲风模式
-    const currentTrackMeta = BGM_TRACKS[this.bgmTrack] || BGM_TRACKS.upbeat;
-    this.drawToggleRow(
-      this.region('bgmTrack'),
-      '备选音乐曲目 (点击切换)',
-      `当前：${currentTrackMeta.name}`,
-      true,
-      this.hoverId === 'bgmTrack',
-      this.pressId === 'bgmTrack',
-    );
-
-    this.drawToggleRow(
-      this.region('bgmMode'),
-      '背景音乐曲风强度',
-      this.bgmMode === 'battle' ? '当前：🎉 激进满编战局 (高能鼓点与对位主音)' : '当前：🍃 惬意轻快探索 (跳跃韵律)',
-      this.bgmMode === 'battle',
-      this.hoverId === 'bgmMode',
-      this.pressId === 'bgmMode',
     );
 
     // 右栏 3：全局亮度

@@ -1,5 +1,3 @@
-import type { BgmTrackId } from '../audio/BgmSynth';
-
 /** localStorage 键；改字段结构时递增版本 */
 const STORAGE_KEY = 'xgame.settings.v1';
 
@@ -34,10 +32,6 @@ export interface GameSettingsSnapshot {
   sfxVolume: number;
   /** 背景音乐音量 0~1 */
   bgmVolume: number;
-  /** 背景音乐风格模式 ('calm' | 'battle') */
-  bgmMode: 'calm' | 'battle';
-  /** 背景音乐选定曲目 */
-  bgmTrack: BgmTrackId;
 }
 
 export const DEFAULT_GAME_SETTINGS: GameSettingsSnapshot = {
@@ -53,8 +47,6 @@ export const DEFAULT_GAME_SETTINGS: GameSettingsSnapshot = {
   flashSkillEnabled: true,
   sfxVolume: 0.72,
   bgmVolume: 0.65,
-  bgmMode: 'battle',
-  bgmTrack: 'last_lap',
 };
 
 export function loadGameSettings(): GameSettingsSnapshot {
@@ -114,11 +106,6 @@ export function loadGameSettings(): GameSettingsSnapshot {
           ? data.bgmVolume
           : DEFAULT_GAME_SETTINGS.bgmVolume,
       ),
-      bgmMode: data.bgmMode === 'calm' ? 'calm' : DEFAULT_GAME_SETTINGS.bgmMode,
-      bgmTrack:
-        data.bgmTrack && ['upbeat', 'cyber', 'lofi', 'epic'].includes(data.bgmTrack)
-          ? data.bgmTrack
-          : DEFAULT_GAME_SETTINGS.bgmTrack,
     };
   } catch {
     return { ...DEFAULT_GAME_SETTINGS };
@@ -140,8 +127,6 @@ export function saveGameSettings(state: GameSettingsSnapshot): void {
       flashSkillEnabled: typeof state.flashSkillEnabled === 'boolean' ? state.flashSkillEnabled : true,
       sfxVolume: clamp01(state.sfxVolume),
       bgmVolume: clamp01(state.bgmVolume),
-      bgmMode: state.bgmMode === 'calm' ? 'calm' : 'battle',
-      bgmTrack: state.bgmTrack || 'upbeat',
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
   } catch {
