@@ -358,7 +358,7 @@ export class MissFortune extends THREE.Group implements CombatUnit {
           metalness: 0.04,
         }),
       );
-
+s 
     if (!MissFortune.aliveFaceTexture) {
       MissFortune.aliveFaceTexture = createFaceTexture(MissFortune.BODY);
     }
