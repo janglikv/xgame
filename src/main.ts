@@ -21,6 +21,7 @@ import {
 } from './storage/minionState';
 import { FpsOverlay } from './ui/FpsOverlay';
 import { Floor } from './world/Floor';
+import { FootRingBuff } from './world/FootRingBuff';
 import { Minion } from './world/Minion';
 import { SpatialAxesGrid } from './world/SpatialAxesGrid';
 
@@ -150,11 +151,33 @@ function initScene(): void {
     shadowGenerator: shadowGen,
   });
 
-  // 展示用副本：固定在 x=0, z=-2，循环播放走路动画（原地步态）
-  const walkDemo = new Minion(scene, 0, -2, {
-    facePositiveX: true,
-    shadowGenerator: shadowGen,
-  });
+  // 展示用副本：x=0，z ∈ [-5, 5] 均匀 10 个，循环播放走路动画（原地步态）
+  const WALK_DEMO_COUNT = 10;
+  const WALK_DEMO_Z_MIN = -5;
+  const WALK_DEMO_Z_MAX = 5;
+  const walkDemos: Minion[] = [];
+  for (let i = 0; i < WALK_DEMO_COUNT; i++) {
+    const t = i / (WALK_DEMO_COUNT - 1);
+    const z = WALK_DEMO_Z_MIN + t * (WALK_DEMO_Z_MAX - WALK_DEMO_Z_MIN);
+    walkDemos.push(
+      new Minion(scene, 0, z, {
+        facePositiveX: true,
+        shadowGenerator: shadowGen,
+        // 2灰黑 / 3缩小 / 4红帽 / 5魔法杖 / 6凶狠 / 7低面数马赛克 / 8呆萌 / 9悲伤
+        allBlack: i === 1,
+        scaleMultiplier: i === 2 ? 0.5 : 1,
+        redHat: i === 3,
+        magicStaff: i === 4,
+        face:
+          i === 5 ? 'fierce' : i === 7 ? 'dumb' : i === 8 ? 'sad' : 'cute',
+        mosaicFace: i === 6,
+        lowPolyFlat: i === 6,
+      }),
+    );
+  }
+
+  // 第一个展示副本脚底：红色复杂环形 buff
+  const firstDemoBuff = new FootRingBuff(scene, walkDemos[0].root);
 
   const snapshotMinion = (): MinionStateSnapshot => ({
     x: minion.root.position.x,
@@ -260,7 +283,10 @@ function initScene(): void {
 
     minion.update(dt, moving);
     // 副本持续 walking，不位移
-    walkDemo.update(dt, true);
+    for (const demo of walkDemos) {
+      demo.update(dt, true);
+    }
+    firstDemoBuff.update(dt);
 
     // 镜头指数平滑跟随小兵（滤掉逐步硬切带来的抖动）
     minion.getFocusPoint(focusPoint);
