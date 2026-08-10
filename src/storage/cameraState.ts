@@ -1,5 +1,5 @@
-/** localStorage 键；改字段结构时递增版本 */
-const STORAGE_KEY = 'luolu.camera.v1';
+/** localStorage 键；改字段结构或默认注视点时递增版本 */
+const STORAGE_KEY = 'luolu.camera.v2';
 
 /**
  * ArcRotateCamera 可恢复参数：
