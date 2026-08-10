@@ -24,8 +24,8 @@ export function attachWizardHat(
 ): void {
   const hatGroup = new TransformNode('wizardHat', scene);
   hatGroup.parent = bodyRoot;
-  hatGroup.position = new Vector3(0, bodyLocalY + 0.2, -0.05);
-  hatGroup.rotation.x = -0.36;
+  hatGroup.position = new Vector3(0, bodyLocalY + 0.16, -0.14);
+  hatGroup.rotation.x = -0.54;
   hatGroup.rotation.z = -0.04;
 
   const hatMat = mat(scene, 'minionHatRed', HAT_RED);

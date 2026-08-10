@@ -8,7 +8,7 @@ export type FaceStyle = 'cute' | 'fierce' | 'dumb' | 'sad' | 'blank';
 
 /** 脸贴图按「底色+表情+是否马赛克」缓存 */
 const faceTextureCache = new Map<string, DynamicTexture>();
-const FACE_TEX_VERSION = 19;
+const FACE_TEX_VERSION = 20;
 
 export function getFaceTexture(
   scene: Scene,
@@ -468,8 +468,8 @@ function createFierceFaceTexture(
   ctx.ellipse(cx, mouthY, mouthW, mouthH, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  // 上排牙
-  ctx.fillStyle = '#f5f0ea';
+  // 上排牙（纯白）
+  ctx.fillStyle = '#ffffff';
   const teeth = 5;
   for (let i = 0; i < teeth; i++) {
     const tx =

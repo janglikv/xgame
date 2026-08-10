@@ -21,6 +21,7 @@ import {
 } from './storage/minionState';
 import { FpsOverlay } from './ui/FpsOverlay';
 import { Floor } from './world/Floor';
+import { FootRingBuff } from './world/FootRingBuff';
 import { Minion } from './world/Minion';
 import { spawnMinionDemoLineup } from './world/MinionDemoLineup';
 import { SpatialAxesGrid } from './world/SpatialAxesGrid';
@@ -145,11 +146,18 @@ function initScene(): void {
   new Floor(scene, shadowGen);
   new SpatialAxesGrid(scene);
 
-  // 6. 小兵模型（无帽子、无法杖；位置可 localStorage 恢复）
+  // 6. 小兵模型（灰黑肤色 + 凶狠表情 + 红帽 + 法杖，体积缩小一半；位置可 localStorage 恢复）
   const minion = new Minion(scene, minionX, minionZ, {
     facePositiveX: true,
     shadowGenerator: shadowGen,
+    allBlack: true,
+    face: 'fierce',
+    redHat: true,
+    magicStaff: true,
+    scaleMultiplier: 0.5,
   });
+  // 脚底红色阵法（赤环）
+  const minionFormation = new FootRingBuff(scene, minion.root, 'crimson');
 
   // 展示副本多排阵列：每排同类（表情/阵法/肤色/武器…，配置见 MinionDemoLineup）
   const demoLineup = spawnMinionDemoLineup(scene, shadowGen, {
@@ -262,6 +270,7 @@ function initScene(): void {
     }
 
     minion.update(dt, moving);
+    minionFormation.update(dt);
     demoLineup.update(dt);
 
     // 镜头指数平滑跟随小兵（滤掉逐步硬切带来的抖动）
