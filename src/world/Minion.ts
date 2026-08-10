@@ -15,7 +15,7 @@ import {
  * 仅视觉；缩放 / 朝向参考 lol-3d。
  */
 export class Minion {
-  static readonly SCALE = 0.25;
+  static readonly SCALE = 0.5;
   /** 身体球心本地 Y（用于镜头注视点） */
   static readonly BODY_LOCAL_Y = 0.63;
   static readonly BODY = 0xf3eee6;

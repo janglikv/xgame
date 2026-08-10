@@ -10,7 +10,6 @@ import {
 } from '@babylonjs/core';
 
 const AXIS_X = 0xff3355;
-const AXIS_Y = 0x33dd66;
 const AXIS_Z = 0x3399ff;
 const GRID_COLOR = 0x4b5563;
 const TICK_COLOR = 0xd1d5db;
@@ -19,24 +18,21 @@ const ORIGIN_COLOR = 0xffffff;
 /** 各轴从原点到正/负端的米数（范围 = ±extent） */
 interface AxisExtents {
   x: number;
-  y: number;
   z: number;
 }
 
 /**
- * 空间坐标网格：XYZ 轴 + 每米刻度点 + 地面（XZ）参考网格。
+ * 空间坐标网格：XZ 轴 + 每米刻度点 + 地面（XZ）参考网格。
  * 约定：1 世界单位 = 1 米。配置内聚在类内，不对外传参。
  *
- * 范围：X ∈ [-20, 20]，Y ∈ [-3, 3]，Z ∈ [-5, 5]
+ * 范围：X ∈ [-20, 20]，Z ∈ [-20, 20]（无 Y 轴）
  * 网格仅画地板面，不画 XY / YZ 竖直面。
  */
 export class SpatialAxesGrid {
   /** X：-20 ~ 20 */
   private static readonly EXTENT_X = 20;
-  /** Y：-3 ~ 3 */
-  private static readonly EXTENT_Y = 3;
-  /** Z：-5 ~ 5 */
-  private static readonly EXTENT_Z = 5;
+  /** Z：-20 ~ 20 */
+  private static readonly EXTENT_Z = 20;
   /** 刻度间隔（米） */
   private static readonly STEP = 1;
   /** 米数标签间隔 */
@@ -49,7 +45,6 @@ export class SpatialAxesGrid {
 
     const extents: AxisExtents = {
       x: SpatialAxesGrid.EXTENT_X,
-      y: SpatialAxesGrid.EXTENT_Y,
       z: SpatialAxesGrid.EXTENT_Z,
     };
     const step = SpatialAxesGrid.STEP;
@@ -118,12 +113,6 @@ function createAxisLines(
       to: new Vector3(extents.x, 0, 0),
     },
     {
-      name: 'AxisY',
-      color: AXIS_Y,
-      from: new Vector3(0, -extents.y, 0),
-      to: new Vector3(0, extents.y, 0),
-    },
-    {
       name: 'AxisZ',
       color: AXIS_Z,
       from: new Vector3(0, 0, -extents.z),
@@ -182,11 +171,6 @@ function createTickMarks(
     lines.push([new Vector3(t, -half, 0), new Vector3(t, half, 0)]);
     lines.push([new Vector3(t, 0, -half), new Vector3(t, 0, half)]);
   }
-  for (let t = -extents.y; t <= extents.y + 1e-9; t += step) {
-    if (Math.abs(t) < 1e-9) continue;
-    lines.push([new Vector3(-half, t, 0), new Vector3(half, t, 0)]);
-    lines.push([new Vector3(0, t, -half), new Vector3(0, t, half)]);
-  }
   for (let t = -extents.z; t <= extents.z + 1e-9; t += step) {
     if (Math.abs(t) < 1e-9) continue;
     lines.push([new Vector3(-half, 0, t), new Vector3(half, 0, t)]);
@@ -207,7 +191,6 @@ function createTickPoints(
 ): void {
   const diameter = 0.0175;
   const matX = unlitMat(scene, 'tickMatX', AXIS_X);
-  const matY = unlitMat(scene, 'tickMatY', AXIS_Y);
   const matZ = unlitMat(scene, 'tickMatZ', AXIS_Z);
 
   for (let t = -extents.x; t <= extents.x + 1e-9; t += step) {
@@ -219,17 +202,6 @@ function createTickPoints(
     );
     p.position = new Vector3(t, 0, 0);
     p.material = matX;
-    p.parent = parent;
-  }
-  for (let t = -extents.y; t <= extents.y + 1e-9; t += step) {
-    if (Math.abs(t) < 1e-9) continue;
-    const p = MeshBuilder.CreateSphere(
-      `tickY_${t}`,
-      { diameter, segments: 8 },
-      scene,
-    );
-    p.position = new Vector3(0, t, 0);
-    p.material = matY;
     p.parent = parent;
   }
   for (let t = -extents.z; t <= extents.z + 1e-9; t += step) {
@@ -256,14 +228,6 @@ function createAxisLabels(
     'X',
     AXIS_X,
     new Vector3(extents.x + 0.45, 0.15, 0),
-    0.55,
-  );
-  makeTextSprite(
-    scene,
-    parent,
-    'Y',
-    AXIS_Y,
-    new Vector3(0.15, extents.y + 0.45, 0),
     0.55,
   );
   makeTextSprite(
@@ -297,17 +261,6 @@ function createMeterLabels(
       `${t}m`,
       AXIS_X,
       new Vector3(t, 0.22, 0.22),
-      0.35,
-    );
-  }
-  for (let t = -extents.y; t <= extents.y + 1e-9; t += step) {
-    if (!shouldLabel(t, extents.y)) continue;
-    makeTextSprite(
-      scene,
-      parent,
-      `${t}m`,
-      AXIS_Y,
-      new Vector3(0.22, t, 0.22),
       0.35,
     );
   }

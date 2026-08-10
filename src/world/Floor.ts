@@ -10,13 +10,13 @@ import {
 
 /**
  * 简单矩形场地：Y=0 平面地板 + 四周矮墙 + 外围兜底大地板。
- * 与坐标系范围对齐：X ±20、Z ±5。
+ * 与坐标系范围对齐：X ±20、Z ±20。
  */
 export class Floor {
   /** X 方向半宽（米）→ 总长 40 */
   static readonly HALF_X = 20;
-  /** Z 方向半宽（米）→ 总宽 10 */
-  static readonly HALF_Z = 5;
+  /** Z 方向半宽（米）→ 总宽 40 */
+  static readonly HALF_Z = 20;
   /** 围墙厚度（米） */
   static readonly WALL_THICKNESS = 0.25;
   /** 围墙高度（米）；底边贴齐 Y=0 */

@@ -131,12 +131,12 @@ function initScene(): void {
   shadowGen.filteringQuality = ShadowGenerator.QUALITY_MEDIUM;
   shadowGen.bias = 0.001;
   shadowGen.normalBias = 0.02;
-  // 手写正交阴影体，只覆盖矩形场地（X±20、Z±5），略留边
+  // 手写正交阴影体，只覆盖矩形场地（X±20、Z±20），略留边
   dir.autoUpdateExtends = false;
-  dir.orthoLeft = -28;
-  dir.orthoRight = 28;
-  dir.orthoTop = 18;
-  dir.orthoBottom = -18;
+  dir.orthoLeft = -32;
+  dir.orthoRight = 32;
+  dir.orthoTop = 32;
+  dir.orthoBottom = -32;
   dir.shadowMinZ = 1;
   dir.shadowMaxZ = 70;
 
@@ -146,6 +146,12 @@ function initScene(): void {
 
   // 6. 小兵模型（无帽子、无法杖；位置可 localStorage 恢复）
   const minion = new Minion(scene, minionX, minionZ, {
+    facePositiveX: true,
+    shadowGenerator: shadowGen,
+  });
+
+  // 展示用副本：固定在 x=0, z=-2，循环播放走路动画（原地步态）
+  const walkDemo = new Minion(scene, 0, -2, {
     facePositiveX: true,
     shadowGenerator: shadowGen,
   });
@@ -253,6 +259,8 @@ function initScene(): void {
     }
 
     minion.update(dt, moving);
+    // 副本持续 walking，不位移
+    walkDemo.update(dt, true);
 
     // 镜头指数平滑跟随小兵（滤掉逐步硬切带来的抖动）
     minion.getFocusPoint(focusPoint);
