@@ -9,11 +9,10 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "three": "^0.178.0",
+    "@babylonjs/core": "^9.20.0",
     "tone": "^15.1.22"
   },
   "devDependencies": {
-    "@types/three": "^0.178.1",
     "typescript": "^5.8.3",
     "vite": "^6.3.5"
   }
