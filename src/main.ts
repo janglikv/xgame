@@ -151,9 +151,10 @@ function initScene(): void {
     shadowGenerator: shadowGen,
   });
 
-  // 展示副本阵列（配置见 MinionDemoLineup）
+  // 展示副本多排阵列：每排同类（表情/阵法/肤色/武器…，配置见 MinionDemoLineup）
   const demoLineup = spawnMinionDemoLineup(scene, shadowGen, {
-    x: 1,
+    x0: 1,
+    rowGap: 1.6,
     zMin: -5,
     zMax: 5,
   });

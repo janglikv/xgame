@@ -24,7 +24,12 @@ export interface MinionOptions {
   /** 面朝 +X（蓝）或 -X（红） */
   facePositiveX?: boolean;
   shadowGenerator?: ShadowGenerator;
-  /** 全身灰黑（身体/手脚 + 同色脸贴图，保留表情） */
+  /**
+   * 全身肤色（0xRRGGBB）：身体脸贴图底色 + 手脚同色。
+   * 未设时：allBlack → 灰黑，否则纯白。
+   */
+  bodyColor?: number;
+  /** 全身灰黑（等价 bodyColor = CHARCOAL；若同时设 bodyColor 以 bodyColor 为准） */
   allBlack?: boolean;
   /** 相对默认 SCALE 的倍率（1 = 正常，0.5 = 缩小一半） */
   scaleMultiplier?: number;
@@ -83,7 +88,9 @@ export class Minion {
   constructor(scene: Scene, x = 0, z = 0, options: MinionOptions = {}) {
     const facePositiveX = options.facePositiveX ?? true;
     const shadowGen = options.shadowGenerator;
-    const allBlack = options.allBlack ?? false;
+    const skinColor =
+      options.bodyColor ??
+      (options.allBlack ? Minion.CHARCOAL : Minion.BODY);
     const redHat = options.redHat ?? false;
     const magicStaff = options.magicStaff ?? false;
     const faceStyle: FaceStyle = options.face ?? 'cute';
@@ -102,14 +109,13 @@ export class Minion {
     this.bodyRoot = new TransformNode('bodyRoot', scene);
     this.bodyRoot.parent = this.root;
 
-    const limbColor = allBlack ? Minion.CHARCOAL : Minion.LIMB;
-    const limbMat = mat(scene, 'minionLimb', limbColor);
+    const limbMat = mat(scene, 'minionLimb', skinColor);
 
     const bodyMat = new StandardMaterial('minionBody', scene);
     bodyMat.specularColor = Color3.Black();
     bodyMat.diffuseTexture = getFaceTexture(
       scene,
-      allBlack ? Minion.CHARCOAL : Minion.BODY,
+      skinColor,
       faceStyle,
       mosaicFace,
     );
