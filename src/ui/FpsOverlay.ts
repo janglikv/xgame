@@ -1,86 +1,72 @@
+import {
+  AdvancedDynamicTexture,
+  Control,
+  TextBlock,
+} from '@babylonjs/gui';
+import type { Scene } from '@babylonjs/core';
+
 /**
- * 左上角 FPS 显示组件（无背景，仅数字）
+ * 左上角 FPS（Babylon GUI，非 HTML）。
  */
 export class FpsOverlay {
-  private container: HTMLDivElement;
-  private fpsValElement: HTMLSpanElement;
+  private readonly tex: AdvancedDynamicTexture;
+  private readonly label: TextBlock;
   private frameCount = 0;
   private lastUpdate = performance.now();
-  private readonly updateInterval = 250; // 每 250ms 刷新一次数字，体验平滑
+  private readonly updateInterval = 250;
+  private visible = true;
 
-  constructor() {
-    this.container = document.createElement('div');
-    this.container.id = 'fps-overlay';
-    this.container.style.cssText = `
-      position: fixed;
-      top: 12px;
-      left: 12px;
-      z-index: 10000;
-      pointer-events: none;
-      user-select: none;
-      display: flex;
-      align-items: baseline;
-      gap: 4px;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      line-height: 1;
-    `;
+  constructor(scene: Scene) {
+    this.tex = AdvancedDynamicTexture.CreateFullscreenUI(
+      'FpsOverlayUI',
+      true,
+      scene,
+    );
+    this.tex.idealWidth = 1280;
+    this.tex.layer!.layerMask = 0x0fffffff;
 
-    this.fpsValElement = document.createElement('span');
-    this.fpsValElement.textContent = '--';
-    this.fpsValElement.style.cssText = `
-      font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
-      font-size: 15px;
-      font-weight: 700;
-      color: #00e676;
-      min-width: 24px;
-      text-align: right;
-    `;
-
-    const fpsLabel = document.createElement('span');
-    fpsLabel.textContent = 'FPS';
-    fpsLabel.style.cssText = `
-      font-size: 10px;
-      font-weight: 600;
-      letter-spacing: 0.5px;
-      color: rgba(255, 255, 255, 0.5);
-    `;
-
-    this.container.appendChild(this.fpsValElement);
-    this.container.appendChild(fpsLabel);
-
-    document.body.appendChild(this.container);
+    this.label = new TextBlock('fpsLabel');
+    this.label.text = '-- FPS';
+    this.label.color = '#00e676';
+    this.label.fontSize = 16;
+    this.label.fontFamily = 'Consolas, Monaco, monospace';
+    this.label.fontWeight = '700';
+    this.label.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+    this.label.textVerticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+    this.label.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+    this.label.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+    this.label.left = '12px';
+    this.label.top = '12px';
+    this.label.width = '120px';
+    this.label.height = '28px';
+    this.label.resizeToFit = false;
+    this.label.isHitTestVisible = false;
+    this.tex.addControl(this.label);
   }
 
-  public update(): void {
+  update(): void {
+    if (!this.visible) return;
     const now = performance.now();
     this.frameCount++;
     const elapsed = now - this.lastUpdate;
+    if (elapsed < this.updateInterval) return;
 
-    if (elapsed >= this.updateInterval) {
-      const fps = Math.round((this.frameCount * 1000) / elapsed);
+    const fps = Math.round((this.frameCount * 1000) / elapsed);
+    this.label.text = `${fps} FPS`;
+    if (fps >= 50) this.label.color = '#00e676';
+    else if (fps >= 30) this.label.color = '#ffb300';
+    else this.label.color = '#ff5252';
 
-      this.fpsValElement.textContent = `${fps}`;
-
-      if (fps >= 50) {
-        this.fpsValElement.style.color = '#00e676';
-      } else if (fps >= 30) {
-        this.fpsValElement.style.color = '#ffb300';
-      } else {
-        this.fpsValElement.style.color = '#ff5252';
-      }
-
-      this.frameCount = 0;
-      this.lastUpdate = now;
-    }
+    this.frameCount = 0;
+    this.lastUpdate = now;
   }
 
-  public setVisible(visible: boolean): void {
-    this.container.style.display = visible ? 'flex' : 'none';
+  setVisible(visible: boolean): void {
+    this.visible = visible;
+    this.label.isVisible = visible;
   }
 
-  public destroy(): void {
-    if (this.container.parentNode) {
-      this.container.parentNode.removeChild(this.container);
-    }
+  dispose(): void {
+    this.tex.dispose();
   }
 }

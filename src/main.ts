@@ -19,7 +19,14 @@ import {
   saveMinionState,
   type MinionStateSnapshot,
 } from './storage/minionState';
+import {
+  FIXED_CAMERA,
+  loadSettingsState,
+  saveSettingsState,
+  type CameraMode,
+} from './storage/settingsState';
 import { FpsOverlay } from './ui/FpsOverlay';
+import { SettingsPanel } from './ui/SettingsPanel';
 import { Floor } from './world/Floor';
 import { FootRingBuff } from './world/FootRingBuff';
 import { Minion } from './world/Minion';
@@ -28,7 +35,6 @@ import {
   buildArenaColliders,
   initPhysics,
   MinionPhysicsProxy,
-  spawnBounceDemo,
 } from './world/physics';
 import { SpatialAxesGrid } from './world/SpatialAxesGrid';
 
@@ -67,7 +73,11 @@ async function initScene(): Promise<void> {
   // 2b. Havok 物理（须在创建任何 PhysicsAggregate 之前）
   await initPhysics(scene);
 
-  // 3. 相机（轨道，等价 OrbitControls；默认以小兵为中心，参数可 localStorage 恢复）
+  // 3. 相机：注视点始终跟角色；固定模式只锁 α/β/半径且禁止拖拽
+  const settingsBoot = loadSettingsState();
+  let cameraMode: CameraMode = settingsBoot.cameraMode;
+  let showFps = settingsBoot.showFps;
+
   const savedMinion = loadMinionState();
   const minionX = savedMinion?.x ?? 1;
   const minionZ = savedMinion?.z ?? 0;
@@ -77,17 +87,29 @@ async function initScene(): Promise<void> {
     minionZ,
   );
   const savedCam = loadCameraState();
+
+  // 固定：预设角度距离 + 角色中心；自由：恢复上次角度（注视点仍跟角色）
+  const bootAlpha =
+    cameraMode === 'fixed'
+      ? FIXED_CAMERA.alpha
+      : (savedCam?.alpha ?? -Math.PI / 4);
+  const bootBeta =
+    cameraMode === 'fixed'
+      ? FIXED_CAMERA.beta
+      : (savedCam?.beta ?? Math.PI / 3);
+  const bootRadius =
+    cameraMode === 'fixed'
+      ? FIXED_CAMERA.radius
+      : (savedCam?.radius ?? 17);
+
   const camera = new ArcRotateCamera(
     'camera',
-    savedCam?.alpha ?? -Math.PI / 4,
-    savedCam?.beta ?? Math.PI / 3,
-    savedCam?.radius ?? 17,
-    savedCam
-      ? new Vector3(savedCam.targetX, savedCam.targetY, savedCam.targetZ)
-      : minionTarget,
+    bootAlpha,
+    bootBeta,
+    bootRadius,
+    minionTarget.clone(),
     scene,
   );
-  camera.attachControl(canvas, true);
   camera.lowerRadiusLimit = 2;
   camera.upperRadiusLimit = 120;
   camera.wheelPrecision = 40;
@@ -109,18 +131,40 @@ async function initScene(): Promise<void> {
     targetZ: camera.target.z,
   });
 
-  /** 拖拽/滚轮后节流写入，避免每帧刷 localStorage */
+  /** 固定模式：锁角度/距离（注视点由跟随逻辑写） */
+  const lockFixedOrbit = (): void => {
+    camera.alpha = FIXED_CAMERA.alpha;
+    camera.beta = FIXED_CAMERA.beta;
+    camera.radius = FIXED_CAMERA.radius;
+  };
+
+  const applyCameraMode = (mode: CameraMode, attachIfFree: boolean): void => {
+    cameraMode = mode;
+    if (mode === 'fixed') {
+      camera.detachControl();
+      lockFixedOrbit();
+    } else if (attachIfFree) {
+      camera.attachControl(canvas, true);
+    }
+  };
+
+  /** 拖拽/滚轮后节流写入（仅自由模式；只存角度距离，注视点随角色） */
   let camSaveTimer: ReturnType<typeof setTimeout> | null = null;
   const scheduleSaveCamera = (): void => {
+    if (cameraMode !== 'free') return;
     if (camSaveTimer !== null) clearTimeout(camSaveTimer);
     camSaveTimer = setTimeout(() => {
       camSaveTimer = null;
-      saveCameraState(snapshotCamera());
+      if (cameraMode === 'free') saveCameraState(snapshotCamera());
     }, 200);
   };
 
-  // 轨道交互结束 / 观察点变化时缓存
   camera.onViewMatrixChangedObservable.add(scheduleSaveCamera);
+
+  // 初始：固定不挂控制；自由才 attach
+  if (cameraMode === 'free') {
+    camera.attachControl(canvas, true);
+  }
 
   // 4. 光照 + 阴影
   const hemi = new HemisphericLight('hemi', new Vector3(0, 1, 0), scene);
@@ -177,15 +221,6 @@ async function initScene(): Promise<void> {
   });
   minionPhys.teleportToTarget();
 
-  // 弹性球演示：落在主控小兵附近，观察回弹 / 互撞 / 被角色推动
-  spawnBounceDemo(scene, {
-    count: 28,
-    center: new Vector3(minionX, 0, minionZ),
-    heightRange: [1.0, 3.2],
-    spread: 2.2,
-    shadowGenerator: shadowGen,
-  });
-
   // 展示副本多排阵列：右对齐固定间距 + 每人物理胶囊（配置见 MinionDemoLineup）
   const demoLineup = spawnMinionDemoLineup(scene, shadowGen, {
     x0: 1,
@@ -221,6 +256,12 @@ async function initScene(): Promise<void> {
   const moveForward = new Vector3();
   const moveRight = new Vector3();
   const moveDelta = new Vector3();
+  /** 设置面板（先声明供 keydown 闭包读取，稍后构造） */
+  let settingsPanel: SettingsPanel | null = null;
+
+  const persistSettings = (): void => {
+    saveSettingsState({ showFps, cameraMode });
+  };
 
   const isMoveKey = (key: string): key is keyof typeof moveKeys =>
     key === 'w' || key === 'a' || key === 's' || key === 'd';
@@ -228,6 +269,8 @@ async function initScene(): Promise<void> {
   window.addEventListener('keydown', (e) => {
     const key = e.key.toLowerCase();
     if (!isMoveKey(key) || e.repeat) return;
+    // 设置面板打开时不吃移动键
+    if (settingsPanel?.isOpen()) return;
     // 输入框内不拦截
     const t = e.target as HTMLElement | null;
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) {
@@ -248,12 +291,59 @@ async function initScene(): Promise<void> {
   window.addEventListener('beforeunload', () => {
     if (camSaveTimer !== null) clearTimeout(camSaveTimer);
     if (minionSaveTimer !== null) clearTimeout(minionSaveTimer);
-    saveCameraState(snapshotCamera());
+    if (cameraMode === 'free') saveCameraState(snapshotCamera());
     saveMinionState(snapshotMinion());
+    persistSettings();
   });
 
-  // 8. 左上角 FPS
-  const fpsOverlay = new FpsOverlay();
+  // 8. 左上角 FPS + ESC 设置面板（Babylon GUI，非 HTML）
+  const fpsOverlay = new FpsOverlay(scene);
+  fpsOverlay.setVisible(showFps);
+
+  settingsPanel = new SettingsPanel(scene, {
+    getShowFps: () => showFps,
+    setShowFps: (show) => {
+      showFps = show;
+      fpsOverlay.setVisible(show);
+      persistSettings();
+    },
+    getCameraMode: () => cameraMode,
+    setCameraMode: (mode) => {
+      if (mode === cameraMode) return;
+      // 切到固定前，保存当前自由角度/距离
+      if (cameraMode === 'free' && mode === 'fixed') {
+        saveCameraState(snapshotCamera());
+      }
+      applyCameraMode(mode, !settingsPanel?.isOpen());
+      // 从固定回到自由：恢复上次自由角度/距离（注视点继续跟角色）
+      if (mode === 'free') {
+        const free = loadCameraState();
+        if (free) {
+          camera.alpha = free.alpha;
+          camera.beta = free.beta;
+          camera.radius = free.radius;
+        }
+      }
+      persistSettings();
+    },
+    getCameraInfo: () => ({
+      alpha: camera.alpha,
+      beta: camera.beta,
+      radius: camera.radius,
+      targetX: camera.target.x,
+      targetY: camera.target.y,
+      targetZ: camera.target.z,
+    }),
+    onOpenChange: (open) => {
+      // 打开时松手、停 WASD、卸掉轨道拖拽，避免穿透 UI
+      moveKeys.w = moveKeys.a = moveKeys.s = moveKeys.d = false;
+      if (open) {
+        camera.detachControl();
+      } else if (cameraMode === 'free') {
+        camera.attachControl(canvas, true);
+      }
+    },
+  });
 
   // 9. 窗口尺寸
   window.addEventListener('resize', () => {
@@ -264,43 +354,46 @@ async function initScene(): Promise<void> {
   // 时序：读上一帧物理位姿 → 写玩家速度 → 表现动画 → render（内含物理步进）
   engine.runRenderLoop(() => {
     const dt = Math.min(engine.getDeltaTime() / 1000, 0.05);
+    const menuOpen = settingsPanel?.isOpen() ?? false;
 
     // 上一帧物理结果 → 主角 / 阵列表现根节点
     minionPhys.syncToTarget();
 
     // 相对镜头：W/S 前后，A/D 左右（符号已按右手系校正）
-    const ix = (moveKeys.a ? 1 : 0) - (moveKeys.d ? 1 : 0);
-    const iz = (moveKeys.w ? 1 : 0) - (moveKeys.s ? 1 : 0);
     let moving = false;
     let wishX = 0;
     let wishZ = 0;
-    if (ix !== 0 || iz !== 0) {
-      // 相机 → 目标 在 XZ 上的前方向；俯视时用 alpha 兜底
-      moveForward.copyFrom(camera.target).subtractInPlace(camera.position);
-      moveForward.y = 0;
-      if (moveForward.lengthSquared() < 1e-8) {
-        moveForward.set(Math.sin(camera.alpha), 0, Math.cos(camera.alpha));
-      } else {
-        moveForward.normalize();
-      }
-      // 右手系 Y-up：Up × Forward
-      Vector3.CrossToRef(Vector3.UpReadOnly, moveForward, moveRight);
-      if (moveRight.lengthSquared() < 1e-8) {
-        moveRight.set(1, 0, 0);
-      } else {
-        moveRight.normalize();
-      }
+    if (!menuOpen) {
+      const ix = (moveKeys.a ? 1 : 0) - (moveKeys.d ? 1 : 0);
+      const iz = (moveKeys.w ? 1 : 0) - (moveKeys.s ? 1 : 0);
+      if (ix !== 0 || iz !== 0) {
+        // 相机 → 目标 在 XZ 上的前方向；俯视时用 alpha 兜底
+        moveForward.copyFrom(camera.target).subtractInPlace(camera.position);
+        moveForward.y = 0;
+        if (moveForward.lengthSquared() < 1e-8) {
+          moveForward.set(Math.sin(camera.alpha), 0, Math.cos(camera.alpha));
+        } else {
+          moveForward.normalize();
+        }
+        // 右手系 Y-up：Up × Forward
+        Vector3.CrossToRef(Vector3.UpReadOnly, moveForward, moveRight);
+        if (moveRight.lengthSquared() < 1e-8) {
+          moveRight.set(1, 0, 0);
+        } else {
+          moveRight.normalize();
+        }
 
-      moveDelta.set(0, 0, 0);
-      moveDelta.addInPlace(moveForward.scale(iz));
-      moveDelta.addInPlace(moveRight.scale(ix));
-      if (moveDelta.lengthSquared() > 1e-8) {
-        moveDelta.normalize();
-        wishX = moveDelta.x * MOVE_SPEED;
-        wishZ = moveDelta.z * MOVE_SPEED;
-        minion.faceToward(moveDelta.x, moveDelta.z);
-        scheduleSaveMinion();
-        moving = true;
+        moveDelta.set(0, 0, 0);
+        moveDelta.addInPlace(moveForward.scale(iz));
+        moveDelta.addInPlace(moveRight.scale(ix));
+        if (moveDelta.lengthSquared() > 1e-8) {
+          moveDelta.normalize();
+          wishX = moveDelta.x * MOVE_SPEED;
+          wishZ = moveDelta.z * MOVE_SPEED;
+          minion.faceToward(moveDelta.x, moveDelta.z);
+          scheduleSaveMinion();
+          moving = true;
+        }
       }
     }
     // 速度驱动物理体：有输入则冲，无输入则水平刹停（保留 Y）
@@ -311,7 +404,7 @@ async function initScene(): Promise<void> {
     minionFormation.update(dt);
     demoLineup.update(dt);
 
-    // 镜头指数平滑跟随小兵（滤掉逐步硬切带来的抖动）
+    // 注视点始终平滑跟随角色中心（自由 / 固定相同）
     minion.getFocusPoint(focusPoint);
     const followT = 1 - Math.exp(-CAM_FOLLOW * dt);
     camFollowTarget.x += (focusPoint.x - camFollowTarget.x) * followT;
@@ -320,8 +413,13 @@ async function initScene(): Promise<void> {
     if (!camera.target.equalsWithEpsilon(camFollowTarget, 1e-4)) {
       camera.setTarget(camFollowTarget);
     }
+    // 固定模式：每帧锁 α/β/半径，禁止拖拽改角度
+    if (cameraMode === 'fixed') {
+      lockFixedOrbit();
+    }
 
-    fpsOverlay.update();
+    if (showFps) fpsOverlay.update();
+    settingsPanel?.update();
     scene.render();
   });
 }
