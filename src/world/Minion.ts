@@ -131,8 +131,9 @@ export class Minion {
   static readonly SCALE = 0.5;
   /** 身体球心本地 Y（用于镜头注视点） */
   static readonly BODY_LOCAL_Y = 0.63;
-  static readonly BODY = 0xffffff;
-  static readonly LIMB = 0xffffff;
+  /** 默认白色肤色：使用柔和高质感冷白 (0xdde2e8)，避免 0xffffff 在强光下光线加法叠加爆白刺眼 */
+  static readonly BODY = 0xdde2e8;
+  static readonly LIMB = 0xdde2e8;
   static readonly CHARCOAL = 0x3a3a42;
   static readonly HAT_RED = HAT_RED;
   static readonly HAT_RED_BAND = HAT_RED_BAND;
@@ -258,6 +259,7 @@ export class Minion {
 
     const bodyMat = new StandardMaterial('minionBody', scene);
     bodyMat.specularColor = Color3.Black();
+    bodyMat.ambientColor = new Color3(0.25, 0.25, 0.28);
     bodyMat.diffuseTexture = getFaceTexture(
       scene,
       appearance.bodyColor,

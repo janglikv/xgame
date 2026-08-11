@@ -439,6 +439,7 @@ async function initScene(): Promise<void> {
           spawnZ,
         );
         blankWorld.camera.onViewMatrixChangedObservable.add(scheduleSaveCamera);
+        blankWorld.spatialAxesGrid.setVisible(showGrid);
       } else {
         blankWorld.applyAppearance(appearance);
         blankWorld.minion.root.position.set(spawnX, 0, spawnZ);
@@ -579,6 +580,9 @@ async function initScene(): Promise<void> {
     setShowGrid: (show) => {
       showGrid = show;
       spatialAxesGrid.setVisible(show);
+      if (blankWorld) {
+        blankWorld.spatialAxesGrid.setVisible(show);
+      }
       persistSettings();
     },
     getCameraMode: () => cameraMode,

@@ -22,8 +22,8 @@ import {
   initPhysics,
   MinionPhysicsProxy,
 } from './physics';
+import { Floor } from './Floor';
 import { SpatialAxesGrid } from './SpatialAxesGrid';
-import { createTerrainGround } from './TerrainGround';
 import { TeleportPad } from './TeleportPad';
 
 export interface BlankWorld {
@@ -31,6 +31,8 @@ export interface BlankWorld {
   camera: ArcRotateCamera;
   minion: Minion;
   minionPhys: MinionPhysicsProxy;
+  floor: Floor;
+  spatialAxesGrid: SpatialAxesGrid;
   /** 回枢纽传送阵（站上蓄力自动返回） */
   teleportPad: TeleportPad;
   /** 将相机控制挂到 canvas（自由模式） */
@@ -89,11 +91,11 @@ export async function createBlankWorld(
   dir.shadowMinZ = 1;
   dir.shadowMaxZ = 70;
 
-  // 完全平坦草地（TerrainMaterial 贴图混合，无 heightMap 高低差）
+  // 赛博网格地板
   // 物理：标准平面地板 + 围墙（与枢纽一致）
-  createTerrainGround(scene, shadowGen, { textureScale: 36 });
+  const floor = new Floor(scene, shadowGen, { surface: 'cyberGrid' });
   buildArenaColliders(scene, { includeFloor: true });
-  new SpatialAxesGrid(scene);
+  const spatialAxesGrid = new SpatialAxesGrid(scene);
 
   // 回程传送阵：与枢纽同坐标风格，站在阵中按 E 返回
   const teleportPad = new TeleportPad(
@@ -157,6 +159,8 @@ export async function createBlankWorld(
     camera,
     minion,
     minionPhys,
+    floor,
+    spatialAxesGrid,
     teleportPad,
     attachCamera(canvas) {
       camera.attachControl(canvas, true);

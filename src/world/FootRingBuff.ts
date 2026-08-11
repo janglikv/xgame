@@ -66,11 +66,8 @@ interface StyleDef {
 export class FootRingBuff {
   /** 默认世界空间直径（米） */
   static readonly WORLD_DIAMETER = 1.7;
-  /**
-   * 相对脚底抬高。
-   * 表现层脚底固定 Y=0；再叠一点高度减轻共面闪烁（最终仍靠 depthFunction 防遮挡）。
-   */
-  static readonly Y_OFFSET = 0.04;
+  /** 相对脚底微小抬高 8 毫米，贴合脚底 */
+  static readonly Y_OFFSET = 0.008;
 
   readonly root: TransformNode;
   readonly style: FormationStyle;
@@ -325,9 +322,8 @@ function makeDisc(
   // 贴地半透明：不写深度，避免多层互挡
   mat.forceDepthWrite = false;
   mat.disableDepthWrite = true;
-  // 关闭深度测试：俯视角下与地面几乎共面时，深度缓冲精度会「吃掉」半圈圆环
-  // （截图里左下半圈消失就是这个）。阵法必须完整盖在草地上。
-  mat.depthFunction = Constants.ALWAYS;
+  // 深度偏移：防止与地面 z-fighting 闪烁，同时保留正常深度测试，小兵脚部会完美站在阵法之上不被遮挡
+  mat.zOffset = -3;
   disc.material = mat;
   return disc;
 }

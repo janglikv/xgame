@@ -45,15 +45,12 @@ export interface DemoRow {
   presets: readonly DemoPreset[];
 }
 
-/** 阵法排：无阵 + 全部复杂样式 */
-const FORMATION_ROW_PRESETS: DemoPreset[] = [
-  { label: '无阵', options: {} },
-  ...FORMATION_STYLES.map((style) => ({
-    label: FORMATION_LABELS[style],
-    options: {},
-    formation: style,
-  })),
-];
+/** 阵法排：全部复杂样式（去除无阵原皮） */
+const FORMATION_ROW_PRESETS: DemoPreset[] = FORMATION_STYLES.map((style) => ({
+  label: FORMATION_LABELS[style],
+  options: {},
+  formation: style,
+}));
 
 /**
  * 多排展示：每排只变一类属性，便于对比。
@@ -62,20 +59,16 @@ const FORMATION_ROW_PRESETS: DemoPreset[] = [
 export const DEMO_ROWS: readonly DemoRow[] = [
   {
     category: '表情',
-    // 纯表情；马赛克等后处理见「特殊效果」行，可叠加
     presets: [
       { label: '可爱', options: { face: 'cute' } },
       { label: '凶狠', options: { face: 'fierce' } },
       { label: '呆萌浓眉', options: { face: 'dumb' } },
       { label: '悲伤', options: { face: 'sad' } },
-      { label: '面无表情', options: { face: 'blank' } },
     ],
   },
   {
     category: '特殊效果',
-    // 可叠加到任意表情；本排用默认可爱脸作底，只变特效
     presets: [
-      { label: '无', options: { face: 'cute' } },
       { label: '马赛克', options: { face: 'cute', mosaicFace: true } },
     ],
   },
@@ -85,9 +78,7 @@ export const DEMO_ROWS: readonly DemoRow[] = [
   },
   {
     category: '肤色',
-    // 无色（纯白）+ 灰黑 + 六色，身体/手脚/脸底同色
     presets: [
-      { label: '纯白', options: { bodyColor: 0xffffff } },
       { label: '灰黑', options: { bodyColor: 0x3a3a42 } },
       { label: '红', options: { bodyColor: 0xe85d5d } },
       { label: '橙', options: { bodyColor: 0xf0a04b } },
@@ -99,30 +90,21 @@ export const DEMO_ROWS: readonly DemoRow[] = [
   },
   {
     category: '武器',
-    // 空手 + 全部法杖款式
-    presets: [
-      { label: '空手', options: {} },
-      ...STAFF_STYLES.map((style) => ({
-        label: STAFF_LABELS[style],
-        options: { staff: style },
-      })),
-    ],
+    presets: STAFF_STYLES.map((style) => ({
+      label: STAFF_LABELS[style],
+      options: { staff: style },
+    })),
   },
   {
     category: '帽子',
-    // 无帽 + 全部帽子款式
-    presets: [
-      { label: '无帽', options: {} },
-      ...HAT_STYLES.map((style) => ({
-        label: HAT_LABELS[style],
-        options: { hat: style },
-      })),
-    ],
+    presets: HAT_STYLES.map((style) => ({
+      label: HAT_LABELS[style],
+      options: { hat: style },
+    })),
   },
   {
     category: '体型',
     presets: [
-      { label: '正常', options: {} },
       { label: '缩小一半', options: { scaleMultiplier: 0.5 } },
       { label: '低面数', options: { lowPolyFlat: true } },
     ],
