@@ -217,8 +217,8 @@ async function initScene(): Promise<void> {
   dir.shadowMinZ = 1;
   dir.shadowMaxZ = 70;
 
-  // 5. 地板（渲染）+ 物理静态场地 + 坐标系
-  new Floor(scene, shadowGen);
+  // 5. 地板（枢纽瓷砖，程序化烘焙）+ 物理静态场地 + 坐标系
+  new Floor(scene, shadowGen, { surface: 'tiles' });
   buildArenaColliders(scene);
   new SpatialAxesGrid(scene);
 

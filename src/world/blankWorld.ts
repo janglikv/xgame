@@ -13,7 +13,6 @@ import {
   FIXED_CAMERA,
   type CameraMode,
 } from '../storage/settingsState';
-import { Floor } from './Floor';
 import {
   Minion,
   type MinionAppearance,
@@ -24,6 +23,7 @@ import {
   MinionPhysicsProxy,
 } from './physics';
 import { SpatialAxesGrid } from './SpatialAxesGrid';
+import { createTerrainGround } from './TerrainGround';
 import { TeleportPad } from './TeleportPad';
 
 export interface BlankWorld {
@@ -89,9 +89,10 @@ export async function createBlankWorld(
   dir.shadowMinZ = 1;
   dir.shadowMaxZ = 70;
 
-  // 地板 + 碰撞 + 地面坐标网格（与枢纽一致）
-  new Floor(scene, shadowGen);
-  buildArenaColliders(scene);
+  // 完全平坦草地（TerrainMaterial 贴图混合，无 heightMap 高低差）
+  // 物理：标准平面地板 + 围墙（与枢纽一致）
+  createTerrainGround(scene, shadowGen, { textureScale: 36 });
+  buildArenaColliders(scene, { includeFloor: true });
   new SpatialAxesGrid(scene);
 
   // 回程传送阵：与枢纽同坐标风格，站在阵中按 E 返回

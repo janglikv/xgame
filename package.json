@@ -12,6 +12,7 @@
     "@babylonjs/core": "^9.20.0",
     "@babylonjs/gui": "^9.20.0",
     "@babylonjs/havok": "^1.3.14",
+    "@babylonjs/materials": "^9.20.0",
     "tone": "^15.1.22"
   },
   "devDependencies": {
