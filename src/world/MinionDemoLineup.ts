@@ -7,6 +7,8 @@ import {
 } from './FootRingBuff';
 import { Minion, type MinionOptions } from './Minion';
 import type { FaceStyle } from './minion/faces';
+import { HAT_LABELS, HAT_STYLES } from './minion/hat';
+import { STAFF_LABELS, STAFF_STYLES } from './minion/staff';
 
 /** 单条展示副本的外观预设（与布局解耦） */
 export interface DemoPreset {
@@ -40,13 +42,21 @@ const FORMATION_ROW_PRESETS: DemoPreset[] = [
 export const DEMO_ROWS: readonly DemoRow[] = [
   {
     category: '表情',
+    // 纯表情；马赛克等后处理见「特殊效果」行，可叠加
     presets: [
       { label: '可爱', options: { face: 'cute' } },
       { label: '凶狠', options: { face: 'fierce' } },
       { label: '呆萌浓眉', options: { face: 'dumb' } },
       { label: '悲伤', options: { face: 'sad' } },
       { label: '面无表情', options: { face: 'blank' } },
-      { label: '马赛克可爱', options: { face: 'cute', mosaicFace: true } },
+    ],
+  },
+  {
+    category: '特殊效果',
+    // 可叠加到任意表情；本排用默认可爱脸作底，只变特效
+    presets: [
+      { label: '无', options: { face: 'cute' } },
+      { label: '马赛克', options: { face: 'cute', mosaicFace: true } },
     ],
   },
   {
@@ -69,16 +79,24 @@ export const DEMO_ROWS: readonly DemoRow[] = [
   },
   {
     category: '武器',
+    // 空手 + 全部法杖款式
     presets: [
       { label: '空手', options: {} },
-      { label: '魔法杖', options: { magicStaff: true } },
+      ...STAFF_STYLES.map((style) => ({
+        label: STAFF_LABELS[style],
+        options: { staff: style },
+      })),
     ],
   },
   {
-    category: '配件',
+    category: '帽子',
+    // 无帽 + 全部帽子款式
     presets: [
       { label: '无帽', options: {} },
-      { label: '红色巫师帽', options: { redHat: true } },
+      ...HAT_STYLES.map((style) => ({
+        label: HAT_LABELS[style],
+        options: { hat: style },
+      })),
     ],
   },
   {

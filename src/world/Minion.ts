@@ -9,15 +9,23 @@ import {
   Vector3,
 } from '@babylonjs/core';
 import { getFaceTexture, type FaceStyle } from './minion/faces';
-import { attachWizardHat, HAT_RED, HAT_RED_BAND } from './minion/hat';
+import {
+  attachHat,
+  HAT_RED,
+  HAT_RED_BAND,
+  type HatStyle,
+} from './minion/hat';
 import { ball, cast, mat } from './minion/materials';
 import {
-  attachMagicStaff,
+  attachStaff,
   type StaffFx,
+  type StaffStyle,
   updateStaffFx,
 } from './minion/staff';
 
 export type { FaceStyle } from './minion/faces';
+export type { StaffStyle } from './minion/staff';
+export type { HatStyle } from './minion/hat';
 
 /** 小兵创建/外观选项 */
 export interface MinionOptions {
@@ -33,9 +41,19 @@ export interface MinionOptions {
   allBlack?: boolean;
   /** 相对默认 SCALE 的倍率（1 = 正常，0.5 = 缩小一半） */
   scaleMultiplier?: number;
-  /** 戴红色巫师帽 */
+  /**
+   * 帽子款式。
+   * 若同时设 redHat=true 且未指定 hat，则用 'wizard'。
+   */
+  hat?: HatStyle;
+  /** 戴红色巫师帽（等价 hat: 'wizard'） */
   redHat?: boolean;
-  /** 右手持炫酷魔法杖 */
+  /**
+   * 右手持法杖款式。
+   * 若同时设 magicStaff=true 且未指定 staff，则用 'arcane'。
+   */
+  staff?: StaffStyle;
+  /** 右手持炫彩魔法杖（等价 staff: 'arcane'） */
   magicStaff?: boolean;
   /** 表情 */
   face?: FaceStyle;
@@ -89,8 +107,12 @@ export class Minion {
 
   readonly root: TransformNode;
   readonly bodyRoot: TransformNode;
+  /**
+   * 躯干锚点：身体球 + 帽子挂在此节点。
+   * 呼吸缩放/位移只打在 torso 上，帽子与身体同步，避免相对滑动穿模。
+   */
+  private readonly torso: TransformNode;
 
-  private readonly body: Mesh;
   private readonly leftHand: Mesh;
   private readonly rightHand: Mesh;
   private readonly leftFoot: Mesh;
@@ -132,8 +154,10 @@ export class Minion {
     const skinColor =
       options.bodyColor ??
       (options.allBlack ? Minion.CHARCOAL : Minion.BODY);
-    const redHat = options.redHat ?? false;
-    const magicStaff = options.magicStaff ?? false;
+    const hatStyle: HatStyle | null =
+      options.hat ?? (options.redHat ? 'wizard' : null);
+    const staffStyle: StaffStyle | null =
+      options.staff ?? (options.magicStaff ? 'arcane' : null);
     const faceStyle: FaceStyle = options.face ?? 'cute';
     const mosaicFace = options.mosaicFace ?? false;
     const lowPolyFlat = options.lowPolyFlat ?? false;
@@ -162,6 +186,11 @@ export class Minion {
     this.bodyRoot = new TransformNode('bodyRoot', scene);
     this.bodyRoot.parent = this.root;
 
+    // 躯干：球心高度；呼吸时缩放此节点，身体与帽子同变
+    this.torso = new TransformNode('torso', scene);
+    this.torso.parent = this.bodyRoot;
+    this.torso.position.y = Minion.BODY_LOCAL_Y;
+
     const limbMat = mat(scene, 'minionLimb', skinColor);
 
     const bodyMat = new StandardMaterial('minionBody', scene);
@@ -180,18 +209,18 @@ export class Minion {
       { diameter: 0.84, segments: sphereSegments },
       scene,
     );
-    body.position.y = Minion.BODY_LOCAL_Y;
+    // 相对 torso 球心
+    body.position.set(0, 0, 0);
     body.rotation.y = Math.PI / 2;
     body.material = bodyMat;
-    body.parent = this.bodyRoot;
+    body.parent = this.torso;
     if (lowPolyFlat) {
       body.convertToFlatShadedMesh();
     }
     cast(body, shadowGen);
-    this.body = body;
 
     this.leftHandRest = new Vector3(0.5, 0.5, 0.05);
-    this.rightHandRest = magicStaff
+    this.rightHandRest = staffStyle
       ? new Vector3(-0.52, 0.68, 0.28)
       : new Vector3(-0.5, 0.5, 0.05);
 
@@ -217,11 +246,12 @@ export class Minion {
     this.rightFoot.parent = this.bodyRoot;
     cast(this.rightFoot, shadowGen);
 
-    if (redHat) {
-      attachWizardHat(scene, this.bodyRoot, Minion.BODY_LOCAL_Y, shadowGen);
+    if (hatStyle) {
+      // 与身体同挂 torso，呼吸时一起缩放
+      attachHat(scene, this.torso, hatStyle, shadowGen);
     }
-    if (magicStaff) {
-      this.staffFx = attachMagicStaff(scene, this.rightHand, shadowGen);
+    if (staffStyle) {
+      this.staffFx = attachStaff(scene, this.rightHand, staffStyle, shadowGen);
     }
   }
 
@@ -261,13 +291,13 @@ export class Minion {
     const breathAmt = 1 - this.walkWeight * 0.65;
     const breathBob = breath * Minion.BREATH_BOB * breathAmt;
     const breathHand = breath * Minion.BREATH_HAND * breathAmt;
-    // 躯干：吸气略鼓、略高；脚不缩放，贴地
+    // 躯干（身体+帽子）统一：吸气略鼓；脚/手不在此节点，贴地不受缩放
     const sy = 1 + breath * Minion.BREATH_SCALE_Y * breathAmt;
     const sxz = 1 + breath * Minion.BREATH_SCALE_XZ * breathAmt;
-    this.body.scaling.set(sxz, sy, sxz);
-    // 球心随 Y 缩放上移，底缘大致稳定
+    this.torso.scaling.set(sxz, sy, sxz);
+    // 球心随 Y 缩放上移，底缘大致稳定（与旧 body 呼吸位移同一公式）
     const bodyR = 0.42;
-    this.body.position.y =
+    this.torso.position.y =
       Minion.BODY_LOCAL_Y + bodyR * (sy - 1) * 0.55;
 
     const w = this.walkWeight;
