@@ -8,6 +8,10 @@ import {
   TransformNode,
   Vector3,
 } from '@babylonjs/core';
+import {
+  FootRingBuff,
+  type FormationStyle,
+} from './FootRingBuff';
 import { getFaceTexture, type FaceStyle } from './minion/faces';
 import {
   attachHat,
@@ -15,7 +19,7 @@ import {
   HAT_RED_BAND,
   type HatStyle,
 } from './minion/hat';
-import { ball, cast, mat } from './minion/materials';
+import { ball, cast, colorFromHex, mat } from './minion/materials';
 import {
   attachStaff,
   type StaffFx,
@@ -26,6 +30,33 @@ import {
 export type { FaceStyle } from './minion/faces';
 export type { StaffStyle } from './minion/staff';
 export type { HatStyle } from './minion/hat';
+export type { FormationStyle } from './FootRingBuff';
+
+/**
+ * 可独立替换的外观槽位。
+ * E 键按目标的 partialSlots 只拷这些；R 键拷全量。
+ */
+export type AppearanceSlot =
+  | 'face'
+  | 'mosaicFace'
+  | 'bodyColor'
+  | 'hat'
+  | 'staff'
+  | 'scaleMultiplier'
+  | 'lowPolyFlat'
+  | 'formation';
+
+/** 小兵完整外观快照（含「无帽 / 无阵」等显式 null） */
+export interface MinionAppearance {
+  face: FaceStyle;
+  mosaicFace: boolean;
+  bodyColor: number;
+  hat: HatStyle | null;
+  staff: StaffStyle | null;
+  scaleMultiplier: number;
+  lowPolyFlat: boolean;
+  formation: FormationStyle | null;
+}
 
 /** 小兵创建/外观选项 */
 export interface MinionOptions {
@@ -61,15 +92,40 @@ export interface MinionOptions {
   mosaicFace?: boolean;
   /** 低面数 + 平面着色 */
   lowPolyFlat?: boolean;
+  /** 脚底阵法；不设则无 */
+  formation?: FormationStyle | null;
+  /**
+   * E 键部分替换时只应用这些槽位（展示阵列按行设置）。
+   * 未设则 E 不生效（仅 R 全量）。
+   */
+  partialSlots?: readonly AppearanceSlot[];
   /** 是否播放眨眼待机（默认 true） */
   blinkIdle?: boolean;
   /** 是否播放微弱呼吸（默认 true） */
   breathIdle?: boolean;
 }
 
+/** 从创建选项解析完整外观 */
+export function resolveAppearance(
+  options: MinionOptions = {},
+): MinionAppearance {
+  return {
+    face: options.face ?? 'cute',
+    mosaicFace: options.mosaicFace ?? false,
+    bodyColor:
+      options.bodyColor ??
+      (options.allBlack ? Minion.CHARCOAL : Minion.BODY),
+    hat: options.hat ?? (options.redHat ? 'wizard' : null),
+    staff: options.staff ?? (options.magicStaff ? 'arcane' : null),
+    scaleMultiplier: options.scaleMultiplier ?? 1,
+    lowPolyFlat: options.lowPolyFlat ?? false,
+    formation: options.formation ?? null,
+  };
+}
+
 /**
- * 极简五球小兵：身体 + 双手 + 双脚（可选小帽 / 魔法杖）。
- * 外观配件与脸贴图拆到 minion/ 子模块。
+ * 极简五球小兵：身体 + 双手 + 双脚（可选小帽 / 魔法杖 / 阵法）。
+ * 支持从另一单位 E 部分替换 / R 全量替换外观。
  */
 export class Minion {
   static readonly SCALE = 0.5;
@@ -105,6 +161,9 @@ export class Minion {
   static readonly BLINK_CLOSED = 0.11;
   static readonly BLINK_CLOSED_DOUBLE = 0.08;
 
+  static readonly HAND_REST_EMPTY = new Vector3(-0.5, 0.5, 0.05);
+  static readonly HAND_REST_STAFF = new Vector3(-0.52, 0.68, 0.28);
+
   readonly root: TransformNode;
   readonly bodyRoot: TransformNode;
   /**
@@ -124,17 +183,27 @@ export class Minion {
   private readonly rightFootRest: Vector3;
 
   private readonly scene: Scene;
+  private readonly shadowGen: ShadowGenerator | undefined;
   private readonly bodyMat: StandardMaterial;
-  private readonly skinColor: number;
-  private readonly faceStyle: FaceStyle;
-  private readonly mosaicFace: boolean;
+  private readonly limbMat: StandardMaterial;
   private readonly blinkEnabled: boolean;
   private readonly breathEnabled: boolean;
+
+  /** 当前完整外观 */
+  private appearance: MinionAppearance;
+  /**
+   * E 键部分替换时，源单位只贡献这些槽。
+   * null = 该单位不是展示槽位单位（E 对其不生效）。
+   */
+  private partialSlots: readonly AppearanceSlot[] | null;
+
+  private hatRoot: TransformNode | null = null;
+  private staffFx: StaffFx | null = null;
+  private formationBuff: FootRingBuff | null = null;
 
   private walkPhase = 0;
   private walkWeight = 0;
   private targetYaw = 0;
-  private staffFx: StaffFx | null = null;
   /** 呼吸相位（弧度），各实例随机错开 */
   private breathPhase = 0;
 
@@ -151,24 +220,15 @@ export class Minion {
   constructor(scene: Scene, x = 0, z = 0, options: MinionOptions = {}) {
     const facePositiveX = options.facePositiveX ?? true;
     const shadowGen = options.shadowGenerator;
-    const skinColor =
-      options.bodyColor ??
-      (options.allBlack ? Minion.CHARCOAL : Minion.BODY);
-    const hatStyle: HatStyle | null =
-      options.hat ?? (options.redHat ? 'wizard' : null);
-    const staffStyle: StaffStyle | null =
-      options.staff ?? (options.magicStaff ? 'arcane' : null);
-    const faceStyle: FaceStyle = options.face ?? 'cute';
-    const mosaicFace = options.mosaicFace ?? false;
-    const lowPolyFlat = options.lowPolyFlat ?? false;
-    const sphereSegments = lowPolyFlat ? 10 : 24;
-    const limbSegments = lowPolyFlat ? 3 : 16;
-    const scale = Minion.SCALE * (options.scaleMultiplier ?? 1);
+    const appearance = resolveAppearance(options);
+    const sphereSegments = appearance.lowPolyFlat ? 10 : 24;
+    const limbSegments = appearance.lowPolyFlat ? 3 : 16;
+    const scale = Minion.SCALE * appearance.scaleMultiplier;
 
     this.scene = scene;
-    this.skinColor = skinColor;
-    this.faceStyle = faceStyle;
-    this.mosaicFace = mosaicFace;
+    this.shadowGen = shadowGen;
+    this.appearance = { ...appearance };
+    this.partialSlots = options.partialSlots ? [...options.partialSlots] : null;
     this.blinkEnabled = options.blinkIdle ?? true;
     this.breathEnabled = options.breathIdle ?? true;
     this.breathPhase = Math.random() * Math.PI * 2;
@@ -191,15 +251,15 @@ export class Minion {
     this.torso.parent = this.bodyRoot;
     this.torso.position.y = Minion.BODY_LOCAL_Y;
 
-    const limbMat = mat(scene, 'minionLimb', skinColor);
+    this.limbMat = mat(scene, 'minionLimb', appearance.bodyColor);
 
     const bodyMat = new StandardMaterial('minionBody', scene);
     bodyMat.specularColor = Color3.Black();
     bodyMat.diffuseTexture = getFaceTexture(
       scene,
-      skinColor,
-      faceStyle,
-      mosaicFace,
+      appearance.bodyColor,
+      appearance.face,
+      appearance.mosaicFace,
       false,
     );
     this.bodyMat = bodyMat;
@@ -214,44 +274,155 @@ export class Minion {
     body.rotation.y = Math.PI / 2;
     body.material = bodyMat;
     body.parent = this.torso;
-    if (lowPolyFlat) {
+    if (appearance.lowPolyFlat) {
       body.convertToFlatShadedMesh();
     }
     cast(body, shadowGen);
 
     this.leftHandRest = new Vector3(0.5, 0.5, 0.05);
-    this.rightHandRest = staffStyle
-      ? new Vector3(-0.52, 0.68, 0.28)
-      : new Vector3(-0.5, 0.5, 0.05);
+    this.rightHandRest = (
+      appearance.staff ? Minion.HAND_REST_STAFF : Minion.HAND_REST_EMPTY
+    ).clone();
 
-    this.leftHand = ball(scene, 'leftHand', 0.2, limbMat, limbSegments, lowPolyFlat);
+    this.leftHand = ball(
+      scene,
+      'leftHand',
+      0.2,
+      this.limbMat,
+      limbSegments,
+      appearance.lowPolyFlat,
+    );
     this.leftHand.position.copyFrom(this.leftHandRest);
     this.leftHand.parent = this.bodyRoot;
     cast(this.leftHand, shadowGen);
 
-    this.rightHand = ball(scene, 'rightHand', 0.2, limbMat, limbSegments, lowPolyFlat);
+    this.rightHand = ball(
+      scene,
+      'rightHand',
+      0.2,
+      this.limbMat,
+      limbSegments,
+      appearance.lowPolyFlat,
+    );
     this.rightHand.position.copyFrom(this.rightHandRest);
     this.rightHand.parent = this.bodyRoot;
     cast(this.rightHand, shadowGen);
 
     this.leftFootRest = new Vector3(0.14, 0.1, 0.02);
     this.rightFootRest = new Vector3(-0.14, 0.1, 0.02);
-    this.leftFoot = ball(scene, 'leftFoot', 0.2, limbMat, limbSegments, lowPolyFlat);
+    this.leftFoot = ball(
+      scene,
+      'leftFoot',
+      0.2,
+      this.limbMat,
+      limbSegments,
+      appearance.lowPolyFlat,
+    );
     this.leftFoot.position.copyFrom(this.leftFootRest);
     this.leftFoot.parent = this.bodyRoot;
     cast(this.leftFoot, shadowGen);
 
-    this.rightFoot = ball(scene, 'rightFoot', 0.2, limbMat, limbSegments, lowPolyFlat);
+    this.rightFoot = ball(
+      scene,
+      'rightFoot',
+      0.2,
+      this.limbMat,
+      limbSegments,
+      appearance.lowPolyFlat,
+    );
     this.rightFoot.position.copyFrom(this.rightFootRest);
     this.rightFoot.parent = this.bodyRoot;
     cast(this.rightFoot, shadowGen);
 
-    if (hatStyle) {
-      // 与身体同挂 torso，呼吸时一起缩放
-      attachHat(scene, this.torso, hatStyle, shadowGen);
+    if (appearance.hat) {
+      this.hatRoot = attachHat(scene, this.torso, appearance.hat, shadowGen);
     }
-    if (staffStyle) {
-      this.staffFx = attachStaff(scene, this.rightHand, staffStyle, shadowGen);
+    if (appearance.staff) {
+      this.staffFx = attachStaff(
+        scene,
+        this.rightHand,
+        appearance.staff,
+        shadowGen,
+      );
+    }
+    if (appearance.formation) {
+      this.formationBuff = new FootRingBuff(
+        scene,
+        this.root,
+        appearance.formation,
+      );
+    }
+  }
+
+  /** 当前完整外观（拷贝） */
+  getAppearance(): MinionAppearance {
+    return { ...this.appearance };
+  }
+
+  /** E 键部分替换槽位；null 表示该单位不支持部分替换 */
+  getPartialSlots(): readonly AppearanceSlot[] | null {
+    return this.partialSlots;
+  }
+
+  /**
+   * 从源单位替换外观。
+   * - partial（E）：只拷源的 partialSlots 对应字段；源无槽位则不改
+   * - full（R）：拷源全部外观
+   */
+  applyFrom(source: Minion, mode: 'partial' | 'full'): void {
+    if (source === this) return;
+
+    if (mode === 'partial') {
+      const slots = source.getPartialSlots();
+      if (!slots || slots.length === 0) return;
+      const src = source.getAppearance();
+      const patch: Partial<MinionAppearance> = {};
+      for (const slot of slots) {
+        // 显式 null（无帽/无阵/空手）也要写入
+        (patch as Record<string, unknown>)[slot] = src[slot];
+      }
+      this.applyPatch(patch);
+      return;
+    }
+
+    this.applyPatch(source.getAppearance());
+  }
+
+  /** 按字段补丁应用外观（只改给定键） */
+  applyPatch(patch: Partial<MinionAppearance>): void {
+    if (patch.face !== undefined || patch.mosaicFace !== undefined) {
+      if (patch.face !== undefined) this.appearance.face = patch.face;
+      if (patch.mosaicFace !== undefined) {
+        this.appearance.mosaicFace = patch.mosaicFace;
+      }
+      this.refreshFaceTexture();
+    }
+
+    if (patch.bodyColor !== undefined) {
+      this.appearance.bodyColor = patch.bodyColor;
+      this.limbMat.diffuseColor = colorFromHex(patch.bodyColor);
+      this.refreshFaceTexture();
+    }
+
+    if (patch.hat !== undefined) {
+      this.setHat(patch.hat);
+    }
+
+    if (patch.staff !== undefined) {
+      this.setStaff(patch.staff);
+    }
+
+    if (patch.scaleMultiplier !== undefined) {
+      this.setScaleMultiplier(patch.scaleMultiplier);
+    }
+
+    if (patch.formation !== undefined) {
+      this.setFormation(patch.formation);
+    }
+
+    // lowPolyFlat 需重建网格，运行时忽略（创建时已定）
+    if (patch.lowPolyFlat !== undefined) {
+      this.appearance.lowPolyFlat = patch.lowPolyFlat;
     }
   }
 
@@ -268,6 +439,7 @@ export class Minion {
   update(dt: number, moving: boolean): void {
     this.applyTurn(dt);
     if (this.staffFx) updateStaffFx(this.staffFx, dt);
+    this.formationBuff?.update(dt);
     // 待机眨眼（行走时也保留，更自然）
     this.updateBlink(dt);
 
@@ -286,8 +458,7 @@ export class Minion {
     if (this.breathEnabled) {
       this.breathPhase += dt * Math.PI * 2 * Minion.BREATH_HZ;
     }
-    const breath =
-      this.breathEnabled ? Math.sin(this.breathPhase) : 0;
+    const breath = this.breathEnabled ? Math.sin(this.breathPhase) : 0;
     const breathAmt = 1 - this.walkWeight * 0.65;
     const breathBob = breath * Minion.BREATH_BOB * breathAmt;
     const breathHand = breath * Minion.BREATH_HAND * breathAmt;
@@ -320,7 +491,9 @@ export class Minion {
 
     const swing = Math.sin(this.walkPhase) * w;
     const liftPhase = Math.cos(this.walkPhase);
-    const handSwing = this.staffFx ? Minion.HAND_SWING * 0.45 : Minion.HAND_SWING;
+    const handSwing = this.staffFx
+      ? Minion.HAND_SWING * 0.45
+      : Minion.HAND_SWING;
 
     this.leftHand.position.set(
       this.leftHandRest.x,
@@ -329,7 +502,9 @@ export class Minion {
     );
     this.rightHand.position.set(
       this.rightHandRest.x,
-      this.rightHandRest.y - Minion.HAND_BOB * swing * 0.6 + breathHand * 0.85,
+      this.rightHandRest.y -
+        Minion.HAND_BOB * swing * 0.6 +
+        breathHand * 0.85,
       this.rightHandRest.z - handSwing * swing,
     );
 
@@ -350,9 +525,81 @@ export class Minion {
       Math.abs(Math.sin(this.walkPhase)) * Minion.BODY_BOB * w + breathBob;
   }
 
+  private setHat(style: HatStyle | null): void {
+    // 同款且已挂载 / 同为无帽：跳过
+    if (this.appearance.hat === style) {
+      if (style === null || this.hatRoot) return;
+    }
+    this.appearance.hat = style;
+    if (this.hatRoot) {
+      this.hatRoot.dispose();
+      this.hatRoot = null;
+    }
+    if (style) {
+      this.hatRoot = attachHat(this.scene, this.torso, style, this.shadowGen);
+    }
+  }
+
+  private setStaff(style: StaffStyle | null): void {
+    if (this.appearance.staff === style) {
+      if (style === null || this.staffFx) return;
+    }
+    this.appearance.staff = style;
+    if (this.staffFx) {
+      this.staffFx.root.dispose();
+      this.staffFx = null;
+    }
+    if (style) {
+      this.staffFx = attachStaff(
+        this.scene,
+        this.rightHand,
+        style,
+        this.shadowGen,
+      );
+      this.rightHandRest.copyFrom(Minion.HAND_REST_STAFF);
+    } else {
+      this.rightHandRest.copyFrom(Minion.HAND_REST_EMPTY);
+    }
+  }
+
+  private setScaleMultiplier(mul: number): void {
+    const m = Math.max(0.05, mul);
+    if (Math.abs(this.appearance.scaleMultiplier - m) < 1e-6) return;
+    this.appearance.scaleMultiplier = m;
+    const s = Minion.SCALE * m;
+    this.root.scaling.set(s, s, s);
+    this.formationBuff?.refreshHostScale();
+  }
+
+  private setFormation(style: FormationStyle | null): void {
+    if (this.appearance.formation === style) {
+      if (style === null || this.formationBuff) return;
+    }
+    this.appearance.formation = style;
+    if (this.formationBuff) {
+      this.formationBuff.dispose();
+      this.formationBuff = null;
+    }
+    if (style) {
+      this.formationBuff = new FootRingBuff(this.scene, this.root, style);
+    }
+  }
+
+  private refreshFaceTexture(): void {
+    this.bodyMat.diffuseTexture = getFaceTexture(
+      this.scene,
+      this.appearance.bodyColor,
+      this.appearance.face,
+      this.appearance.mosaicFace,
+      this.eyesClosed,
+    );
+  }
+
   private applyTurn(dt: number): void {
     let diff = this.targetYaw - this.root.rotation.y;
-    diff = ((diff + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
+    diff =
+      ((diff + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) -
+      Math.PI;
     const maxStep = Minion.TURN_SPEED * dt;
     if (Math.abs(diff) <= maxStep) {
       this.root.rotation.y = this.targetYaw;
@@ -404,13 +651,7 @@ export class Minion {
   private setEyesClosed(closed: boolean): void {
     if (this.eyesClosed === closed) return;
     this.eyesClosed = closed;
-    this.bodyMat.diffuseTexture = getFaceTexture(
-      this.scene,
-      this.skinColor,
-      this.faceStyle,
-      this.mosaicFace,
-      closed,
-    );
+    this.refreshFaceTexture();
   }
 
   getFocusPoint(out = new Vector3()): Vector3 {

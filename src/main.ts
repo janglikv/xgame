@@ -28,7 +28,7 @@ import {
 import { FpsOverlay } from './ui/FpsOverlay';
 import { SettingsPanel } from './ui/SettingsPanel';
 import { Floor } from './world/Floor';
-import { FootRingBuff } from './world/FootRingBuff';
+import { HoverOutline } from './world/HoverOutline';
 import { Minion } from './world/Minion';
 import { spawnMinionDemoLineup } from './world/MinionDemoLineup';
 import {
@@ -36,6 +36,7 @@ import {
   initPhysics,
   MinionPhysicsProxy,
 } from './world/physics';
+import { RangeRing } from './world/RangeRing';
 import { SpatialAxesGrid } from './world/SpatialAxesGrid';
 
 async function initScene(): Promise<void> {
@@ -200,7 +201,7 @@ async function initScene(): Promise<void> {
   buildArenaColliders(scene);
   new SpatialAxesGrid(scene);
 
-  // 6. 小兵模型（灰黑肤色 + 凶狠表情 + 红帽 + 法杖，体积缩小一半；位置可 localStorage 恢复）
+  // 6. 小兵模型（灰黑肤色 + 凶狠表情 + 红帽 + 法杖 + 赤环，体积缩小一半；位置可 localStorage 恢复）
   const minion = new Minion(scene, minionX, minionZ, {
     facePositiveX: true,
     shadowGenerator: shadowGen,
@@ -209,9 +210,8 @@ async function initScene(): Promise<void> {
     redHat: true,
     magicStaff: true,
     scaleMultiplier: 0.5,
+    formation: 'crimson',
   });
-  // 脚底红色阵法（赤环）
-  const minionFormation = new FootRingBuff(scene, minion.root, 'crimson');
   // 主控物理：DYNAMIC 速度驱动，与阵列/球真实互推
   const minionPhys = new MinionPhysicsProxy(scene, minion.root, {
     mode: 'player',
@@ -228,6 +228,38 @@ async function initScene(): Promise<void> {
     zEnd: 5,
     colGap: 1.1,
     physics: true,
+  });
+
+  // 鼠标悬停：深红整体外轮廓；仅展示阵列可作 E/R 替换源（不描主角也可悬停）
+  const hoverOutline = new HoverOutline(scene);
+  hoverOutline.registerMinions([minion, ...demoLineup.minions]);
+  /** 外观替换最大距离；不够近时在主角脚下画红圈提示 */
+  const SWAP_RANGE = RangeRing.DEFAULT_RADIUS;
+  const swapRangeRing = new RangeRing(scene, SWAP_RANGE);
+
+  const distXZ = (ax: number, az: number, bx: number, bz: number): number =>
+    Math.hypot(ax - bx, az - bz);
+
+  /** 悬停目标是否在替换距离内（XZ） */
+  const isInSwapRange = (target: Minion): boolean => {
+    const a = minion.root.position;
+    const b = target.root.position;
+    return distXZ(a.x, a.z, b.x, b.z) <= SWAP_RANGE;
+  };
+
+  /** 指针是否在画布上（leave 后勿用残留 pointerX/Y 重拾取） */
+  let pointerOverCanvas = false;
+  canvas.addEventListener('pointerenter', () => {
+    pointerOverCanvas = true;
+  });
+  canvas.addEventListener('pointermove', () => {
+    pointerOverCanvas = true;
+    if (settingsPanel?.isOpen()) return;
+    hoverOutline.updateFromScenePick(scene);
+  });
+  canvas.addEventListener('pointerleave', () => {
+    pointerOverCanvas = false;
+    hoverOutline.clear();
   });
 
   const snapshotMinion = (): MinionStateSnapshot => ({
@@ -266,16 +298,53 @@ async function initScene(): Promise<void> {
   const isMoveKey = (key: string): key is keyof typeof moveKeys =>
     key === 'w' || key === 'a' || key === 's' || key === 'd';
 
+  const isTypingTarget = (t: EventTarget | null): boolean => {
+    if (!(t instanceof HTMLElement)) return false;
+    return (
+      t.tagName === 'INPUT' ||
+      t.tagName === 'TEXTAREA' ||
+      t.isContentEditable
+    );
+  };
+
+  /**
+   * 悬停展示目标后（须进入 SWAP_RANGE）：
+   * - E：部分替换（只拷该行展示槽，如表情行只换脸、帽子行只换帽）
+   * - R：全量替换（整体外观对齐目标）
+   * 距离不足：不替换，红圈提示范围（并 pulse 强调）
+   * @returns 是否消费了按键（含距离不足提示）
+   */
+  const tryApplyHoverAppearance = (mode: 'partial' | 'full'): boolean => {
+    const target = hoverOutline.getHovered();
+    if (!target || target === minion) return false;
+    if (!isInSwapRange(target)) {
+      // 红圈画在目标脚下，不是主角
+      swapRangeRing.setPosition(target.root.position);
+      swapRangeRing.pulse();
+      return true;
+    }
+    minion.applyFrom(target, mode);
+    // 主角 mesh 变更后若仍悬停自己，刷新描边 mesh 列表
+    hoverOutline.refreshSelection();
+    return true;
+  };
+
   window.addEventListener('keydown', (e) => {
     const key = e.key.toLowerCase();
-    if (!isMoveKey(key) || e.repeat) return;
-    // 设置面板打开时不吃移动键
+    if (e.repeat) return;
     if (settingsPanel?.isOpen()) return;
-    // 输入框内不拦截
-    const t = e.target as HTMLElement | null;
-    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) {
+    if (isTypingTarget(e.target)) return;
+
+    if (key === 'e') {
+      if (tryApplyHoverAppearance('partial')) e.preventDefault();
       return;
     }
+    if (key === 'r') {
+      if (tryApplyHoverAppearance('full')) e.preventDefault();
+      return;
+    }
+
+    if (!isMoveKey(key)) return;
     moveKeys[key] = true;
     e.preventDefault();
   });
@@ -337,6 +406,7 @@ async function initScene(): Promise<void> {
     onOpenChange: (open) => {
       // 打开时松手、停 WASD、卸掉轨道拖拽，避免穿透 UI
       moveKeys.w = moveKeys.a = moveKeys.s = moveKeys.d = false;
+      hoverOutline.setEnabled(!open);
       if (open) {
         camera.detachControl();
       } else if (cameraMode === 'free') {
@@ -399,10 +469,29 @@ async function initScene(): Promise<void> {
     // 速度驱动物理体：有输入则冲，无输入则水平刹停（保留 Y）
     minionPhys.setHorizontalVelocity(wishX, wishZ);
 
-    // 表现动画（阵列内部会 sync 各自 pushable 代理）
+    // 表现动画（阵列内部会 sync 各自 pushable 代理；阵法在 Minion.update 内驱动）
     minion.update(dt, moving);
-    minionFormation.update(dt);
     demoLineup.update(dt);
+
+    // 悬停目标可能被推动离指针：每帧按指针位置重拾取，保持轮廓同步
+    if (!menuOpen && pointerOverCanvas) {
+      hoverOutline.updateFromScenePick(scene);
+    }
+
+    // 悬停可替换目标但距离不够 → 目标脚下贴地红圈（半径=可交互距离）
+    {
+      const hover = hoverOutline.getHovered();
+      const outOfRange =
+        !menuOpen &&
+        hover !== null &&
+        hover !== minion &&
+        !isInSwapRange(hover);
+      swapRangeRing.setVisible(outOfRange);
+      swapRangeRing.update(
+        dt,
+        outOfRange && hover ? hover.root.position : null,
+      );
+    }
 
     // 注视点始终平滑跟随角色中心（自由 / 固定相同）
     minion.getFocusPoint(focusPoint);

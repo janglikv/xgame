@@ -70,7 +70,7 @@ export class FootRingBuff {
   readonly root: TransformNode;
   readonly style: FormationStyle;
   private readonly layers: { mesh: Mesh; spin: number }[] = [];
-  private readonly baseScale: number;
+  private baseScale: number;
   private readonly pulse: number;
   private age = 0;
 
@@ -109,6 +109,15 @@ export class FootRingBuff {
     });
   }
 
+  /** 宿主 root.scaling 变化后调用，保持世界直径 */
+  refreshHostScale(): void {
+    const parent = this.root.parent as TransformNode | null;
+    if (!parent) return;
+    const s = Math.max(parent.scaling.x, 1e-6);
+    this.baseScale = 1 / s;
+    this.root.scaling.setAll(this.baseScale);
+  }
+
   /** 每帧：差速旋转 + 可选呼吸 + 抵消宿主 yaw */
   update(dt: number): void {
     this.age += dt;
@@ -123,6 +132,14 @@ export class FootRingBuff {
     if (parent) {
       this.root.rotation.y = -parent.rotation.y;
     }
+  }
+
+  dispose(): void {
+    for (const layer of this.layers) {
+      layer.mesh.dispose();
+    }
+    this.layers.length = 0;
+    this.root.dispose();
   }
 }
 

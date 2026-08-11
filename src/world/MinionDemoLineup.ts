@@ -1,11 +1,14 @@
 import { Vector3, type Scene, type ShadowGenerator } from '@babylonjs/core';
 import {
-  FootRingBuff,
   FORMATION_LABELS,
   FORMATION_STYLES,
   type FormationStyle,
 } from './FootRingBuff';
-import { Minion, type MinionOptions } from './Minion';
+import {
+  Minion,
+  type AppearanceSlot,
+  type MinionOptions,
+} from './Minion';
 import type { FaceStyle } from './minion/faces';
 import { HAT_LABELS, HAT_STYLES } from './minion/hat';
 import { STAFF_LABELS, STAFF_STYLES } from './minion/staff';
@@ -13,10 +16,24 @@ import { MinionPhysicsProxy } from './physics/MinionPhysicsProxy';
 
 const _demoVel = new Vector3();
 
+/** 展示行 category → E 键部分替换槽位 */
+const CATEGORY_PARTIAL_SLOTS: Record<string, readonly AppearanceSlot[]> = {
+  表情: ['face'],
+  特殊效果: ['mosaicFace'],
+  阵法: ['formation'],
+  肤色: ['bodyColor'],
+  武器: ['staff'],
+  帽子: ['hat'],
+  体型: ['scaleMultiplier', 'lowPolyFlat'],
+};
+
 /** 单条展示副本的外观预设（与布局解耦） */
 export interface DemoPreset {
   label: string;
-  options: Omit<MinionOptions, 'facePositiveX' | 'shadowGenerator'>;
+  options: Omit<
+    MinionOptions,
+    'facePositiveX' | 'shadowGenerator' | 'partialSlots' | 'formation'
+  >;
   /** 脚底阵法样式；不设则无阵 */
   formation?: FormationStyle;
 }
@@ -139,17 +156,13 @@ export interface DemoLineup {
   minions: Minion[];
   /** 物理代理（与 minions 一一对应；physics=false 时为空） */
   physicsProxies: MinionPhysicsProxy[];
-  /** 所有挂了脚底阵法的 buff */
-  buffs: FootRingBuff[];
-  /** 兼容旧字段：第一个脚底 buff（若有） */
-  firstBuff: FootRingBuff | null;
   /** 每帧调用：静止站立 + 驱动法杖 / 阵法 / 同步物理代理 */
   update(dt: number): void;
 }
 
 /**
- * 生成多排展示副本（每排同类），右对齐固定间距，并按预设挂脚底阵法 / 物理。
- * main 只负责调用 spawn + update，不内联分支配置。
+ * 生成多排展示副本（每排同类），右对齐固定间距。
+ * 每单位带 partialSlots，供悬停后 E 部分替换 / R 全量替换。
  */
 export function spawnMinionDemoLineup(
   scene: Scene,
@@ -167,11 +180,11 @@ export function spawnMinionDemoLineup(
 
   const minions: Minion[] = [];
   const physicsProxies: MinionPhysicsProxy[] = [];
-  const buffs: FootRingBuff[] = [];
 
   DEMO_ROWS.forEach((row, rowIndex) => {
     const x = x0 + rowIndex * rowGap;
     const n = row.presets.length;
+    const partialSlots = CATEGORY_PARTIAL_SLOTS[row.category] ?? [];
     row.presets.forEach((preset, colIndex) => {
       // 右对齐：每排最后一个落在 zEnd，向前按固定 colGap 排布
       const z = zEnd - (n - 1 - colIndex) * colGap;
@@ -179,6 +192,9 @@ export function spawnMinionDemoLineup(
         facePositiveX,
         shadowGenerator,
         ...preset.options,
+        // 阵法行：显式 formation（含 undefined→无阵，由 resolve 成 null）
+        formation: preset.formation ?? null,
+        partialSlots,
       });
       minions.push(minion);
 
@@ -194,18 +210,12 @@ export function spawnMinionDemoLineup(
         proxy.teleportToTarget();
         physicsProxies.push(proxy);
       }
-
-      if (preset.formation) {
-        buffs.push(new FootRingBuff(scene, minion.root, preset.formation));
-      }
     });
   });
 
   return {
     minions,
     physicsProxies,
-    buffs,
-    firstBuff: buffs[0] ?? null,
     update(dt: number): void {
       // 上一帧物理结果 → 表现位姿；被推时跟着动、转向、走路动画
       if (physicsProxies.length > 0) {
@@ -226,9 +236,6 @@ export function spawnMinionDemoLineup(
         }
       } else {
         for (const m of minions) m.update(dt, false);
-      }
-      for (const b of buffs) {
-        b.update(dt);
       }
     },
   };

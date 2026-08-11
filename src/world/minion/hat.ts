@@ -76,67 +76,73 @@ export const HAT_LABELS: Record<HatStyle, string> = {
  * 按款式挂帽子。
  * parent 应为身体球心锚点（torso）：与身体同节点呼吸缩放，避免相对滑动穿模。
  * 帽子本地坐标相对球心，不再叠加 BODY_LOCAL_Y。
+ * @returns 帽子根节点（可 dispose 整顶卸载）
  */
 export function attachHat(
   scene: Scene,
   parent: TransformNode,
   style: HatStyle,
   shadowGen?: ShadowGenerator,
-): void {
+): TransformNode {
+  // 独立根：运行时换帽只需 dispose 此节点
+  const root = new TransformNode(`Hat_${style}`, scene);
+  root.parent = parent;
+
   switch (style) {
     case 'beanie':
-      attachBeanie(scene, parent, shadowGen);
+      attachBeanie(scene, root, shadowGen);
       break;
     case 'tophat':
-      attachTopHat(scene, parent, shadowGen);
+      attachTopHat(scene, root, shadowGen);
       break;
     case 'crown':
-      attachCrown(scene, parent, shadowGen);
+      attachCrown(scene, root, shadowGen);
       break;
     case 'horns':
-      attachHorns(scene, parent, shadowGen);
+      attachHorns(scene, root, shadowGen);
       break;
     case 'party':
-      attachPartyHat(scene, parent, shadowGen);
+      attachPartyHat(scene, root, shadowGen);
       break;
     case 'pirate':
-      attachPirateHat(scene, parent, shadowGen);
+      attachPirateHat(scene, root, shadowGen);
       break;
     case 'helmet':
-      attachHelmet(scene, parent, shadowGen);
+      attachHelmet(scene, root, shadowGen);
       break;
     case 'propeller':
-      attachPropellerHat(scene, parent, shadowGen);
+      attachPropellerHat(scene, root, shadowGen);
       break;
     case 'mushroom':
-      attachMushroomHat(scene, parent, shadowGen);
+      attachMushroomHat(scene, root, shadowGen);
       break;
     case 'cowboy':
-      attachCowboyHat(scene, parent, shadowGen);
+      attachCowboyHat(scene, root, shadowGen);
       break;
     case 'santa':
-      attachSantaHat(scene, parent, shadowGen);
+      attachSantaHat(scene, root, shadowGen);
       break;
     case 'flower':
-      attachFlowerCrown(scene, parent, shadowGen);
+      attachFlowerCrown(scene, root, shadowGen);
       break;
     case 'chef':
-      attachChefHat(scene, parent, shadowGen);
+      attachChefHat(scene, root, shadowGen);
       break;
     case 'jester':
-      attachJesterHat(scene, parent, shadowGen);
+      attachJesterHat(scene, root, shadowGen);
       break;
     case 'halo':
-      attachHalo(scene, parent, shadowGen);
+      attachHalo(scene, root, shadowGen);
       break;
     case 'catears':
-      attachCatEars(scene, parent, shadowGen);
+      attachCatEars(scene, root, shadowGen);
       break;
     case 'wizard':
     default:
-      attachWizardHat(scene, parent, shadowGen);
+      attachWizardHat(scene, root, shadowGen);
       break;
   }
+  return root;
 }
 
 /** 帽子根节点：相对 parent（身体球心）定位 */
