@@ -5,6 +5,10 @@ const STORAGE_KEY = 'luolu.minion.v1';
 export interface MinionStateSnapshot {
   x: number;
   z: number;
+  hubX?: number;
+  hubZ?: number;
+  blankX?: number;
+  blankZ?: number;
 }
 
 export function loadMinionState(): MinionStateSnapshot | null {
@@ -17,7 +21,14 @@ export function loadMinionState(): MinionStateSnapshot | null {
       return null;
     }
 
-    return { x: data.x, z: data.z };
+    return {
+      x: data.x,
+      z: data.z,
+      hubX: isFiniteNumber(data.hubX) ? data.hubX : data.x,
+      hubZ: isFiniteNumber(data.hubZ) ? data.hubZ : data.z,
+      blankX: isFiniteNumber(data.blankX) ? data.blankX : data.x,
+      blankZ: isFiniteNumber(data.blankZ) ? data.blankZ : data.z,
+    };
   } catch {
     return null;
   }

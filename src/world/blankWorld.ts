@@ -50,6 +50,8 @@ export async function createBlankWorld(
   engine: Engine,
   appearance: MinionAppearance,
   cameraMode: CameraMode,
+  initialX = TeleportPad.DEFAULT_X,
+  initialZ = TeleportPad.DEFAULT_Z,
 ): Promise<BlankWorld> {
   const scene = new Scene(engine);
   scene.useRightHandedSystem = true;
@@ -99,8 +101,8 @@ export async function createBlankWorld(
     TeleportPad.DEFAULT_Z,
   );
 
-  // 出生点即传送阵位置
-  const minion = new Minion(scene, TeleportPad.DEFAULT_X, TeleportPad.DEFAULT_Z, {
+  // 出生点
+  const minion = new Minion(scene, initialX, initialZ, {
     facePositiveX: true,
     shadowGenerator: shadowGen,
     face: appearance.face,

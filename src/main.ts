@@ -25,6 +25,11 @@ import {
   saveSettingsState,
   type CameraMode,
 } from './storage/settingsState';
+import {
+  loadWorldState,
+  saveWorldState,
+  type WorldMode,
+} from './storage/worldState';
 import { FpsOverlay } from './ui/FpsOverlay';
 import { SettingsPanel } from './ui/SettingsPanel';
 import { createBlankWorld, type BlankWorld } from './world/blankWorld';
@@ -81,13 +86,22 @@ async function initScene(): Promise<void> {
   let cameraMode: CameraMode = settingsBoot.cameraMode;
   let showFps = settingsBoot.showFps;
 
+  const savedWorldMode = loadWorldState();
   const savedMinion = loadMinionState();
-  const minionX = savedMinion?.x ?? 1;
-  const minionZ = savedMinion?.z ?? 0;
+  const hubMinionX = savedMinion?.hubX ?? savedMinion?.x ?? 1;
+  const hubMinionZ = savedMinion?.hubZ ?? savedMinion?.z ?? 0;
+  const blankMinionX = savedMinion?.blankX ?? TeleportPad.DEFAULT_X;
+  const blankMinionZ = savedMinion?.blankZ ?? TeleportPad.DEFAULT_Z;
+
+  const minionX = hubMinionX;
+  const minionZ = hubMinionZ;
+  const activeMinionX = savedWorldMode === 'blank' ? blankMinionX : hubMinionX;
+  const activeMinionZ = savedWorldMode === 'blank' ? blankMinionZ : hubMinionZ;
+
   const minionTarget = new Vector3(
-    minionX,
+    activeMinionX,
     Minion.BODY_LOCAL_Y * Minion.SCALE,
-    minionZ,
+    activeMinionZ,
   );
   const savedCam = loadCameraState();
 
@@ -125,14 +139,18 @@ async function initScene(): Promise<void> {
   camera.minZ = 0.1;
   camera.maxZ = 1000;
 
-  const snapshotCamera = (): CameraStateSnapshot => ({
-    alpha: camera.alpha,
-    beta: camera.beta,
-    radius: camera.radius,
-    targetX: camera.target.x,
-    targetY: camera.target.y,
-    targetZ: camera.target.z,
-  });
+  const snapshotCamera = (): CameraStateSnapshot => {
+    const activeCam =
+      worldMode === 'blank' && blankWorld ? blankWorld.camera : camera;
+    return {
+      alpha: activeCam.alpha,
+      beta: activeCam.beta,
+      radius: activeCam.radius,
+      targetX: activeCam.target.x,
+      targetY: activeCam.target.y,
+      targetZ: activeCam.target.z,
+    };
+  };
 
   /** 固定模式：锁角度/距离（注视点由跟随逻辑写） */
   const lockFixedOrbit = (): void => {
@@ -210,7 +228,7 @@ async function initScene(): Promise<void> {
     TeleportPad.DEFAULT_Z,
   );
   /** hub | blank：当前渲染与输入作用的世界 */
-  let worldMode: 'hub' | 'blank' = 'hub';
+  let worldMode: WorldMode = 'hub';
   let blankWorld: BlankWorld | null = null;
   let blankEnterBusy = false;
 
@@ -275,10 +293,23 @@ async function initScene(): Promise<void> {
     hoverOutline.clear();
   });
 
-  const snapshotMinion = (): MinionStateSnapshot => ({
-    x: minion.root.position.x,
-    z: minion.root.position.z,
-  });
+  const snapshotMinion = (): MinionStateSnapshot => {
+    const activeMinion =
+      worldMode === 'blank' && blankWorld ? blankWorld.minion : minion;
+    const isBlank = worldMode === 'blank' && blankWorld !== null;
+    const posX = activeMinion.root.position.x;
+    const posZ = activeMinion.root.position.z;
+
+    const prev = loadMinionState();
+    return {
+      x: posX,
+      z: posZ,
+      hubX: isBlank ? (prev?.hubX ?? hubMinionX) : posX,
+      hubZ: isBlank ? (prev?.hubZ ?? hubMinionZ) : posZ,
+      blankX: isBlank ? posX : (prev?.blankX ?? blankMinionX),
+      blankZ: isBlank ? posZ : (prev?.blankZ ?? blankMinionZ),
+    };
+  };
 
   /** 移动后节流写入，避免每帧刷 localStorage */
   let minionSaveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -342,22 +373,29 @@ async function initScene(): Promise<void> {
     return true;
   };
 
-  /** 枢纽 → 空白场景（懒创建，带入当前外观） */
-  const enterBlankWorld = async (): Promise<void> => {
+  /** 枢纽 → 空白场景（懒创建，带入当前外观）
+   * @param isInitialLoad 是否页面首次加载恢复场景（此时保留小兵在 blank 场景保存的位置）
+   */
+  const enterBlankWorld = async (isInitialLoad = false): Promise<void> => {
     if (worldMode === 'blank' || blankEnterBusy) return;
     blankEnterBusy = true;
     try {
       const appearance = minion.getAppearance();
+      const spawnX = isInitialLoad ? blankMinionX : TeleportPad.DEFAULT_X;
+      const spawnZ = isInitialLoad ? blankMinionZ : TeleportPad.DEFAULT_Z;
+
       if (!blankWorld) {
-        blankWorld = await createBlankWorld(engine, appearance, cameraMode);
+        blankWorld = await createBlankWorld(
+          engine,
+          appearance,
+          cameraMode,
+          spawnX,
+          spawnZ,
+        );
+        blankWorld.camera.onViewMatrixChangedObservable.add(scheduleSaveCamera);
       } else {
         blankWorld.applyAppearance(appearance);
-        // 出生点 = 传送阵
-        blankWorld.minion.root.position.set(
-          TeleportPad.DEFAULT_X,
-          0,
-          TeleportPad.DEFAULT_Z,
-        );
+        blankWorld.minion.root.position.set(spawnX, 0, spawnZ);
         blankWorld.minionPhys.teleportToTarget();
       }
 
@@ -369,6 +407,11 @@ async function initScene(): Promise<void> {
 
       if (cameraMode === 'free') {
         blankWorld.attachCamera(canvas);
+        if (isInitialLoad && savedCam) {
+          blankWorld.camera.alpha = savedCam.alpha;
+          blankWorld.camera.beta = savedCam.beta;
+          blankWorld.camera.radius = savedCam.radius;
+        }
       } else {
         blankWorld.detachCamera();
         blankWorld.setCameraMode('fixed', canvas);
@@ -384,6 +427,8 @@ async function initScene(): Promise<void> {
       teleportPad.resetCharge();
 
       worldMode = 'blank';
+      saveWorldState('blank');
+      saveMinionState(snapshotMinion());
     } finally {
       blankEnterBusy = false;
     }
@@ -425,6 +470,8 @@ async function initScene(): Promise<void> {
     teleportPad.disarmUntilLeave();
 
     worldMode = 'hub';
+    saveWorldState('hub');
+    saveMinionState(snapshotMinion());
   };
 
   window.addEventListener('keydown', (e) => {
@@ -460,8 +507,14 @@ async function initScene(): Promise<void> {
     if (minionSaveTimer !== null) clearTimeout(minionSaveTimer);
     if (cameraMode === 'free') saveCameraState(snapshotCamera());
     saveMinionState(snapshotMinion());
+    saveWorldState(worldMode);
     persistSettings();
   });
+
+  // 若上次保存在空白场景，启动时自动恢复进入
+  if (savedWorldMode === 'blank') {
+    await enterBlankWorld(true);
+  }
 
   // 8. 左上角 FPS + ESC 设置面板（Babylon GUI，非 HTML）
   const fpsOverlay = new FpsOverlay(scene);
@@ -536,6 +589,9 @@ async function initScene(): Promise<void> {
 
   // 10. 渲染循环
   // 时序：读上一帧物理位姿 → 写玩家速度 → 表现动画 → render（内含物理步进）
+  let wasMovingBlank = false;
+  let wasMovingHub = false;
+
   engine.runRenderLoop(() => {
     const dt = Math.min(engine.getDeltaTime() / 1000, 0.05);
     const menuOpen = settingsPanel?.isOpen() ?? false;
@@ -579,12 +635,18 @@ async function initScene(): Promise<void> {
             wishX = moveDelta.x * MOVE_SPEED;
             wishZ = moveDelta.z * MOVE_SPEED;
             bw.minion.faceToward(moveDelta.x, moveDelta.z);
+            scheduleSaveMinion();
             moving = true;
           }
         }
       }
       bw.minionPhys.setHorizontalVelocity(wishX, wishZ);
       bw.minion.update(dt, moving);
+
+      if (!moving && wasMovingBlank) {
+        saveMinionState(snapshotMinion());
+      }
+      wasMovingBlank = moving;
 
       // 传送阵：站上蓄力加速，满 3s 回枢纽
       {
@@ -662,6 +724,11 @@ async function initScene(): Promise<void> {
     // 表现动画（阵列内部会 sync 各自 pushable 代理；阵法在 Minion.update 内驱动）
     minion.update(dt, moving);
     demoLineup.update(dt);
+
+    if (!moving && wasMovingHub) {
+      saveMinionState(snapshotMinion());
+    }
+    wasMovingHub = moving;
 
     // 传送阵：站上蓄力加速，满 3s 进空白场景
     {
