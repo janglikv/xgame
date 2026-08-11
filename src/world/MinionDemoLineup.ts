@@ -1,4 +1,4 @@
-import type { Scene, ShadowGenerator } from '@babylonjs/core';
+import { Vector3, type Scene, type ShadowGenerator } from '@babylonjs/core';
 import {
   FootRingBuff,
   FORMATION_LABELS,
@@ -9,6 +9,9 @@ import { Minion, type MinionOptions } from './Minion';
 import type { FaceStyle } from './minion/faces';
 import { HAT_LABELS, HAT_STYLES } from './minion/hat';
 import { STAFF_LABELS, STAFF_STYLES } from './minion/staff';
+import { MinionPhysicsProxy } from './physics/MinionPhysicsProxy';
+
+const _demoVel = new Vector3();
 
 /** 单条展示副本的外观预设（与布局解耦） */
 export interface DemoPreset {
@@ -112,26 +115,40 @@ export const DEMO_ROWS: readonly DemoRow[] = [
 export interface DemoLineupConfig {
   /** 第一排的 X（沿 +X 逐排展开） */
   x0?: number;
-  /** 排与排之间的 X 间距 */
+  /** 排与排之间的 X 间距（固定） */
   rowGap?: number;
-  /** 同一排内 Z 范围 [min, max]，按该排人数均匀分布 */
-  zMin?: number;
-  zMax?: number;
+  /**
+   * 每排右端对齐的 Z（该排最后一个角色的 Z）。
+   * 同排内第 i 个（共 n 个）：z = zEnd - (n - 1 - i) * colGap
+   */
+  zEnd?: number;
+  /** 同排内相邻角色固定间距 */
+  colGap?: number;
   facePositiveX?: boolean;
+  /**
+   * 是否为每个展示小兵挂物理胶囊（默认 true）。
+   * 须在 initPhysics 之后调用。
+   */
+  physics?: boolean;
+  /** 物理胶囊参数；不设则用默认 */
+  physicsRadius?: number;
+  physicsHeight?: number;
 }
 
 export interface DemoLineup {
   minions: Minion[];
+  /** 物理代理（与 minions 一一对应；physics=false 时为空） */
+  physicsProxies: MinionPhysicsProxy[];
   /** 所有挂了脚底阵法的 buff */
   buffs: FootRingBuff[];
   /** 兼容旧字段：第一个脚底 buff（若有） */
   firstBuff: FootRingBuff | null;
-  /** 每帧调用：静止站立 + 驱动法杖 / 阵法等特效 */
+  /** 每帧调用：静止站立 + 驱动法杖 / 阵法 / 同步物理代理 */
   update(dt: number): void;
 }
 
 /**
- * 生成多排展示副本（每排同类），并按预设挂脚底阵法。
+ * 生成多排展示副本（每排同类），右对齐固定间距，并按预设挂脚底阵法 / 物理。
  * main 只负责调用 spawn + update，不内联分支配置。
  */
 export function spawnMinionDemoLineup(
@@ -141,25 +158,43 @@ export function spawnMinionDemoLineup(
 ): DemoLineup {
   const x0 = config.x0 ?? 1;
   const rowGap = config.rowGap ?? 1.6;
-  const zMin = config.zMin ?? -5;
-  const zMax = config.zMax ?? 5;
+  const zEnd = config.zEnd ?? 5;
+  const colGap = config.colGap ?? 1.1;
   const facePositiveX = config.facePositiveX ?? true;
+  const usePhysics = config.physics ?? true;
+  const physicsRadius = config.physicsRadius ?? 0.16;
+  const physicsHeight = config.physicsHeight ?? 0.55;
 
   const minions: Minion[] = [];
+  const physicsProxies: MinionPhysicsProxy[] = [];
   const buffs: FootRingBuff[] = [];
 
   DEMO_ROWS.forEach((row, rowIndex) => {
     const x = x0 + rowIndex * rowGap;
     const n = row.presets.length;
     row.presets.forEach((preset, colIndex) => {
-      const t = n === 1 ? 0.5 : colIndex / (n - 1);
-      const z = zMin + t * (zMax - zMin);
+      // 右对齐：每排最后一个落在 zEnd，向前按固定 colGap 排布
+      const z = zEnd - (n - 1 - colIndex) * colGap;
       const minion = new Minion(scene, x, z, {
         facePositiveX,
         shadowGenerator,
         ...preset.options,
       });
       minions.push(minion);
+
+      if (usePhysics) {
+        // 体型缩小的展示位用略矮胶囊；pushable 才能被主角推走
+        const scaleMul = preset.options.scaleMultiplier ?? 1;
+        const proxy = new MinionPhysicsProxy(scene, minion.root, {
+          mode: 'pushable',
+          radius: physicsRadius * Math.max(0.55, scaleMul),
+          height: physicsHeight * Math.max(0.55, scaleMul),
+          mass: 0.5 * Math.max(0.55, scaleMul),
+        });
+        proxy.teleportToTarget();
+        physicsProxies.push(proxy);
+      }
+
       if (preset.formation) {
         buffs.push(new FootRingBuff(scene, minion.root, preset.formation));
       }
@@ -168,11 +203,29 @@ export function spawnMinionDemoLineup(
 
   return {
     minions,
+    physicsProxies,
     buffs,
     firstBuff: buffs[0] ?? null,
     update(dt: number): void {
-      for (const m of minions) {
-        m.update(dt, false);
+      // 上一帧物理结果 → 表现位姿；被推时跟着动、转向、走路动画
+      if (physicsProxies.length > 0) {
+        for (let i = 0; i < physicsProxies.length; i++) {
+          const proxy = physicsProxies[i]!;
+          const m = minions[i]!;
+          proxy.syncToTarget();
+          const spd = proxy.getHorizontalSpeed();
+          const moving = spd > 0.12;
+          if (moving) {
+            proxy.getHorizontalVelocityToRef(_demoVel);
+            m.faceToward(_demoVel.x, _demoVel.z);
+          }
+          m.update(dt, moving);
+        }
+        for (let i = physicsProxies.length; i < minions.length; i++) {
+          minions[i]!.update(dt, false);
+        }
+      } else {
+        for (const m of minions) m.update(dt, false);
       }
       for (const b of buffs) {
         b.update(dt);

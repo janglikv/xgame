@@ -24,9 +24,15 @@ import { Floor } from './world/Floor';
 import { FootRingBuff } from './world/FootRingBuff';
 import { Minion } from './world/Minion';
 import { spawnMinionDemoLineup } from './world/MinionDemoLineup';
+import {
+  buildArenaColliders,
+  initPhysics,
+  MinionPhysicsProxy,
+  spawnBounceDemo,
+} from './world/physics';
 import { SpatialAxesGrid } from './world/SpatialAxesGrid';
 
-function initScene(): void {
+async function initScene(): Promise<void> {
   const container = document.getElementById('app');
   if (!container) {
     throw new Error('#app element not found');
@@ -57,6 +63,9 @@ function initScene(): void {
   scene.fogColor = skyColor;
   scene.fogStart = 22;
   scene.fogEnd = 45;
+
+  // 2b. Havok 物理（须在创建任何 PhysicsAggregate 之前）
+  await initPhysics(scene);
 
   // 3. 相机（轨道，等价 OrbitControls；默认以小兵为中心，参数可 localStorage 恢复）
   const savedMinion = loadMinionState();
@@ -142,8 +151,9 @@ function initScene(): void {
   dir.shadowMinZ = 1;
   dir.shadowMaxZ = 70;
 
-  // 5. 地板 + 坐标系
+  // 5. 地板（渲染）+ 物理静态场地 + 坐标系
   new Floor(scene, shadowGen);
+  buildArenaColliders(scene);
   new SpatialAxesGrid(scene);
 
   // 6. 小兵模型（灰黑肤色 + 凶狠表情 + 红帽 + 法杖，体积缩小一半；位置可 localStorage 恢复）
@@ -158,13 +168,31 @@ function initScene(): void {
   });
   // 脚底红色阵法（赤环）
   const minionFormation = new FootRingBuff(scene, minion.root, 'crimson');
+  // 主控物理：DYNAMIC 速度驱动，与阵列/球真实互推
+  const minionPhys = new MinionPhysicsProxy(scene, minion.root, {
+    mode: 'player',
+    radius: 0.13,
+    height: 0.38,
+    mass: 2.6,
+  });
+  minionPhys.teleportToTarget();
 
-  // 展示副本多排阵列：每排同类（表情/阵法/肤色/武器…，配置见 MinionDemoLineup）
+  // 弹性球演示：落在主控小兵附近，观察回弹 / 互撞 / 被角色推动
+  spawnBounceDemo(scene, {
+    count: 28,
+    center: new Vector3(minionX, 0, minionZ),
+    heightRange: [1.0, 3.2],
+    spread: 2.2,
+    shadowGenerator: shadowGen,
+  });
+
+  // 展示副本多排阵列：右对齐固定间距 + 每人物理胶囊（配置见 MinionDemoLineup）
   const demoLineup = spawnMinionDemoLineup(scene, shadowGen, {
     x0: 1,
     rowGap: 1.6,
-    zMin: -5,
-    zMax: 5,
+    zEnd: 5,
+    colGap: 1.1,
+    physics: true,
   });
 
   const snapshotMinion = (): MinionStateSnapshot => ({
@@ -233,13 +261,19 @@ function initScene(): void {
   });
 
   // 10. 渲染循环
+  // 时序：读上一帧物理位姿 → 写玩家速度 → 表现动画 → render（内含物理步进）
   engine.runRenderLoop(() => {
     const dt = Math.min(engine.getDeltaTime() / 1000, 0.05);
+
+    // 上一帧物理结果 → 主角 / 阵列表现根节点
+    minionPhys.syncToTarget();
 
     // 相对镜头：W/S 前后，A/D 左右（符号已按右手系校正）
     const ix = (moveKeys.a ? 1 : 0) - (moveKeys.d ? 1 : 0);
     const iz = (moveKeys.w ? 1 : 0) - (moveKeys.s ? 1 : 0);
     let moving = false;
+    let wishX = 0;
+    let wishZ = 0;
     if (ix !== 0 || iz !== 0) {
       // 相机 → 目标 在 XZ 上的前方向；俯视时用 alpha 兜底
       moveForward.copyFrom(camera.target).subtractInPlace(camera.position);
@@ -261,14 +295,18 @@ function initScene(): void {
       moveDelta.addInPlace(moveForward.scale(iz));
       moveDelta.addInPlace(moveRight.scale(ix));
       if (moveDelta.lengthSquared() > 1e-8) {
-        moveDelta.normalize().scaleInPlace(MOVE_SPEED * dt);
-        minion.moveBy(moveDelta.x, moveDelta.z);
+        moveDelta.normalize();
+        wishX = moveDelta.x * MOVE_SPEED;
+        wishZ = moveDelta.z * MOVE_SPEED;
         minion.faceToward(moveDelta.x, moveDelta.z);
         scheduleSaveMinion();
         moving = true;
       }
     }
+    // 速度驱动物理体：有输入则冲，无输入则水平刹停（保留 Y）
+    minionPhys.setHorizontalVelocity(wishX, wishZ);
 
+    // 表现动画（阵列内部会 sync 各自 pushable 代理）
     minion.update(dt, moving);
     minionFormation.update(dt);
     demoLineup.update(dt);
@@ -288,8 +326,6 @@ function initScene(): void {
   });
 }
 
-try {
-  initScene();
-} catch (err) {
+initScene().catch((err) => {
   console.error('Failed to start scene:', err);
-}
+});
