@@ -7,6 +7,8 @@ export type CameraMode = 'free' | 'fixed';
 export interface SettingsStateSnapshot {
   /** 是否显示左上角 FPS */
   showFps: boolean;
+  /** 是否显示空间坐标系与网格 */
+  showGrid: boolean;
   /** 镜头模式（默认固定） */
   cameraMode: CameraMode;
 }
@@ -23,6 +25,7 @@ export const FIXED_CAMERA = {
 
 const DEFAULTS: SettingsStateSnapshot = {
   showFps: true,
+  showGrid: true,
   cameraMode: 'fixed',
 };
 
@@ -38,6 +41,7 @@ export function loadSettingsState(): SettingsStateSnapshot {
           return {
             showFps:
               typeof old.showFps === 'boolean' ? old.showFps : DEFAULTS.showFps,
+            showGrid: DEFAULTS.showGrid,
             cameraMode: DEFAULTS.cameraMode,
           };
         } catch {
@@ -51,6 +55,7 @@ export function loadSettingsState(): SettingsStateSnapshot {
     const mode = data.cameraMode;
     return {
       showFps: typeof data.showFps === 'boolean' ? data.showFps : DEFAULTS.showFps,
+      showGrid: typeof data.showGrid === 'boolean' ? data.showGrid : DEFAULTS.showGrid,
       cameraMode: mode === 'free' || mode === 'fixed' ? mode : DEFAULTS.cameraMode,
     };
   } catch {

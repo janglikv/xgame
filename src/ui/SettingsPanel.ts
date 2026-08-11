@@ -26,6 +26,8 @@ export interface SettingsCameraInfo {
 export interface SettingsPanelDeps {
   getShowFps: () => boolean;
   setShowFps: (show: boolean) => void;
+  getShowGrid: () => boolean;
+  setShowGrid: (show: boolean) => void;
   getCameraMode: () => CameraMode;
   setCameraMode: (mode: CameraMode) => void;
   getCameraInfo: () => SettingsCameraInfo;
@@ -148,6 +150,14 @@ export class SettingsPanel {
     );
     this.fpsCheck = fpsRow.check;
     stack.addControl(fpsRow.row);
+
+    const gridRow = this.makeToggleRow(
+      'gridRow',
+      '显示坐标系网格',
+      this.deps.getShowGrid(),
+      (checked) => this.deps.setShowGrid(checked),
+    );
+    stack.addControl(gridRow.row);
 
     // —— 镜头模式 ——
     stack.addControl(this.spacer(28));

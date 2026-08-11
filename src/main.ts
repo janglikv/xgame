@@ -20,6 +20,10 @@ import {
   type MinionStateSnapshot,
 } from './storage/minionState';
 import {
+  loadMinionAppearanceState,
+  saveMinionAppearanceState,
+} from './storage/minionAppearanceState';
+import {
   FIXED_CAMERA,
   loadSettingsState,
   saveSettingsState,
@@ -34,7 +38,9 @@ import { computeCameraRelativeWish } from './input/cameraRelativeMove';
 import { FpsOverlay } from './ui/FpsOverlay';
 import { SettingsPanel } from './ui/SettingsPanel';
 import { createBlankWorld, type BlankWorld } from './world/blankWorld';
+import { loadFloorSurfaceState } from './storage/floorState';
 import { Floor } from './world/Floor';
+import { FloorPickerGallery } from './world/FloorPickerGallery';
 import { HoverOutline } from './world/HoverOutline';
 import { Minion } from './world/Minion';
 import { spawnMinionDemoLineup } from './world/MinionDemoLineup';
@@ -86,6 +92,7 @@ async function initScene(): Promise<void> {
   const settingsBoot = loadSettingsState();
   let cameraMode: CameraMode = settingsBoot.cameraMode;
   let showFps = settingsBoot.showFps;
+  let showGrid = settingsBoot.showGrid;
 
   const savedWorldMode = loadWorldState();
   const savedMinion = loadMinionState();
@@ -217,10 +224,13 @@ async function initScene(): Promise<void> {
   dir.shadowMinZ = 1;
   dir.shadowMaxZ = 70;
 
-  // 5. 地板（枢纽瓷砖，程序化烘焙）+ 物理静态场地 + 坐标系
-  new Floor(scene, shadowGen, { surface: 'tiles' });
+  // 5. 地板（贴图选择与预设烘焙）+ 展台选择器 + 物理静态场地 + 坐标系
+  const initialFloorSurface = loadFloorSurfaceState();
+  const floor = new Floor(scene, shadowGen, { surface: initialFloorSurface });
+  const floorPickerGallery = new FloorPickerGallery(scene, floor);
   buildArenaColliders(scene);
-  new SpatialAxesGrid(scene);
+  const spatialAxesGrid = new SpatialAxesGrid(scene);
+  spatialAxesGrid.setVisible(showGrid);
 
   // 5b. 传送阵（X=15）：站上蓄力 3s 自动切换场景（阵法加速旋转）
   const teleportPad = new TeleportPad(
@@ -233,7 +243,8 @@ async function initScene(): Promise<void> {
   let blankWorld: BlankWorld | null = null;
   let blankEnterBusy = false;
 
-  // 6. 小兵模型（灰黑肤色 + 凶狠表情 + 红帽 + 法杖 + 赤环，体积缩小一半；位置可 localStorage 恢复）
+  // 6. 小兵模型（位置与换装造型可 localStorage 恢复）
+  const savedAppearance = loadMinionAppearanceState();
   const minion = new Minion(scene, minionX, minionZ, {
     facePositiveX: true,
     shadowGenerator: shadowGen,
@@ -244,6 +255,12 @@ async function initScene(): Promise<void> {
     scaleMultiplier: 0.5,
     formation: 'crimson',
   });
+  if (savedAppearance) {
+    minion.applyPatch(savedAppearance);
+  }
+  minion.onAppearanceChanged = (appearance) => {
+    saveMinionAppearanceState(appearance);
+  };
   // 主控物理：DYNAMIC 速度驱动，与阵列/球真实互推
   const minionPhys = new MinionPhysicsProxy(scene, minion.root, {
     mode: 'player',
@@ -338,7 +355,7 @@ async function initScene(): Promise<void> {
   let fpsOverlay: FpsOverlay | null = null;
 
   const persistSettings = (): void => {
-    saveSettingsState({ showFps, cameraMode });
+    saveSettingsState({ showFps, showGrid, cameraMode });
   };
 
   const isMoveKey = (key: string): key is keyof typeof moveKeys =>
@@ -558,6 +575,12 @@ async function initScene(): Promise<void> {
       fpsOverlay?.setVisible(show);
       persistSettings();
     },
+    getShowGrid: () => showGrid,
+    setShowGrid: (show) => {
+      showGrid = show;
+      spatialAxesGrid.setVisible(show);
+      persistSettings();
+    },
     getCameraMode: () => cameraMode,
     setCameraMode: (mode) => {
       if (mode === cameraMode) return;
@@ -743,6 +766,7 @@ async function initScene(): Promise<void> {
 
     minion.update(dt, wish.moving);
     demoLineup.update(dt);
+    floorPickerGallery.update(minion.root.position);
 
     if (!wish.moving && wasMovingHub) {
       saveMinionState(snapshotMinion());

@@ -189,6 +189,9 @@ export class Minion {
   private readonly blinkEnabled: boolean;
   private readonly breathEnabled: boolean;
 
+  /** 外观发生变更时的监听回调 */
+  public onAppearanceChanged?: (appearance: MinionAppearance) => void;
+
   /** 当前完整外观 */
   private appearance: MinionAppearance;
   /**
@@ -424,6 +427,8 @@ export class Minion {
     if (patch.lowPolyFlat !== undefined) {
       this.appearance.lowPolyFlat = patch.lowPolyFlat;
     }
+
+    this.onAppearanceChanged?.(this.getAppearance());
   }
 
   moveBy(dx: number, dz: number): void {

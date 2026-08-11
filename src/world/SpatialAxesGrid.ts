@@ -67,6 +67,10 @@ export class SpatialAxesGrid {
     origin.material = unlitMat(scene, 'originMat', ORIGIN_COLOR);
     origin.parent = this.root;
   }
+
+  public setVisible(visible: boolean): void {
+    this.root.setEnabled(visible);
+  }
 }
 
 /** 仅地面 XZ 网格（不画 XY / YZ 竖直面） */

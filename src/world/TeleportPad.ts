@@ -17,16 +17,22 @@ export class TeleportPad {
   /** 默认放置 X */
   static readonly DEFAULT_X = 15;
   static readonly DEFAULT_Z = 0;
-  /** 触发半径（世界单位） */
-  static readonly RADIUS = 1.45;
+  /** 触发半径（世界单位，原 1.45 缩小一倍） */
+  static readonly RADIUS = 0.725;
   /** 光柱高度 */
-  static readonly PILLAR_HEIGHT = 2.0;
+  static readonly PILLAR_HEIGHT = 1.2;
   /** 站上后蓄力传送时间（秒） */
   static readonly CHARGE_TIME = 3;
   /** 满蓄时相对默认转速的倍率（站上后要明显加速） */
   static readonly SPIN_MAX_MUL = 16;
-  /** 光柱最小缩放（空闲 / 进度起点） */
-  static readonly PILLAR_SCALE_MIN = 0.28;
+  /** 空闲时细高光束：更极细的极光束半径比例 (3.5%) */
+  static readonly PILLAR_SCALE_XZ_IDLE = 0.035;
+  /** 空闲时细高光束：通天拔高高度倍率 (5.5 倍高) */
+  static readonly PILLAR_SCALE_Y_IDLE = 5.5;
+  /** 站上蓄力满时：充盈扩展半径比例 (100%) */
+  static readonly PILLAR_SCALE_XZ_MAX = 1.0;
+  /** 站上蓄力满时：充满沉淀的高度倍率 */
+  static readonly PILLAR_SCALE_Y_MAX = 0.95;
   /**
    * 满进度时光柱半径相对传送阵半径的比例（几何按此建，缩放=1 即最大）
    * 1 = 与阵法触发半径同大
@@ -118,9 +124,10 @@ export class TeleportPad {
     this.pillar.parent = this.root;
     this.pillar.position.y = 0.02;
     this.pillar.isPickable = false;
-    // 空闲时缩到最小
-    const s0 = TeleportPad.PILLAR_SCALE_MIN;
-    this.pillar.scaling.set(s0, 1, s0);
+    // 空闲时：细高通天光束
+    const sxz0 = TeleportPad.PILLAR_SCALE_XZ_IDLE;
+    const sy0 = TeleportPad.PILLAR_SCALE_Y_IDLE;
+    this.pillar.scaling.set(sxz0, sy0, sxz0);
 
     const pillarTex = paintPillarTexture(scene, 'tpPillarTex', 128, 512);
     this.pillarMat = new StandardMaterial('tpPillarMat', scene);
@@ -198,14 +205,20 @@ export class TeleportPad {
       layer.mesh.rotation.y += layer.spin * spinMul * dt;
     }
 
-    // 光柱 = 进度条：半径从最小线性放大到满尺寸，满时传送
-    const sMin = TeleportPad.PILLAR_SCALE_MIN;
-    const s = sMin + (1 - sMin) * u;
-    this.pillar.scaling.set(s, 1, s);
+    // 光柱动画：空闲时很细很高（细光射线），站上去蓄力时半径变大且高度降低
+    const sxzMin = TeleportPad.PILLAR_SCALE_XZ_IDLE;
+    const sxzMax = TeleportPad.PILLAR_SCALE_XZ_MAX;
+    const syIdle = TeleportPad.PILLAR_SCALE_Y_IDLE;
+    const syMax = TeleportPad.PILLAR_SCALE_Y_MAX;
+
+    const sxz = sxzMin + (sxzMax - sxzMin) * ease;
+    const sy = syIdle + (syMax - syIdle) * ease;
+
+    this.pillar.scaling.set(sxz, sy, sxz);
     this.pillar.rotation.y -= (0.12 + 2.4 * ease) * dt;
-    const bright = 0.45 + 0.75 * u;
-    this.pillarMat.emissiveColor.set(0.55 * bright, 0.35 * bright, bright);
-    this.pillarMat.alpha = 0.28 + 0.55 * u;
+    const bright = 0.95 + 0.55 * u;
+    this.pillarMat.emissiveColor.set(0.7 * bright, 0.55 * bright, 1.35 * bright);
+    this.pillarMat.alpha = 0.65 + 0.3 * u;
 
     return triggered;
   }
