@@ -2,6 +2,7 @@ import {
   Color3,
   Mesh,
   MeshBuilder,
+  Quaternion,
   StandardMaterial,
   type Scene,
   ShadowGenerator,
@@ -205,6 +206,16 @@ export class Minion {
   private staffFx: StaffFx | null = null;
   private formationBuff: FootRingBuff | null = null;
 
+  /** 鼠标按住时的 3D 瞄准目标点（用于法杖实时指向） */
+  private aimTarget: Vector3 | null = null;
+  /** 瞄准动画过渡权重（0 = 待机/走路姿态，1 = 完全指向目标） */
+  private aimWeight = 0;
+  private readonly defaultStaffQuat = Quaternion.RotationYawPitchRoll(
+    0,
+    -0.32,
+    0.1,
+  );
+
   private walkPhase = 0;
   private walkWeight = 0;
   private targetYaw = 0;
@@ -359,6 +370,21 @@ export class Minion {
     }
   }
 
+  /** 设置/清除鼠标 3D 瞄准目标点（手持法杖按下鼠标时实时传入） */
+  setAimTarget(target: Vector3 | null): void {
+    this.aimTarget = target ? target.clone() : null;
+  }
+
+  /** 是否手持法杖 */
+  hasStaff(): boolean {
+    return this.appearance.staff !== null;
+  }
+
+  /** 获取当前法杖款式 */
+  getStaffStyle(): StaffStyle | null {
+    return this.appearance.staff;
+  }
+
   /** 当前完整外观（拷贝） */
   getAppearance(): MinionAppearance {
     return { ...this.appearance };
@@ -445,6 +471,24 @@ export class Minion {
 
   update(dt: number, moving: boolean): void {
     this.applyTurn(dt);
+
+    // 瞄准动画过渡权重（手持法杖且设置了 aimTarget 时渐增）
+    const isAiming = this.aimTarget !== null && this.appearance.staff !== null;
+    const aimTargetWeight = isAiming ? 1 : 0;
+    const aimBlendSpeed = isAiming ? 14 : 8;
+    this.aimWeight +=
+      (aimTargetWeight - this.aimWeight) * Math.min(1, dt * aimBlendSpeed);
+
+    if (isAiming && this.aimTarget) {
+      const dx = this.aimTarget.x - this.root.position.x;
+      const dz = this.aimTarget.z - this.root.position.z;
+      if (dx * dx + dz * dz > 1e-6) {
+        const yaw = Math.atan2(dx, dz);
+        this.targetYaw = yaw;
+        this.root.rotation.y = yaw;
+      }
+    }
+
     if (this.staffFx) updateStaffFx(this.staffFx, dt);
     this.formationBuff?.update(dt);
     // 待机眨眼（行走时也保留，更自然）
@@ -479,6 +523,12 @@ export class Minion {
       Minion.BODY_LOCAL_Y + bodyR * (sy - 1) * 0.55;
 
     const w = this.walkWeight;
+    const swing = Math.sin(this.walkPhase) * w;
+    const liftPhase = Math.cos(this.walkPhase);
+    const handSwing = this.staffFx
+      ? Minion.HAND_SWING * 0.45
+      : Minion.HAND_SWING;
+
     if (w < 1e-4) {
       this.leftHand.position.set(
         this.leftHandRest.x,
@@ -493,43 +543,97 @@ export class Minion {
       this.leftFoot.position.copyFrom(this.leftFootRest);
       this.rightFoot.position.copyFrom(this.rightFootRest);
       this.bodyRoot.position.y = breathBob;
-      return;
+    } else {
+      this.leftHand.position.set(
+        this.leftHandRest.x,
+        this.leftHandRest.y + Minion.HAND_BOB * swing + breathHand,
+        this.leftHandRest.z + Minion.HAND_SWING * swing,
+      );
+      this.rightHand.position.set(
+        this.rightHandRest.x,
+        this.rightHandRest.y -
+          Minion.HAND_BOB * swing * 0.6 +
+          breathHand * 0.85,
+        this.rightHandRest.z - handSwing * swing,
+      );
+
+      const leftLift = Math.max(0, -liftPhase) * Minion.FOOT_LIFT * w;
+      const rightLift = Math.max(0, liftPhase) * Minion.FOOT_LIFT * w;
+      this.leftFoot.position.set(
+        this.leftFootRest.x,
+        this.leftFootRest.y + leftLift,
+        this.leftFootRest.z - Minion.FOOT_STRIDE * swing,
+      );
+      this.rightFoot.position.set(
+        this.rightFootRest.x,
+        this.rightFootRest.y + rightLift,
+        this.rightFootRest.z + Minion.FOOT_STRIDE * swing,
+      );
+
+      this.bodyRoot.position.y =
+        Math.abs(Math.sin(this.walkPhase)) * Minion.BODY_BOB * w + breathBob;
     }
 
-    const swing = Math.sin(this.walkPhase) * w;
-    const liftPhase = Math.cos(this.walkPhase);
-    const handSwing = this.staffFx
-      ? Minion.HAND_SWING * 0.45
-      : Minion.HAND_SWING;
+    // 瞄准姿态调整：右手臂位姿插值 & 法杖实时旋转指向目标点
+    if (this.aimWeight > 0.001) {
+      const aimHandPos = new Vector3(-0.42, 0.72, 0.42);
+      this.rightHand.position.x =
+        this.rightHand.position.x * (1 - this.aimWeight) +
+        aimHandPos.x * this.aimWeight;
+      this.rightHand.position.y =
+        this.rightHand.position.y * (1 - this.aimWeight) +
+        aimHandPos.y * this.aimWeight;
+      this.rightHand.position.z =
+        this.rightHand.position.z * (1 - this.aimWeight) +
+        aimHandPos.z * this.aimWeight;
+    }
 
-    this.leftHand.position.set(
-      this.leftHandRest.x,
-      this.leftHandRest.y + Minion.HAND_BOB * swing + breathHand,
-      this.leftHandRest.z + Minion.HAND_SWING * swing,
-    );
-    this.rightHand.position.set(
-      this.rightHandRest.x,
-      this.rightHandRest.y -
-        Minion.HAND_BOB * swing * 0.6 +
-        breathHand * 0.85,
-      this.rightHandRest.z - handSwing * swing,
-    );
+    if (this.staffFx) {
+      if (this.aimWeight > 0.001 && this.aimTarget) {
+        const rightHandWorldMat = this.rightHand.getWorldMatrix();
+        const staffWorldPos = Vector3.TransformCoordinates(
+          new Vector3(0, -0.06, 0),
+          rightHandWorldMat,
+        );
+        let dirWorld = this.aimTarget.subtract(staffWorldPos);
+        if (dirWorld.lengthSquared() > 1e-6) {
+          dirWorld = dirWorld.normalize();
+          const invHandMat = rightHandWorldMat.clone().invert();
+          const dirInHand = Vector3.TransformNormal(
+            dirWorld,
+            invHandMat,
+          ).normalize();
 
-    const leftLift = Math.max(0, -liftPhase) * Minion.FOOT_LIFT * w;
-    const rightLift = Math.max(0, liftPhase) * Minion.FOOT_LIFT * w;
-    this.leftFoot.position.set(
-      this.leftFootRest.x,
-      this.leftFootRest.y + leftLift,
-      this.leftFootRest.z - Minion.FOOT_STRIDE * swing,
-    );
-    this.rightFoot.position.set(
-      this.rightFootRest.x,
-      this.rightFootRest.y + rightLift,
-      this.rightFootRest.z + Minion.FOOT_STRIDE * swing,
-    );
+          const vUp = Vector3.Up();
+          const cross = Vector3.Cross(vUp, dirInHand);
+          const dot = Vector3.Dot(vUp, dirInHand);
+          let qAim: Quaternion;
+          if (cross.lengthSquared() > 1e-8) {
+            const angle = Math.acos(Math.max(-1, Math.min(1, dot)));
+            qAim = Quaternion.RotationAxis(cross.normalize(), angle);
+          } else {
+            qAim =
+              dot > 0
+                ? Quaternion.Identity()
+                : Quaternion.RotationAxis(Vector3.Right(), Math.PI);
+          }
 
-    this.bodyRoot.position.y =
-      Math.abs(Math.sin(this.walkPhase)) * Minion.BODY_BOB * w + breathBob;
+          const qFinal = Quaternion.Slerp(
+            this.defaultStaffQuat,
+            qAim,
+            this.aimWeight,
+          );
+          this.staffFx.root.rotationQuaternion = qFinal;
+        }
+
+        // 瞄准脉动强化
+        const pulse =
+          1 + Math.sin(this.breathPhase * 8) * 0.12 * this.aimWeight;
+        this.staffFx.orb.scaling.set(pulse, pulse, pulse);
+      } else {
+        this.staffFx.root.rotationQuaternion = this.defaultStaffQuat.clone();
+      }
+    }
   }
 
   private setHat(style: HatStyle | null): void {

@@ -5,6 +5,7 @@ import {
   DirectionalLight,
   Engine,
   HemisphericLight,
+  Matrix,
   Scene,
   ShadowGenerator,
   Vector3,
@@ -298,6 +299,22 @@ async function initScene(): Promise<void> {
 
   /** 指针是否在画布上（leave 后勿用残留 pointerX/Y 重拾取） */
   let pointerOverCanvas = false;
+  let isPointerDown = false;
+
+  canvas.addEventListener('pointerdown', (e) => {
+    if (e.button === 0 || e.button === 2) {
+      isPointerDown = true;
+    }
+  });
+
+  window.addEventListener('pointerup', () => {
+    isPointerDown = false;
+  });
+
+  window.addEventListener('pointercancel', () => {
+    isPointerDown = false;
+  });
+
   canvas.addEventListener('pointerenter', () => {
     pointerOverCanvas = true;
   });
@@ -308,6 +325,7 @@ async function initScene(): Promise<void> {
   });
   canvas.addEventListener('pointerleave', () => {
     pointerOverCanvas = false;
+    isPointerDown = false;
     hoverOutline.clear();
   });
 
@@ -696,6 +714,38 @@ async function initScene(): Promise<void> {
   engine.runRenderLoop(() => {
     const dt = Math.min(engine.getDeltaTime() / 1000, 0.05);
     const menuOpen = settingsPanel?.isOpen() ?? false;
+
+    // 手持法杖按下鼠标：实时拾取 3D 地面坐标并让法杖指向鼠标
+    const activeScene =
+      worldMode === 'blank' && blankWorld ? blankWorld.scene : scene;
+    const activeCam =
+      worldMode === 'blank' && blankWorld ? blankWorld.camera : camera;
+    const activeMinion =
+      worldMode === 'blank' && blankWorld ? blankWorld.minion : minion;
+
+    if (
+      isPointerDown &&
+      pointerOverCanvas &&
+      !menuOpen &&
+      activeMinion.hasStaff()
+    ) {
+      const ray = activeScene.createPickingRay(
+        activeScene.pointerX,
+        activeScene.pointerY,
+        Matrix.Identity(),
+        activeCam,
+      );
+      const planeY = activeMinion.root.position.y;
+      if (Math.abs(ray.direction.y) > 1e-5) {
+        const t = (planeY - ray.origin.y) / ray.direction.y;
+        if (t > 0) {
+          const aimPoint = ray.origin.add(ray.direction.scale(t));
+          activeMinion.setAimTarget(aimPoint);
+        }
+      }
+    } else {
+      activeMinion.setAimTarget(null);
+    }
 
     if (warpLanding) {
       warpLanding.progress += dt / 0.22;

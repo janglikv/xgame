@@ -1,6 +1,5 @@
 import {
   Color3,
-  Constants,
   DynamicTexture,
   Mesh,
   MeshBuilder,
