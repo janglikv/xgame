@@ -7,16 +7,33 @@ import type { Scene } from '@babylonjs/core';
 
 /**
  * 左上角 FPS（Babylon GUI，非 HTML）。
+ * 绑定到当前渲染 Scene；场景切换时调用 rebind。
  */
 export class FpsOverlay {
-  private readonly tex: AdvancedDynamicTexture;
-  private readonly label: TextBlock;
+  private tex!: AdvancedDynamicTexture;
+  private label!: TextBlock;
   private frameCount = 0;
   private lastUpdate = performance.now();
   private readonly updateInterval = 250;
   private visible = true;
+  private disposed = false;
 
   constructor(scene: Scene) {
+    this.buildUi(scene);
+  }
+
+  /** 切换绑定 Scene（枢纽 ↔ 空白） */
+  rebind(scene: Scene): void {
+    if (this.disposed) return;
+    const wasVisible = this.visible;
+    this.tex.dispose();
+    this.frameCount = 0;
+    this.lastUpdate = performance.now();
+    this.buildUi(scene);
+    this.setVisible(wasVisible);
+  }
+
+  private buildUi(scene: Scene): void {
     this.tex = AdvancedDynamicTexture.CreateFullscreenUI(
       'FpsOverlayUI',
       true,
@@ -41,6 +58,7 @@ export class FpsOverlay {
     this.label.height = '28px';
     this.label.resizeToFit = false;
     this.label.isHitTestVisible = false;
+    this.label.isVisible = this.visible;
     this.tex.addControl(this.label);
   }
 
@@ -67,6 +85,8 @@ export class FpsOverlay {
   }
 
   dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
     this.tex.dispose();
   }
 }

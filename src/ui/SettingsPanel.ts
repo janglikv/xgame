@@ -11,6 +11,7 @@ import type { CameraMode } from '../storage/settingsState';
 
 /**
  * ESC 全屏半透明设置面板（Babylon GUI 全屏 ADT，非 HTML DOM）。
+ * 绑定到当前渲染 Scene；场景切换时调用 rebind 挂到新 Scene。
  */
 
 export interface SettingsCameraInfo {
@@ -43,24 +44,46 @@ function fmt(n: number, digits = 2): string {
 }
 
 export class SettingsPanel {
-  private readonly tex: AdvancedDynamicTexture;
-  private readonly panel: Rectangle;
-  private readonly fpsCheck: Checkbox;
-  private readonly freeCheck: Checkbox;
-  private readonly fixedCheck: Checkbox;
-  private readonly camAlpha: TextBlock;
-  private readonly camBeta: TextBlock;
-  private readonly camRadius: TextBlock;
-  private readonly camTarget: TextBlock;
-  private readonly camModeHint: TextBlock;
+  private tex!: AdvancedDynamicTexture;
+  private panel!: Rectangle;
+  private fpsCheck!: Checkbox;
+  private freeCheck!: Checkbox;
+  private fixedCheck!: Checkbox;
+  private camAlpha!: TextBlock;
+  private camBeta!: TextBlock;
+  private camRadius!: TextBlock;
+  private camTarget!: TextBlock;
+  private camModeHint!: TextBlock;
   private opened = false;
   /** 避免互斥勾选时递归触发 */
   private syncingModeUi = false;
+  private disposed = false;
 
   constructor(
     scene: Scene,
     private readonly deps: SettingsPanelDeps,
   ) {
+    this.buildUi(scene);
+    window.addEventListener('keydown', this.onKeyDown);
+  }
+
+  /**
+   * 切换绑定 Scene（枢纽 ↔ 空白）。保留打开状态与键盘监听。
+   * Babylon GUI 的 ADT 绑定在 Scene 上，只渲染当前 Scene 时必须 rebind。
+   */
+  rebind(scene: Scene): void {
+    if (this.disposed) return;
+    const wasOpen = this.opened;
+    this.tex.dispose();
+    this.opened = false;
+    this.buildUi(scene);
+    if (wasOpen) {
+      // 只恢复视觉，不重复通知（相机/输入已由调用方按目标场景处理）
+      this.applyOpenVisual(true);
+    }
+  }
+
+  private buildUi(scene: Scene): void {
     this.tex = AdvancedDynamicTexture.CreateFullscreenUI(
       'SettingsPanelUI',
       true,
@@ -201,8 +224,6 @@ export class SettingsPanel {
         color: 'rgba(255,255,255,0.4)',
       }),
     );
-
-    window.addEventListener('keydown', this.onKeyDown);
   }
 
   private modeHintText(mode: CameraMode): string {
@@ -347,23 +368,28 @@ export class SettingsPanel {
     return this.opened;
   }
 
+  /** 仅改 UI 可见性，不触发 onOpenChange */
+  private applyOpenVisual(open: boolean): void {
+    this.opened = open;
+    this.panel.isVisible = open;
+    this.tex.rootContainer.isHitTestVisible = open;
+    if (open) {
+      this.fpsCheck.isChecked = this.deps.getShowFps();
+      this.syncModeChecks(this.deps.getCameraMode());
+      this.camModeHint.text = this.modeHintText(this.deps.getCameraMode());
+      this.refreshCamera();
+    }
+  }
+
   open(): void {
     if (this.opened) return;
-    this.opened = true;
-    this.panel.isVisible = true;
-    this.tex.rootContainer.isHitTestVisible = true;
-    this.fpsCheck.isChecked = this.deps.getShowFps();
-    this.syncModeChecks(this.deps.getCameraMode());
-    this.camModeHint.text = this.modeHintText(this.deps.getCameraMode());
-    this.refreshCamera();
+    this.applyOpenVisual(true);
     this.deps.onOpenChange?.(true);
   }
 
   close(): void {
     if (!this.opened) return;
-    this.opened = false;
-    this.panel.isVisible = false;
-    this.tex.rootContainer.isHitTestVisible = false;
+    this.applyOpenVisual(false);
     this.deps.onOpenChange?.(false);
   }
 
@@ -386,6 +412,8 @@ export class SettingsPanel {
   }
 
   dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
     window.removeEventListener('keydown', this.onKeyDown);
     this.tex.dispose();
   }

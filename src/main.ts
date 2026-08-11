@@ -30,6 +30,7 @@ import {
   saveWorldState,
   type WorldMode,
 } from './storage/worldState';
+import { computeCameraRelativeWish } from './input/cameraRelativeMove';
 import { FpsOverlay } from './ui/FpsOverlay';
 import { SettingsPanel } from './ui/SettingsPanel';
 import { createBlankWorld, type BlankWorld } from './world/blankWorld';
@@ -332,8 +333,9 @@ async function initScene(): Promise<void> {
   const moveForward = new Vector3();
   const moveRight = new Vector3();
   const moveDelta = new Vector3();
-  /** 设置面板（先声明供 keydown 闭包读取，稍后构造） */
+  /** HUD（先声明供场景切换闭包读取，稍后构造） */
   let settingsPanel: SettingsPanel | null = null;
+  let fpsOverlay: FpsOverlay | null = null;
 
   const persistSettings = (): void => {
     saveSettingsState({ showFps, cameraMode });
@@ -399,22 +401,25 @@ async function initScene(): Promise<void> {
         blankWorld.minionPhys.teleportToTarget();
       }
 
-      // 卸枢纽控制，挂空白场景相机
+      // 卸枢纽控制；空白场景相机仅在菜单关闭且自由模式时挂上
       camera.detachControl();
       hoverOutline.clear();
       hoverOutline.setEnabled(false);
       moveKeys.w = moveKeys.a = moveKeys.s = moveKeys.d = false;
 
-      if (cameraMode === 'free') {
-        blankWorld.attachCamera(canvas);
-        if (isInitialLoad && savedCam) {
-          blankWorld.camera.alpha = savedCam.alpha;
-          blankWorld.camera.beta = savedCam.beta;
-          blankWorld.camera.radius = savedCam.radius;
-        }
-      } else {
+      const menuOpen = settingsPanel?.isOpen() ?? false;
+      if (cameraMode === 'fixed') {
         blankWorld.detachCamera();
         blankWorld.setCameraMode('fixed', canvas);
+      } else if (menuOpen) {
+        blankWorld.detachCamera();
+      } else {
+        blankWorld.attachCamera(canvas);
+      }
+      if (cameraMode === 'free' && isInitialLoad && savedCam) {
+        blankWorld.camera.alpha = savedCam.alpha;
+        blankWorld.camera.beta = savedCam.beta;
+        blankWorld.camera.radius = savedCam.radius;
       }
 
       // 重置空白场景镜头跟随，避免跳变
@@ -427,6 +432,9 @@ async function initScene(): Promise<void> {
       teleportPad.resetCharge();
 
       worldMode = 'blank';
+      // GUI 挂在当前渲染 Scene 上，否则空白场景看不到 ESC / FPS
+      settingsPanel?.rebind(blankWorld.scene);
+      fpsOverlay?.rebind(blankWorld.scene);
       saveWorldState('blank');
       saveMinionState(snapshotMinion());
     } finally {
@@ -470,6 +478,9 @@ async function initScene(): Promise<void> {
     teleportPad.disarmUntilLeave();
 
     worldMode = 'hub';
+    // 回到枢纽 Scene 的 GUI
+    settingsPanel?.rebind(scene);
+    fpsOverlay?.rebind(scene);
     saveWorldState('hub');
     saveMinionState(snapshotMinion());
   };
@@ -511,20 +522,15 @@ async function initScene(): Promise<void> {
     persistSettings();
   });
 
-  // 若上次保存在空白场景，启动时自动恢复进入
-  if (savedWorldMode === 'blank') {
-    await enterBlankWorld(true);
-  }
-
-  // 8. 左上角 FPS + ESC 设置面板（Babylon GUI，非 HTML）
-  const fpsOverlay = new FpsOverlay(scene);
+  // 8. 左上角 FPS + ESC 设置面板（Babylon GUI，挂在当前渲染 Scene）
+  fpsOverlay = new FpsOverlay(scene);
   fpsOverlay.setVisible(showFps);
 
   settingsPanel = new SettingsPanel(scene, {
     getShowFps: () => showFps,
     setShowFps: (show) => {
       showFps = show;
-      fpsOverlay.setVisible(show);
+      fpsOverlay?.setVisible(show);
       persistSettings();
     },
     getCameraMode: () => cameraMode,
@@ -552,7 +558,8 @@ async function initScene(): Promise<void> {
       persistSettings();
     },
     getCameraInfo: () => {
-      const cam = worldMode === 'blank' && blankWorld ? blankWorld.camera : camera;
+      const cam =
+        worldMode === 'blank' && blankWorld ? blankWorld.camera : camera;
       return {
         alpha: cam.alpha,
         beta: cam.beta,
@@ -582,6 +589,11 @@ async function initScene(): Promise<void> {
     },
   });
 
+  // 若上次保存在空白场景，启动时自动恢复（须在 HUD 创建之后，以便 rebind）
+  if (savedWorldMode === 'blank') {
+    await enterBlankWorld(true);
+  }
+
   // 9. 窗口尺寸
   window.addEventListener('resize', () => {
     engine.resize();
@@ -592,6 +604,43 @@ async function initScene(): Promise<void> {
   let wasMovingBlank = false;
   let wasMovingHub = false;
 
+  /** 读 WASD → 相对镜头水平速度；菜单打开时停 */
+  const readMoveWish = (
+    cam: { position: Vector3; target: Vector3; alpha: number },
+    menuOpen: boolean,
+  ) => {
+    if (menuOpen) {
+      return { moving: false, wishX: 0, wishZ: 0, dirX: 0, dirZ: 0 };
+    }
+    const ix = (moveKeys.a ? 1 : 0) - (moveKeys.d ? 1 : 0);
+    const iz = (moveKeys.w ? 1 : 0) - (moveKeys.s ? 1 : 0);
+    return computeCameraRelativeWish(
+      ix,
+      iz,
+      MOVE_SPEED,
+      cam,
+      moveForward,
+      moveRight,
+      moveDelta,
+    );
+  };
+
+  /** 注视点平滑跟随角色 */
+  const followFocus = (
+    activeCam: { setTarget: (t: Vector3) => void; target: Vector3 },
+    getFocus: (out: Vector3) => void,
+    dt: number,
+  ): void => {
+    getFocus(focusPoint);
+    const followT = 1 - Math.exp(-CAM_FOLLOW * dt);
+    camFollowTarget.x += (focusPoint.x - camFollowTarget.x) * followT;
+    camFollowTarget.y += (focusPoint.y - camFollowTarget.y) * followT;
+    camFollowTarget.z += (focusPoint.z - camFollowTarget.z) * followT;
+    if (!activeCam.target.equalsWithEpsilon(camFollowTarget, 1e-4)) {
+      activeCam.setTarget(camFollowTarget);
+    }
+  };
+
   engine.runRenderLoop(() => {
     const dt = Math.min(engine.getDeltaTime() / 1000, 0.05);
     const menuOpen = settingsPanel?.isOpen() ?? false;
@@ -601,52 +650,18 @@ async function initScene(): Promise<void> {
       const bw = blankWorld;
       bw.minionPhys.syncToTarget();
 
-      let moving = false;
-      let wishX = 0;
-      let wishZ = 0;
-      if (!menuOpen) {
-        const ix = (moveKeys.a ? 1 : 0) - (moveKeys.d ? 1 : 0);
-        const iz = (moveKeys.w ? 1 : 0) - (moveKeys.s ? 1 : 0);
-        if (ix !== 0 || iz !== 0) {
-          moveForward
-            .copyFrom(bw.camera.target)
-            .subtractInPlace(bw.camera.position);
-          moveForward.y = 0;
-          if (moveForward.lengthSquared() < 1e-8) {
-            moveForward.set(
-              Math.sin(bw.camera.alpha),
-              0,
-              Math.cos(bw.camera.alpha),
-            );
-          } else {
-            moveForward.normalize();
-          }
-          Vector3.CrossToRef(Vector3.UpReadOnly, moveForward, moveRight);
-          if (moveRight.lengthSquared() < 1e-8) {
-            moveRight.set(1, 0, 0);
-          } else {
-            moveRight.normalize();
-          }
-          moveDelta.set(0, 0, 0);
-          moveDelta.addInPlace(moveForward.scale(iz));
-          moveDelta.addInPlace(moveRight.scale(ix));
-          if (moveDelta.lengthSquared() > 1e-8) {
-            moveDelta.normalize();
-            wishX = moveDelta.x * MOVE_SPEED;
-            wishZ = moveDelta.z * MOVE_SPEED;
-            bw.minion.faceToward(moveDelta.x, moveDelta.z);
-            scheduleSaveMinion();
-            moving = true;
-          }
-        }
+      const wish = readMoveWish(bw.camera, menuOpen);
+      if (wish.moving) {
+        bw.minion.faceToward(wish.dirX, wish.dirZ);
+        scheduleSaveMinion();
       }
-      bw.minionPhys.setHorizontalVelocity(wishX, wishZ);
-      bw.minion.update(dt, moving);
+      bw.minionPhys.setHorizontalVelocity(wish.wishX, wish.wishZ);
+      bw.minion.update(dt, wish.moving);
 
-      if (!moving && wasMovingBlank) {
+      if (!wish.moving && wasMovingBlank) {
         saveMinionState(snapshotMinion());
       }
-      wasMovingBlank = moving;
+      wasMovingBlank = wish.moving;
 
       // 传送阵：站上蓄力加速，满 3s 回枢纽
       {
@@ -657,78 +672,37 @@ async function initScene(): Promise<void> {
         }
       }
 
-      bw.minion.getFocusPoint(focusPoint);
-      const followT = 1 - Math.exp(-CAM_FOLLOW * dt);
-      camFollowTarget.x += (focusPoint.x - camFollowTarget.x) * followT;
-      camFollowTarget.y += (focusPoint.y - camFollowTarget.y) * followT;
-      camFollowTarget.z += (focusPoint.z - camFollowTarget.z) * followT;
-      if (!bw.camera.target.equalsWithEpsilon(camFollowTarget, 1e-4)) {
-        bw.camera.setTarget(camFollowTarget);
-      }
+      followFocus(bw.camera, (out) => bw.minion.getFocusPoint(out), dt);
       if (cameraMode === 'fixed') {
         bw.camera.alpha = FIXED_CAMERA.alpha;
         bw.camera.beta = FIXED_CAMERA.beta;
         bw.camera.radius = FIXED_CAMERA.radius;
       }
 
-      if (showFps) fpsOverlay.update();
+      if (showFps) fpsOverlay?.update();
       settingsPanel?.update();
       bw.scene.render();
       return;
     }
 
     // ── 枢纽场景 ────────────────────────────────────────
-    // 上一帧物理结果 → 主角 / 阵列表现根节点
     minionPhys.syncToTarget();
 
-    // 相对镜头：W/S 前后，A/D 左右（符号已按右手系校正）
-    let moving = false;
-    let wishX = 0;
-    let wishZ = 0;
-    if (!menuOpen) {
-      const ix = (moveKeys.a ? 1 : 0) - (moveKeys.d ? 1 : 0);
-      const iz = (moveKeys.w ? 1 : 0) - (moveKeys.s ? 1 : 0);
-      if (ix !== 0 || iz !== 0) {
-        // 相机 → 目标 在 XZ 上的前方向；俯视时用 alpha 兜底
-        moveForward.copyFrom(camera.target).subtractInPlace(camera.position);
-        moveForward.y = 0;
-        if (moveForward.lengthSquared() < 1e-8) {
-          moveForward.set(Math.sin(camera.alpha), 0, Math.cos(camera.alpha));
-        } else {
-          moveForward.normalize();
-        }
-        // 右手系 Y-up：Up × Forward
-        Vector3.CrossToRef(Vector3.UpReadOnly, moveForward, moveRight);
-        if (moveRight.lengthSquared() < 1e-8) {
-          moveRight.set(1, 0, 0);
-        } else {
-          moveRight.normalize();
-        }
-
-        moveDelta.set(0, 0, 0);
-        moveDelta.addInPlace(moveForward.scale(iz));
-        moveDelta.addInPlace(moveRight.scale(ix));
-        if (moveDelta.lengthSquared() > 1e-8) {
-          moveDelta.normalize();
-          wishX = moveDelta.x * MOVE_SPEED;
-          wishZ = moveDelta.z * MOVE_SPEED;
-          minion.faceToward(moveDelta.x, moveDelta.z);
-          scheduleSaveMinion();
-          moving = true;
-        }
-      }
+    const wish = readMoveWish(camera, menuOpen);
+    if (wish.moving) {
+      minion.faceToward(wish.dirX, wish.dirZ);
+      scheduleSaveMinion();
     }
     // 速度驱动物理体：有输入则冲，无输入则水平刹停（保留 Y）
-    minionPhys.setHorizontalVelocity(wishX, wishZ);
+    minionPhys.setHorizontalVelocity(wish.wishX, wish.wishZ);
 
-    // 表现动画（阵列内部会 sync 各自 pushable 代理；阵法在 Minion.update 内驱动）
-    minion.update(dt, moving);
+    minion.update(dt, wish.moving);
     demoLineup.update(dt);
 
-    if (!moving && wasMovingHub) {
+    if (!wish.moving && wasMovingHub) {
       saveMinionState(snapshotMinion());
     }
-    wasMovingHub = moving;
+    wasMovingHub = wish.moving;
 
     // 传送阵：站上蓄力加速，满 3s 进空白场景
     {
@@ -747,21 +721,12 @@ async function initScene(): Promise<void> {
     // 黄圈仅在距离不足按 E/R 时短暂显示（update 负责淡出）
     swapRangeRing.update(dt);
 
-    // 注视点始终平滑跟随角色中心（自由 / 固定相同）
-    minion.getFocusPoint(focusPoint);
-    const followT = 1 - Math.exp(-CAM_FOLLOW * dt);
-    camFollowTarget.x += (focusPoint.x - camFollowTarget.x) * followT;
-    camFollowTarget.y += (focusPoint.y - camFollowTarget.y) * followT;
-    camFollowTarget.z += (focusPoint.z - camFollowTarget.z) * followT;
-    if (!camera.target.equalsWithEpsilon(camFollowTarget, 1e-4)) {
-      camera.setTarget(camFollowTarget);
-    }
-    // 固定模式：每帧锁 α/β/半径，禁止拖拽改角度
+    followFocus(camera, (out) => minion.getFocusPoint(out), dt);
     if (cameraMode === 'fixed') {
       lockFixedOrbit();
     }
 
-    if (showFps) fpsOverlay.update();
+    if (showFps) fpsOverlay?.update();
     settingsPanel?.update();
     scene.render();
   });

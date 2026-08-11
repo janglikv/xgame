@@ -31,7 +31,7 @@ export interface BlankWorld {
   camera: ArcRotateCamera;
   minion: Minion;
   minionPhys: MinionPhysicsProxy;
-  /** 回枢纽传送阵（站在阵中按 E） */
+  /** 回枢纽传送阵（站上蓄力自动返回） */
   teleportPad: TeleportPad;
   /** 将相机控制挂到 canvas（自由模式） */
   attachCamera(canvas: HTMLCanvasElement): void;
