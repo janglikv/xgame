@@ -27,6 +27,7 @@ import {
 } from './storage/settingsState';
 import { FpsOverlay } from './ui/FpsOverlay';
 import { SettingsPanel } from './ui/SettingsPanel';
+import { createBlankWorld, type BlankWorld } from './world/blankWorld';
 import { Floor } from './world/Floor';
 import { HoverOutline } from './world/HoverOutline';
 import { Minion } from './world/Minion';
@@ -38,6 +39,7 @@ import {
 } from './world/physics';
 import { RangeRing } from './world/RangeRing';
 import { SpatialAxesGrid } from './world/SpatialAxesGrid';
+import { TeleportPad } from './world/TeleportPad';
 
 async function initScene(): Promise<void> {
   const container = document.getElementById('app');
@@ -201,6 +203,17 @@ async function initScene(): Promise<void> {
   buildArenaColliders(scene);
   new SpatialAxesGrid(scene);
 
+  // 5b. 传送阵（X=15）：站上蓄力 3s 自动切换场景（阵法加速旋转）
+  const teleportPad = new TeleportPad(
+    scene,
+    TeleportPad.DEFAULT_X,
+    TeleportPad.DEFAULT_Z,
+  );
+  /** hub | blank：当前渲染与输入作用的世界 */
+  let worldMode: 'hub' | 'blank' = 'hub';
+  let blankWorld: BlankWorld | null = null;
+  let blankEnterBusy = false;
+
   // 6. 小兵模型（灰黑肤色 + 凶狠表情 + 红帽 + 法杖 + 赤环，体积缩小一半；位置可 localStorage 恢复）
   const minion = new Minion(scene, minionX, minionZ, {
     facePositiveX: true,
@@ -311,22 +324,107 @@ async function initScene(): Promise<void> {
    * 悬停展示目标后（须进入 SWAP_RANGE）：
    * - E：部分替换（只拷该行展示槽，如表情行只换脸、帽子行只换帽）
    * - R：全量替换（整体外观对齐目标）
-   * 距离不足：不替换，红圈提示范围（并 pulse 强调）
+   * 距离不足：不替换，目标脚下细线红圈短暂提示范围
    * @returns 是否消费了按键（含距离不足提示）
    */
   const tryApplyHoverAppearance = (mode: 'partial' | 'full'): boolean => {
+    if (worldMode !== 'hub') return false;
     const target = hoverOutline.getHovered();
     if (!target || target === minion) return false;
     if (!isInSwapRange(target)) {
-      // 红圈画在目标脚下，不是主角
-      swapRangeRing.setPosition(target.root.position);
-      swapRangeRing.pulse();
+      // 仅按键时提示：目标脚下细线红圈（hover 不显示）
+      swapRangeRing.show(target.root.position);
       return true;
     }
     minion.applyFrom(target, mode);
     // 主角 mesh 变更后若仍悬停自己，刷新描边 mesh 列表
     hoverOutline.refreshSelection();
     return true;
+  };
+
+  /** 枢纽 → 空白场景（懒创建，带入当前外观） */
+  const enterBlankWorld = async (): Promise<void> => {
+    if (worldMode === 'blank' || blankEnterBusy) return;
+    blankEnterBusy = true;
+    try {
+      const appearance = minion.getAppearance();
+      if (!blankWorld) {
+        blankWorld = await createBlankWorld(engine, appearance, cameraMode);
+      } else {
+        blankWorld.applyAppearance(appearance);
+        // 出生点 = 传送阵
+        blankWorld.minion.root.position.set(
+          TeleportPad.DEFAULT_X,
+          0,
+          TeleportPad.DEFAULT_Z,
+        );
+        blankWorld.minionPhys.teleportToTarget();
+      }
+
+      // 卸枢纽控制，挂空白场景相机
+      camera.detachControl();
+      hoverOutline.clear();
+      hoverOutline.setEnabled(false);
+      moveKeys.w = moveKeys.a = moveKeys.s = moveKeys.d = false;
+
+      if (cameraMode === 'free') {
+        blankWorld.attachCamera(canvas);
+      } else {
+        blankWorld.detachCamera();
+        blankWorld.setCameraMode('fixed', canvas);
+      }
+
+      // 重置空白场景镜头跟随，避免跳变
+      blankWorld.minion.getFocusPoint(focusPoint);
+      blankWorld.camera.setTarget(focusPoint.clone());
+      camFollowTarget.copyFrom(focusPoint);
+
+      // 出生在阵上：须先离开再站上才重新蓄力
+      blankWorld.teleportPad.disarmUntilLeave();
+      teleportPad.resetCharge();
+
+      worldMode = 'blank';
+    } finally {
+      blankEnterBusy = false;
+    }
+  };
+
+  /** 空白场景 → 枢纽（带回外观，落在枢纽传送阵） */
+  const returnToHubWorld = (): void => {
+    if (worldMode !== 'blank' || !blankWorld || blankEnterBusy) return;
+
+    // 空白场景外观写回枢纽主角
+    minion.applyPatch(blankWorld.minion.getAppearance());
+    // 出生点 = 枢纽传送阵
+    minion.root.position.set(
+      TeleportPad.DEFAULT_X,
+      0,
+      TeleportPad.DEFAULT_Z,
+    );
+    minionPhys.teleportToTarget();
+
+    blankWorld.detachCamera();
+    blankWorld.teleportPad.resetCharge();
+    moveKeys.w = moveKeys.a = moveKeys.s = moveKeys.d = false;
+
+    if (!settingsPanel?.isOpen()) {
+      if (cameraMode === 'free') {
+        camera.attachControl(canvas, true);
+      } else {
+        camera.detachControl();
+        lockFixedOrbit();
+      }
+      hoverOutline.setEnabled(true);
+    }
+
+    minion.getFocusPoint(focusPoint);
+    camera.setTarget(focusPoint.clone());
+    camFollowTarget.copyFrom(focusPoint);
+
+    // 出生在阵上：须先离开再站上才重新蓄力
+    teleportPad.disarmUntilLeave();
+
+    worldMode = 'hub';
   };
 
   window.addEventListener('keydown', (e) => {
@@ -381,36 +479,52 @@ async function initScene(): Promise<void> {
       if (mode === cameraMode) return;
       // 切到固定前，保存当前自由角度/距离
       if (cameraMode === 'free' && mode === 'fixed') {
-        saveCameraState(snapshotCamera());
+        if (worldMode === 'hub') saveCameraState(snapshotCamera());
       }
-      applyCameraMode(mode, !settingsPanel?.isOpen());
-      // 从固定回到自由：恢复上次自由角度/距离（注视点继续跟角色）
-      if (mode === 'free') {
-        const free = loadCameraState();
-        if (free) {
-          camera.alpha = free.alpha;
-          camera.beta = free.beta;
-          camera.radius = free.radius;
+      cameraMode = mode;
+      if (worldMode === 'hub') {
+        applyCameraMode(mode, !settingsPanel?.isOpen());
+        if (mode === 'free') {
+          const free = loadCameraState();
+          if (free) {
+            camera.alpha = free.alpha;
+            camera.beta = free.beta;
+            camera.radius = free.radius;
+          }
         }
+      } else if (blankWorld) {
+        blankWorld.setCameraMode(mode, canvas);
+        if (settingsPanel?.isOpen()) blankWorld.detachCamera();
       }
       persistSettings();
     },
-    getCameraInfo: () => ({
-      alpha: camera.alpha,
-      beta: camera.beta,
-      radius: camera.radius,
-      targetX: camera.target.x,
-      targetY: camera.target.y,
-      targetZ: camera.target.z,
-    }),
+    getCameraInfo: () => {
+      const cam = worldMode === 'blank' && blankWorld ? blankWorld.camera : camera;
+      return {
+        alpha: cam.alpha,
+        beta: cam.beta,
+        radius: cam.radius,
+        targetX: cam.target.x,
+        targetY: cam.target.y,
+        targetZ: cam.target.z,
+      };
+    },
     onOpenChange: (open) => {
       // 打开时松手、停 WASD、卸掉轨道拖拽，避免穿透 UI
       moveKeys.w = moveKeys.a = moveKeys.s = moveKeys.d = false;
-      hoverOutline.setEnabled(!open);
-      if (open) {
-        camera.detachControl();
-      } else if (cameraMode === 'free') {
-        camera.attachControl(canvas, true);
+      if (worldMode === 'hub') {
+        hoverOutline.setEnabled(!open);
+        if (open) {
+          camera.detachControl();
+        } else if (cameraMode === 'free') {
+          camera.attachControl(canvas, true);
+        }
+      } else if (blankWorld) {
+        if (open) {
+          blankWorld.detachCamera();
+        } else if (cameraMode === 'free') {
+          blankWorld.attachCamera(canvas);
+        }
       }
     },
   });
@@ -426,6 +540,82 @@ async function initScene(): Promise<void> {
     const dt = Math.min(engine.getDeltaTime() / 1000, 0.05);
     const menuOpen = settingsPanel?.isOpen() ?? false;
 
+    // ── 空白场景：仅地板 + 主角 ──────────────────────────
+    if (worldMode === 'blank' && blankWorld) {
+      const bw = blankWorld;
+      bw.minionPhys.syncToTarget();
+
+      let moving = false;
+      let wishX = 0;
+      let wishZ = 0;
+      if (!menuOpen) {
+        const ix = (moveKeys.a ? 1 : 0) - (moveKeys.d ? 1 : 0);
+        const iz = (moveKeys.w ? 1 : 0) - (moveKeys.s ? 1 : 0);
+        if (ix !== 0 || iz !== 0) {
+          moveForward
+            .copyFrom(bw.camera.target)
+            .subtractInPlace(bw.camera.position);
+          moveForward.y = 0;
+          if (moveForward.lengthSquared() < 1e-8) {
+            moveForward.set(
+              Math.sin(bw.camera.alpha),
+              0,
+              Math.cos(bw.camera.alpha),
+            );
+          } else {
+            moveForward.normalize();
+          }
+          Vector3.CrossToRef(Vector3.UpReadOnly, moveForward, moveRight);
+          if (moveRight.lengthSquared() < 1e-8) {
+            moveRight.set(1, 0, 0);
+          } else {
+            moveRight.normalize();
+          }
+          moveDelta.set(0, 0, 0);
+          moveDelta.addInPlace(moveForward.scale(iz));
+          moveDelta.addInPlace(moveRight.scale(ix));
+          if (moveDelta.lengthSquared() > 1e-8) {
+            moveDelta.normalize();
+            wishX = moveDelta.x * MOVE_SPEED;
+            wishZ = moveDelta.z * MOVE_SPEED;
+            bw.minion.faceToward(moveDelta.x, moveDelta.z);
+            moving = true;
+          }
+        }
+      }
+      bw.minionPhys.setHorizontalVelocity(wishX, wishZ);
+      bw.minion.update(dt, moving);
+
+      // 传送阵：站上蓄力加速，满 3s 回枢纽
+      {
+        const p = bw.minion.root.position;
+        const onPad = bw.teleportPad.contains(p.x, p.z);
+        if (bw.teleportPad.update(dt, onPad && !menuOpen)) {
+          returnToHubWorld();
+        }
+      }
+
+      bw.minion.getFocusPoint(focusPoint);
+      const followT = 1 - Math.exp(-CAM_FOLLOW * dt);
+      camFollowTarget.x += (focusPoint.x - camFollowTarget.x) * followT;
+      camFollowTarget.y += (focusPoint.y - camFollowTarget.y) * followT;
+      camFollowTarget.z += (focusPoint.z - camFollowTarget.z) * followT;
+      if (!bw.camera.target.equalsWithEpsilon(camFollowTarget, 1e-4)) {
+        bw.camera.setTarget(camFollowTarget);
+      }
+      if (cameraMode === 'fixed') {
+        bw.camera.alpha = FIXED_CAMERA.alpha;
+        bw.camera.beta = FIXED_CAMERA.beta;
+        bw.camera.radius = FIXED_CAMERA.radius;
+      }
+
+      if (showFps) fpsOverlay.update();
+      settingsPanel?.update();
+      bw.scene.render();
+      return;
+    }
+
+    // ── 枢纽场景 ────────────────────────────────────────
     // 上一帧物理结果 → 主角 / 阵列表现根节点
     minionPhys.syncToTarget();
 
@@ -473,25 +663,22 @@ async function initScene(): Promise<void> {
     minion.update(dt, moving);
     demoLineup.update(dt);
 
+    // 传送阵：站上蓄力加速，满 3s 进空白场景
+    {
+      const p = minion.root.position;
+      const onPad = teleportPad.contains(p.x, p.z);
+      if (teleportPad.update(dt, onPad && !menuOpen)) {
+        void enterBlankWorld();
+      }
+    }
+
     // 悬停目标可能被推动离指针：每帧按指针位置重拾取，保持轮廓同步
     if (!menuOpen && pointerOverCanvas) {
       hoverOutline.updateFromScenePick(scene);
     }
 
-    // 悬停可替换目标但距离不够 → 目标脚下贴地红圈（半径=可交互距离）
-    {
-      const hover = hoverOutline.getHovered();
-      const outOfRange =
-        !menuOpen &&
-        hover !== null &&
-        hover !== minion &&
-        !isInSwapRange(hover);
-      swapRangeRing.setVisible(outOfRange);
-      swapRangeRing.update(
-        dt,
-        outOfRange && hover ? hover.root.position : null,
-      );
-    }
+    // 黄圈仅在距离不足按 E/R 时短暂显示（update 负责淡出）
+    swapRangeRing.update(dt);
 
     // 注视点始终平滑跟随角色中心（自由 / 固定相同）
     minion.getFocusPoint(focusPoint);
