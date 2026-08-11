@@ -375,6 +375,33 @@ async function initScene(): Promise<void> {
     return true;
   };
 
+  let warpLanding: {
+    minion: Minion;
+    phys: MinionPhysicsProxy;
+    startY: number;
+    targetX: number;
+    targetZ: number;
+    progress: number;
+  } | null = null;
+
+  const triggerLandingWarp = (
+    targetMinion: Minion,
+    targetPhys: MinionPhysicsProxy,
+    tx = TeleportPad.DEFAULT_X,
+    tz = TeleportPad.DEFAULT_Z,
+  ): void => {
+    targetMinion.root.position.set(tx, 0.75, tz);
+    targetPhys.teleportToTarget();
+    warpLanding = {
+      minion: targetMinion,
+      phys: targetPhys,
+      startY: 0.75,
+      targetX: tx,
+      targetZ: tz,
+      progress: 0,
+    };
+  };
+
   /** 枢纽 → 空白场景（懒创建，带入当前外观）
    * @param isInitialLoad 是否页面首次加载恢复场景（此时保留小兵在 blank 场景保存的位置）
    */
@@ -399,6 +426,10 @@ async function initScene(): Promise<void> {
         blankWorld.applyAppearance(appearance);
         blankWorld.minion.root.position.set(spawnX, 0, spawnZ);
         blankWorld.minionPhys.teleportToTarget();
+      }
+
+      if (!isInitialLoad) {
+        triggerLandingWarp(blankWorld.minion, blankWorld.minionPhys, spawnX, spawnZ);
       }
 
       // 卸枢纽控制；空白场景相机仅在菜单关闭且自由模式时挂上
@@ -448,13 +479,7 @@ async function initScene(): Promise<void> {
 
     // 空白场景外观写回枢纽主角
     minion.applyPatch(blankWorld.minion.getAppearance());
-    // 出生点 = 枢纽传送阵
-    minion.root.position.set(
-      TeleportPad.DEFAULT_X,
-      0,
-      TeleportPad.DEFAULT_Z,
-    );
-    minionPhys.teleportToTarget();
+    triggerLandingWarp(minion, minionPhys, TeleportPad.DEFAULT_X, TeleportPad.DEFAULT_Z);
 
     blankWorld.detachCamera();
     blankWorld.teleportPad.resetCharge();
@@ -644,6 +669,26 @@ async function initScene(): Promise<void> {
   engine.runRenderLoop(() => {
     const dt = Math.min(engine.getDeltaTime() / 1000, 0.05);
     const menuOpen = settingsPanel?.isOpen() ?? false;
+
+    if (warpLanding) {
+      warpLanding.progress += dt / 0.22;
+      if (warpLanding.progress >= 1) {
+        warpLanding.minion.root.position.set(
+          warpLanding.targetX,
+          0,
+          warpLanding.targetZ,
+        );
+        warpLanding.phys.teleportToTarget();
+        warpLanding = null;
+      } else {
+        const t = warpLanding.progress;
+        const easeY = (1 - t) * (1 - t);
+        warpLanding.minion.root.position.x = warpLanding.targetX;
+        warpLanding.minion.root.position.z = warpLanding.targetZ;
+        warpLanding.minion.root.position.y = warpLanding.startY * easeY;
+        warpLanding.phys.teleportToTarget();
+      }
+    }
 
     // ── 空白场景：仅地板 + 主角 ──────────────────────────
     if (worldMode === 'blank' && blankWorld) {

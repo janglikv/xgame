@@ -43,6 +43,8 @@ export class TeleportPad {
   private readonly pillarMat: StandardMaterial;
   /** 当前蓄力（秒） */
   private charge = 0;
+  /** 视觉蓄力（用于离开传送阵时的快速平滑缩回归位，防闪现跳变） */
+  private visualCharge = 0;
   /**
    * 传送落地后需先离开阵法才能再次蓄力，
    * 避免出生在阵上立刻又传回去。
@@ -163,18 +165,31 @@ export class TeleportPad {
    * @returns 是否本帧应触发传送（蓄满 3s）
    */
   update(dt: number, occupied: boolean): boolean {
+    let triggered = false;
     // 落地保护：仍在阵上则不蓄力，离开后重新允许
     if (this.requireLeave) {
       if (!occupied) this.requireLeave = false;
       this.charge = 0;
     } else if (occupied) {
       this.charge = Math.min(TeleportPad.CHARGE_TIME, this.charge + dt);
+      if (this.charge >= TeleportPad.CHARGE_TIME) {
+        this.charge = 0;
+        triggered = true;
+      }
     } else {
-      // 离开立刻清空，下次重站重蓄
+      // 离开立刻逻辑清空
       this.charge = 0;
     }
 
-    const u = this.getCharge01();
+    // 离阵平滑归位：若视觉蓄力大于逻辑蓄力，按 4x 速率快速衰减缩回归位（约 0.25s），避免闪现
+    if (this.charge > this.visualCharge) {
+      this.visualCharge = this.charge;
+    } else {
+      const decaySpeed = TeleportPad.CHARGE_TIME * 4.0;
+      this.visualCharge = Math.max(0, this.visualCharge - dt * decaySpeed);
+    }
+
+    const u = Math.min(1, this.visualCharge / TeleportPad.CHARGE_TIME);
     // 明显加速：中段就提速，末段冲到满速（无抖动）
     const ease = u * u * (3 - 2 * u); // smoothstep
     const spinMul = 1 + ease * (TeleportPad.SPIN_MAX_MUL - 1);
@@ -192,15 +207,7 @@ export class TeleportPad {
     this.pillarMat.emissiveColor.set(0.55 * bright, 0.35 * bright, bright);
     this.pillarMat.alpha = 0.28 + 0.55 * u;
 
-    if (
-      occupied &&
-      !this.requireLeave &&
-      this.charge >= TeleportPad.CHARGE_TIME
-    ) {
-      this.charge = 0;
-      return true;
-    }
-    return false;
+    return triggered;
   }
 
   dispose(): void {
