@@ -6,17 +6,19 @@ import {
 
 export type FaceStyle = 'cute' | 'fierce' | 'dumb' | 'sad' | 'blank';
 
-/** 脸贴图按「底色+表情+是否马赛克」缓存 */
+/** 脸贴图按「底色+表情+马赛克+闭眼」缓存 */
 const faceTextureCache = new Map<string, DynamicTexture>();
-const FACE_TEX_VERSION = 20;
+const FACE_TEX_VERSION = 21;
 
 export function getFaceTexture(
   scene: Scene,
   bodyColor: number,
   style: FaceStyle = 'cute',
   mosaic = false,
+  /** 闭眼帧（眨眼待机） */
+  eyesClosed = false,
 ): DynamicTexture {
-  const key = `${bodyColor.toString(16)}_${style}_m${mosaic ? 1 : 0}`;
+  const key = `${bodyColor.toString(16)}_${style}_m${mosaic ? 1 : 0}_c${eyesClosed ? 1 : 0}`;
   const cached = faceTextureCache.get(key);
   if (cached) {
     const v = (cached as DynamicTexture & { _faceVer?: number })._faceVer;
@@ -26,15 +28,15 @@ export function getFaceTexture(
   }
   let tex: DynamicTexture;
   if (style === 'fierce') {
-    tex = createFierceFaceTexture(scene, bodyColor);
+    tex = createFierceFaceTexture(scene, bodyColor, eyesClosed);
   } else if (style === 'dumb') {
-    tex = createDumbFaceTexture(scene, bodyColor);
+    tex = createDumbFaceTexture(scene, bodyColor, eyesClosed);
   } else if (style === 'sad') {
-    tex = createSadFaceTexture(scene, bodyColor);
+    tex = createSadFaceTexture(scene, bodyColor, eyesClosed);
   } else if (style === 'blank') {
-    tex = createBlankFaceTexture(scene, bodyColor);
+    tex = createBlankFaceTexture(scene, bodyColor, eyesClosed);
   } else {
-    tex = createCuteFaceTexture(scene, bodyColor);
+    tex = createCuteFaceTexture(scene, bodyColor, eyesClosed);
   }
   if (mosaic) {
     // 块大小：越大越「马赛克」
@@ -43,6 +45,36 @@ export function getFaceTexture(
   (tex as DynamicTexture & { _faceVer?: number })._faceVer = FACE_TEX_VERSION;
   faceTextureCache.set(key, tex);
   return tex;
+}
+
+/**
+ * 闭眼描线：柔和下弯弧（^ 反过来的弧线感）。
+ * curve>0 弧心偏下（可爱）；curve<0 弧心偏上。
+ */
+function strokeClosedEye(
+  ctx: CanvasRenderingContext2D,
+  ex: number,
+  eyeY: number,
+  halfW: number,
+  curve: number,
+  lineWidth: number,
+  color: string,
+): void {
+  ctx.strokeStyle = color;
+  ctx.lineWidth = lineWidth;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  // 主睑线
+  ctx.beginPath();
+  ctx.moveTo(ex - halfW, eyeY);
+  ctx.quadraticCurveTo(ex, eyeY + curve, ex + halfW, eyeY);
+  ctx.stroke();
+  // 略粗一点的第二笔，增强厚度
+  ctx.lineWidth = lineWidth * 0.55;
+  ctx.beginPath();
+  ctx.moveTo(ex - halfW * 0.85, eyeY - lineWidth * 0.15);
+  ctx.quadraticCurveTo(ex, eyeY + curve * 0.65, ex + halfW * 0.85, eyeY - lineWidth * 0.15);
+  ctx.stroke();
 }
 
 /**
@@ -139,10 +171,11 @@ function makeFaceCanvas(
 function createCuteFaceTexture(
   scene: Scene,
   bodyColor: number,
+  eyesClosed = false,
 ): DynamicTexture {
   const { tex, ctx, width, height } = makeFaceCanvas(
     scene,
-    'minionFaceCute',
+    eyesClosed ? 'minionFaceCuteClosed' : 'minionFaceCute',
     bodyColor,
   );
   const darkBrown = '#2b2123';
@@ -185,6 +218,7 @@ function createCuteFaceTexture(
   ctx.lineWidth = height * 0.016;
   ctx.lineCap = 'round';
 
+  // 闭眼时眉线仍保留，略收一点
   ctx.beginPath();
   ctx.ellipse(
     cx - eyeGap - width * 0.005,
@@ -209,79 +243,86 @@ function createCuteFaceTexture(
   );
   ctx.stroke();
 
-  const drawEye = (ex: number): void => {
-    ctx.beginPath();
-    ctx.ellipse(ex, eyeY, eyeRx, eyeRy, 0, 0, Math.PI * 2);
-    ctx.fillStyle = '#21181b';
-    ctx.fill();
+  if (eyesClosed) {
+    const lidW = eyeRx * 1.05;
+    const lw = height * 0.028;
+    strokeClosedEye(ctx, cx - eyeGap, eyeY + eyeRy * 0.05, lidW, eyeRy * 0.42, lw, darkBrown);
+    strokeClosedEye(ctx, cx + eyeGap, eyeY + eyeRy * 0.05, lidW, eyeRy * 0.42, lw, darkBrown);
+  } else {
+    const drawEye = (ex: number): void => {
+      ctx.beginPath();
+      ctx.ellipse(ex, eyeY, eyeRx, eyeRy, 0, 0, Math.PI * 2);
+      ctx.fillStyle = '#21181b';
+      ctx.fill();
 
-    const innerG = ctx.createLinearGradient(
-      ex,
-      eyeY - eyeRy,
-      ex,
-      eyeY + eyeRy,
-    );
-    innerG.addColorStop(0, '#1d1518');
-    innerG.addColorStop(0.65, '#3a2b2f');
-    innerG.addColorStop(1, '#664c54');
-    ctx.fillStyle = innerG;
-    ctx.beginPath();
-    ctx.ellipse(ex, eyeY, eyeRx * 0.96, eyeRy * 0.96, 0, 0, Math.PI * 2);
-    ctx.fill();
+      const innerG = ctx.createLinearGradient(
+        ex,
+        eyeY - eyeRy,
+        ex,
+        eyeY + eyeRy,
+      );
+      innerG.addColorStop(0, '#1d1518');
+      innerG.addColorStop(0.65, '#3a2b2f');
+      innerG.addColorStop(1, '#664c54');
+      ctx.fillStyle = innerG;
+      ctx.beginPath();
+      ctx.ellipse(ex, eyeY, eyeRx * 0.96, eyeRy * 0.96, 0, 0, Math.PI * 2);
+      ctx.fill();
 
-    ctx.fillStyle = '#140c0e';
-    ctx.beginPath();
-    ctx.ellipse(
-      ex,
-      eyeY + eyeRy * 0.05,
-      eyeRx * 0.7,
-      eyeRy * 0.7,
-      0,
-      0,
-      Math.PI * 2,
-    );
-    ctx.fill();
+      ctx.fillStyle = '#140c0e';
+      ctx.beginPath();
+      ctx.ellipse(
+        ex,
+        eyeY + eyeRy * 0.05,
+        eyeRx * 0.7,
+        eyeRy * 0.7,
+        0,
+        0,
+        Math.PI * 2,
+      );
+      ctx.fill();
 
-    ctx.fillStyle = '#ffffff';
-    ctx.beginPath();
-    ctx.ellipse(
-      ex - eyeRx * 0.32,
-      eyeY - eyeRy * 0.32,
-      eyeRx * 0.38,
-      eyeRy * 0.44,
-      -Math.PI / 6,
-      0,
-      Math.PI * 2,
-    );
-    ctx.fill();
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.ellipse(
+        ex - eyeRx * 0.32,
+        eyeY - eyeRy * 0.32,
+        eyeRx * 0.38,
+        eyeRy * 0.44,
+        -Math.PI / 6,
+        0,
+        Math.PI * 2,
+      );
+      ctx.fill();
 
-    ctx.beginPath();
-    ctx.ellipse(
-      ex + eyeRx * 0.35,
-      eyeY + eyeRy * 0.35,
-      eyeRx * 0.2,
-      eyeRy * 0.2,
-      0,
-      0,
-      Math.PI * 2,
-    );
-    ctx.fill();
+      ctx.beginPath();
+      ctx.ellipse(
+        ex + eyeRx * 0.35,
+        eyeY + eyeRy * 0.35,
+        eyeRx * 0.2,
+        eyeRy * 0.2,
+        0,
+        0,
+        Math.PI * 2,
+      );
+      ctx.fill();
 
-    ctx.beginPath();
-    ctx.ellipse(
-      ex - eyeRx * 0.42,
-      eyeY + eyeRy * 0.32,
-      eyeRx * 0.09,
-      eyeRy * 0.09,
-      0,
-      0,
-      Math.PI * 2,
-    );
-    ctx.fill();
-  };
+      ctx.beginPath();
+      ctx.ellipse(
+        ex - eyeRx * 0.42,
+        eyeY + eyeRy * 0.32,
+        eyeRx * 0.09,
+        eyeRy * 0.09,
+        0,
+        0,
+        Math.PI * 2,
+      );
+      ctx.fill();
+    };
 
-  drawEye(cx - eyeGap);
-  drawEye(cx + eyeGap);
+    drawEye(cx - eyeGap);
+    drawEye(cx + eyeGap);
+  }
 
   ctx.strokeStyle = darkBrown;
   ctx.lineWidth = height * 0.016;
@@ -308,10 +349,11 @@ function createCuteFaceTexture(
 function createFierceFaceTexture(
   scene: Scene,
   bodyColor: number,
+  eyesClosed = false,
 ): DynamicTexture {
   const { tex, ctx, width, height } = makeFaceCanvas(
     scene,
-    'minionFaceFierce',
+    eyesClosed ? 'minionFaceFierceClosed' : 'minionFaceFierce',
     bodyColor,
   );
   const ink = '#1a1012';
@@ -369,86 +411,118 @@ function createFierceFaceTexture(
   drawBrow(-1);
   drawBrow(1);
 
-  const drawFierceEye = (ex: number, side: -1 | 1): void => {
-    // 外轮廓（略扁圆、带锐角感）
-    ctx.beginPath();
-    ctx.ellipse(ex, eyeY, eyeRx, eyeRy, side * 0.08, 0, Math.PI * 2);
-    ctx.fillStyle = '#0f0a0b';
-    ctx.fill();
+  if (eyesClosed) {
+    // 凶狠闭眼：略下压的粗折线 + 锐利眼尾
+    const drawFierceClosed = (ex: number, side: -1 | 1): void => {
+      ctx.strokeStyle = ink;
+      ctx.lineWidth = height * 0.034;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      ctx.moveTo(ex - side * eyeRx * 1.05, eyeY - eyeRy * 0.15);
+      ctx.quadraticCurveTo(
+        ex,
+        eyeY + eyeRy * 0.35,
+        ex + side * eyeRx * 1.05,
+        eyeY - eyeRy * 0.25,
+      );
+      ctx.stroke();
+      // 下睑细线
+      ctx.lineWidth = height * 0.014;
+      ctx.beginPath();
+      ctx.moveTo(ex - side * eyeRx * 0.85, eyeY + eyeRy * 0.05);
+      ctx.quadraticCurveTo(
+        ex,
+        eyeY + eyeRy * 0.42,
+        ex + side * eyeRx * 0.85,
+        eyeY - eyeRy * 0.05,
+      );
+      ctx.stroke();
+    };
+    drawFierceClosed(cx - eyeGap, -1);
+    drawFierceClosed(cx + eyeGap, 1);
+  } else {
+    const drawFierceEye = (ex: number, side: -1 | 1): void => {
+      // 外轮廓（略扁圆、带锐角感）
+      ctx.beginPath();
+      ctx.ellipse(ex, eyeY, eyeRx, eyeRy, side * 0.08, 0, Math.PI * 2);
+      ctx.fillStyle = '#0f0a0b';
+      ctx.fill();
 
-    // 眼白偏少，深色虹膜大
-    const scleraG = ctx.createRadialGradient(
-      ex,
-      eyeY,
-      eyeRx * 0.2,
-      ex,
-      eyeY,
-      eyeRx,
-    );
-    scleraG.addColorStop(0, '#3a2228');
-    scleraG.addColorStop(0.55, '#1a1014');
-    scleraG.addColorStop(1, '#0a0607');
-    ctx.fillStyle = scleraG;
-    ctx.beginPath();
-    ctx.ellipse(ex, eyeY, eyeRx * 0.97, eyeRy * 0.97, side * 0.08, 0, Math.PI * 2);
-    ctx.fill();
+      // 眼白偏少，深色虹膜大
+      const scleraG = ctx.createRadialGradient(
+        ex,
+        eyeY,
+        eyeRx * 0.2,
+        ex,
+        eyeY,
+        eyeRx,
+      );
+      scleraG.addColorStop(0, '#3a2228');
+      scleraG.addColorStop(0.55, '#1a1014');
+      scleraG.addColorStop(1, '#0a0607');
+      ctx.fillStyle = scleraG;
+      ctx.beginPath();
+      ctx.ellipse(ex, eyeY, eyeRx * 0.97, eyeRy * 0.97, side * 0.08, 0, Math.PI * 2);
+      ctx.fill();
 
-    // 巨大瞳孔
-    ctx.fillStyle = '#050304';
-    ctx.beginPath();
-    ctx.ellipse(
-      ex + side * eyeRx * 0.04,
-      eyeY + eyeRy * 0.06,
-      eyeRx * 0.62,
-      eyeRy * 0.7,
-      0,
-      0,
-      Math.PI * 2,
-    );
-    ctx.fill();
+      // 巨大瞳孔
+      ctx.fillStyle = '#050304';
+      ctx.beginPath();
+      ctx.ellipse(
+        ex + side * eyeRx * 0.04,
+        eyeY + eyeRy * 0.06,
+        eyeRx * 0.62,
+        eyeRy * 0.7,
+        0,
+        0,
+        Math.PI * 2,
+      );
+      ctx.fill();
 
-    // 锐利高光（小而凶）
-    ctx.fillStyle = 'rgba(255,255,255,0.92)';
-    ctx.beginPath();
-    ctx.ellipse(
-      ex - side * eyeRx * 0.22,
-      eyeY - eyeRy * 0.28,
-      eyeRx * 0.18,
-      eyeRy * 0.22,
-      -Math.PI / 5,
-      0,
-      Math.PI * 2,
-    );
-    ctx.fill();
-    ctx.beginPath();
-    ctx.ellipse(
-      ex + side * eyeRx * 0.28,
-      eyeY + eyeRy * 0.22,
-      eyeRx * 0.08,
-      eyeRy * 0.09,
-      0,
-      0,
-      Math.PI * 2,
-    );
-    ctx.fill();
+      // 锐利高光（小而凶）
+      ctx.fillStyle = 'rgba(255,255,255,0.92)';
+      ctx.beginPath();
+      ctx.ellipse(
+        ex - side * eyeRx * 0.22,
+        eyeY - eyeRy * 0.28,
+        eyeRx * 0.18,
+        eyeRy * 0.22,
+        -Math.PI / 5,
+        0,
+        Math.PI * 2,
+      );
+      ctx.fill();
+      ctx.beginPath();
+      ctx.ellipse(
+        ex + side * eyeRx * 0.28,
+        eyeY + eyeRy * 0.22,
+        eyeRx * 0.08,
+        eyeRy * 0.09,
+        0,
+        0,
+        Math.PI * 2,
+      );
+      ctx.fill();
 
-    // 上眼睑厚阴影（压低视线）
-    ctx.fillStyle = 'rgba(10,6,8,0.55)';
-    ctx.beginPath();
-    ctx.ellipse(
-      ex,
-      eyeY - eyeRy * 0.55,
-      eyeRx * 1.02,
-      eyeRy * 0.55,
-      side * 0.1,
-      Math.PI * 1.05,
-      Math.PI * 1.95,
-    );
-    ctx.fill();
-  };
+      // 上眼睑厚阴影（压低视线）
+      ctx.fillStyle = 'rgba(10,6,8,0.55)';
+      ctx.beginPath();
+      ctx.ellipse(
+        ex,
+        eyeY - eyeRy * 0.55,
+        eyeRx * 1.02,
+        eyeRy * 0.55,
+        side * 0.1,
+        Math.PI * 1.05,
+        Math.PI * 1.95,
+      );
+      ctx.fill();
+    };
 
-  drawFierceEye(cx - eyeGap, -1);
-  drawFierceEye(cx + eyeGap, 1);
+    drawFierceEye(cx - eyeGap, -1);
+    drawFierceEye(cx + eyeGap, 1);
+  }
 
   // 鼻梁阴影（凶相更立体）
   ctx.strokeStyle = 'rgba(30,18,20,0.35)';
@@ -502,10 +576,11 @@ function createFierceFaceTexture(
 function createDumbFaceTexture(
   scene: Scene,
   bodyColor: number,
+  eyesClosed = false,
 ): DynamicTexture {
   const { tex, ctx, width, height } = makeFaceCanvas(
     scene,
-    'minionFaceDumb',
+    eyesClosed ? 'minionFaceDumbClosed' : 'minionFaceDumb',
     bodyColor,
   );
   const ink = '#1c1210';
@@ -621,12 +696,19 @@ function createDumbFaceTexture(
   }
   ctx.globalAlpha = 1;
 
-  // 眼睛：纯小黑点
-  ctx.fillStyle = '#0a0808';
-  for (const ex of [cx - eyeGap, cx + eyeGap]) {
-    ctx.beginPath();
-    ctx.arc(ex, eyeY, eyeR * 0.85, 0, Math.PI * 2);
-    ctx.fill();
+  // 眼睛：睁 = 小黑点；闭 = 短弧线
+  if (eyesClosed) {
+    const lw = height * 0.018;
+    for (const ex of [cx - eyeGap, cx + eyeGap]) {
+      strokeClosedEye(ctx, ex, eyeY, eyeR * 2.4, eyeR * 1.1, lw, '#0a0808');
+    }
+  } else {
+    ctx.fillStyle = '#0a0808';
+    for (const ex of [cx - eyeGap, cx + eyeGap]) {
+      ctx.beginPath();
+      ctx.arc(ex, eyeY, eyeR * 0.85, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
 
   // O 型香肠嘴：厚描边椭圆环，中间留空（像香肠圈/惊叹 O 嘴）
@@ -666,10 +748,11 @@ function createDumbFaceTexture(
 function createSadFaceTexture(
   scene: Scene,
   bodyColor: number,
+  eyesClosed = false,
 ): DynamicTexture {
   const { tex, ctx, width, height } = makeFaceCanvas(
     scene,
-    'minionFaceSad',
+    eyesClosed ? 'minionFaceSadClosed' : 'minionFaceSad',
     bodyColor,
   );
   const ink = '#2b2123';
@@ -701,50 +784,56 @@ function createSadFaceTexture(
   drawSadBrow(-1);
   drawSadBrow(1);
 
-  const drawSadEye = (ex: number, side: -1 | 1): void => {
-    // 眼白
-    ctx.beginPath();
-    ctx.ellipse(ex, eyeY, eyeRx, eyeRy, side * 0.05, 0, Math.PI * 2);
-    ctx.fillStyle = '#21181b';
-    ctx.fill();
+  if (eyesClosed) {
+    const lw = height * 0.024;
+    strokeClosedEye(ctx, cx - eyeGap, eyeY + eyeRy * 0.08, eyeRx * 1.05, eyeRy * 0.5, lw, ink);
+    strokeClosedEye(ctx, cx + eyeGap, eyeY + eyeRy * 0.08, eyeRx * 1.05, eyeRy * 0.5, lw, ink);
+  } else {
+    const drawSadEye = (ex: number, side: -1 | 1): void => {
+      // 眼白
+      ctx.beginPath();
+      ctx.ellipse(ex, eyeY, eyeRx, eyeRy, side * 0.05, 0, Math.PI * 2);
+      ctx.fillStyle = '#21181b';
+      ctx.fill();
 
-    // 虹膜偏下（含泪下垂感）
-    const pupilY = eyeY + eyeRy * 0.12;
-    ctx.fillStyle = '#140c0e';
-    ctx.beginPath();
-    ctx.ellipse(ex, pupilY, eyeRx * 0.62, eyeRy * 0.68, 0, 0, Math.PI * 2);
-    ctx.fill();
+      // 虹膜偏下（含泪下垂感）
+      const pupilY = eyeY + eyeRy * 0.12;
+      ctx.fillStyle = '#140c0e';
+      ctx.beginPath();
+      ctx.ellipse(ex, pupilY, eyeRx * 0.62, eyeRy * 0.68, 0, 0, Math.PI * 2);
+      ctx.fill();
 
-    // 高光
-    ctx.fillStyle = '#ffffff';
-    ctx.beginPath();
-    ctx.ellipse(
-      ex - eyeRx * 0.28,
-      eyeY - eyeRy * 0.22,
-      eyeRx * 0.28,
-      eyeRy * 0.32,
-      -Math.PI / 7,
-      0,
-      Math.PI * 2,
-    );
-    ctx.fill();
+      // 高光
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.ellipse(
+        ex - eyeRx * 0.28,
+        eyeY - eyeRy * 0.22,
+        eyeRx * 0.28,
+        eyeRy * 0.32,
+        -Math.PI / 7,
+        0,
+        Math.PI * 2,
+      );
+      ctx.fill();
 
-    // 下眼睑泪光
-    ctx.fillStyle = 'rgba(160, 200, 230, 0.35)';
-    ctx.beginPath();
-    ctx.ellipse(
-      ex,
-      eyeY + eyeRy * 0.55,
-      eyeRx * 0.75,
-      eyeRy * 0.35,
-      0,
-      0,
-      Math.PI * 2,
-    );
-    ctx.fill();
-  };
-  drawSadEye(cx - eyeGap, -1);
-  drawSadEye(cx + eyeGap, 1);
+      // 下眼睑泪光
+      ctx.fillStyle = 'rgba(160, 200, 230, 0.35)';
+      ctx.beginPath();
+      ctx.ellipse(
+        ex,
+        eyeY + eyeRy * 0.55,
+        eyeRx * 0.75,
+        eyeRy * 0.35,
+        0,
+        0,
+        Math.PI * 2,
+      );
+      ctx.fill();
+    };
+    drawSadEye(cx - eyeGap, -1);
+    drawSadEye(cx + eyeGap, 1);
+  }
 
   // 泪珠（左眼下一滴）
   ctx.fillStyle = tearBlue;
@@ -819,10 +908,11 @@ function createSadFaceTexture(
 function createBlankFaceTexture(
   scene: Scene,
   bodyColor: number,
+  eyesClosed = false,
 ): DynamicTexture {
   const { tex, ctx, width, height } = makeFaceCanvas(
     scene,
-    'minionFaceBlank',
+    eyesClosed ? 'minionFaceBlankClosed' : 'minionFaceBlank',
     bodyColor,
   );
   const ink = '#2a2224';
@@ -846,12 +936,24 @@ function createBlankFaceTexture(
     ctx.stroke();
   }
 
-  // 小圆眼，无高光（更呆滞）
-  ctx.fillStyle = ink;
-  for (const side of [-1, 1] as const) {
-    ctx.beginPath();
-    ctx.arc(cx + side * eyeGap, eyeY, eyeR, 0, Math.PI * 2);
-    ctx.fill();
+  if (eyesClosed) {
+    // 扑克脸闭眼：几乎平直的短线
+    ctx.lineWidth = height * 0.014;
+    for (const side of [-1, 1] as const) {
+      const ex = cx + side * eyeGap;
+      ctx.beginPath();
+      ctx.moveTo(ex - eyeR * 1.6, eyeY);
+      ctx.lineTo(ex + eyeR * 1.6, eyeY);
+      ctx.stroke();
+    }
+  } else {
+    // 小圆眼，无高光（更呆滞）
+    ctx.fillStyle = ink;
+    for (const side of [-1, 1] as const) {
+      ctx.beginPath();
+      ctx.arc(cx + side * eyeGap, eyeY, eyeR, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
 
   // 一字平嘴（无上扬/下撇）

@@ -43,6 +43,10 @@ export interface MinionOptions {
   mosaicFace?: boolean;
   /** 低面数 + 平面着色 */
   lowPolyFlat?: boolean;
+  /** 是否播放眨眼待机（默认 true） */
+  blinkIdle?: boolean;
+  /** 是否播放微弱呼吸（默认 true） */
+  breathIdle?: boolean;
 }
 
 /**
@@ -66,10 +70,27 @@ export class Minion {
   static readonly FOOT_LIFT = 0.1;
   static readonly BODY_BOB = 0.035;
   static readonly TURN_SPEED = 14;
+  /** 呼吸频率（Hz，约 3s 一次） */
+  static readonly BREATH_HZ = 0.32;
+  /** 身体上下起伏幅度（本地单位） */
+  static readonly BREATH_BOB = 0.01;
+  /** 躯干 Y 缩放幅度（±） */
+  static readonly BREATH_SCALE_Y = 0.022;
+  /** 躯干 XZ 缩放幅度（吸气略鼓） */
+  static readonly BREATH_SCALE_XZ = 0.014;
+  /** 手部随呼吸轻抬 */
+  static readonly BREATH_HAND = 0.006;
+  /** 两次眨眼间隔（秒） */
+  static readonly BLINK_GAP_MIN = 2.4;
+  static readonly BLINK_GAP_MAX = 5.2;
+  /** 闭眼持续（秒） */
+  static readonly BLINK_CLOSED = 0.11;
+  static readonly BLINK_CLOSED_DOUBLE = 0.08;
 
   readonly root: TransformNode;
   readonly bodyRoot: TransformNode;
 
+  private readonly body: Mesh;
   private readonly leftHand: Mesh;
   private readonly rightHand: Mesh;
   private readonly leftFoot: Mesh;
@@ -80,10 +101,30 @@ export class Minion {
   private readonly leftFootRest: Vector3;
   private readonly rightFootRest: Vector3;
 
+  private readonly scene: Scene;
+  private readonly bodyMat: StandardMaterial;
+  private readonly skinColor: number;
+  private readonly faceStyle: FaceStyle;
+  private readonly mosaicFace: boolean;
+  private readonly blinkEnabled: boolean;
+  private readonly breathEnabled: boolean;
+
   private walkPhase = 0;
   private walkWeight = 0;
   private targetYaw = 0;
   private staffFx: StaffFx | null = null;
+  /** 呼吸相位（弧度），各实例随机错开 */
+  private breathPhase = 0;
+
+  /** 距下次眨眼的倒计时（仅睁眼时有效） */
+  private blinkTimer = 0;
+  /** 闭眼剩余时间 */
+  private blinkClosedT = 0;
+  private eyesClosed = false;
+  /** 睁眼后是否再眨一次（连眨） */
+  private pendingDoubleBlink = false;
+  /** 下一次闭眼是连眨的第二下 */
+  private blinkFollowUp = false;
 
   constructor(scene: Scene, x = 0, z = 0, options: MinionOptions = {}) {
     const facePositiveX = options.facePositiveX ?? true;
@@ -99,6 +140,18 @@ export class Minion {
     const sphereSegments = lowPolyFlat ? 10 : 24;
     const limbSegments = lowPolyFlat ? 3 : 16;
     const scale = Minion.SCALE * (options.scaleMultiplier ?? 1);
+
+    this.scene = scene;
+    this.skinColor = skinColor;
+    this.faceStyle = faceStyle;
+    this.mosaicFace = mosaicFace;
+    this.blinkEnabled = options.blinkIdle ?? true;
+    this.breathEnabled = options.breathIdle ?? true;
+    this.breathPhase = Math.random() * Math.PI * 2;
+    // 错开各实例首次眨眼，避免阵列齐眨眼
+    this.blinkTimer =
+      Minion.BLINK_GAP_MIN * 0.35 +
+      Math.random() * (Minion.BLINK_GAP_MAX - Minion.BLINK_GAP_MIN * 0.35);
 
     this.root = new TransformNode(`Minion_${x}_${z}`, scene);
     this.root.position = new Vector3(x, 0, z);
@@ -118,7 +171,9 @@ export class Minion {
       skinColor,
       faceStyle,
       mosaicFace,
+      false,
     );
+    this.bodyMat = bodyMat;
 
     const body = MeshBuilder.CreateSphere(
       'body',
@@ -133,6 +188,7 @@ export class Minion {
       body.convertToFlatShadedMesh();
     }
     cast(body, shadowGen);
+    this.body = body;
 
     this.leftHandRest = new Vector3(0.5, 0.5, 0.05);
     this.rightHandRest = magicStaff
@@ -182,6 +238,8 @@ export class Minion {
   update(dt: number, moving: boolean): void {
     this.applyTurn(dt);
     if (this.staffFx) updateStaffFx(this.staffFx, dt);
+    // 待机眨眼（行走时也保留，更自然）
+    this.updateBlink(dt);
 
     const blend = 10;
     if (moving) {
@@ -194,13 +252,39 @@ export class Minion {
       }
     }
 
+    // 微弱呼吸：行走时减弱，避免盖过步态
+    if (this.breathEnabled) {
+      this.breathPhase += dt * Math.PI * 2 * Minion.BREATH_HZ;
+    }
+    const breath =
+      this.breathEnabled ? Math.sin(this.breathPhase) : 0;
+    const breathAmt = 1 - this.walkWeight * 0.65;
+    const breathBob = breath * Minion.BREATH_BOB * breathAmt;
+    const breathHand = breath * Minion.BREATH_HAND * breathAmt;
+    // 躯干：吸气略鼓、略高；脚不缩放，贴地
+    const sy = 1 + breath * Minion.BREATH_SCALE_Y * breathAmt;
+    const sxz = 1 + breath * Minion.BREATH_SCALE_XZ * breathAmt;
+    this.body.scaling.set(sxz, sy, sxz);
+    // 球心随 Y 缩放上移，底缘大致稳定
+    const bodyR = 0.42;
+    this.body.position.y =
+      Minion.BODY_LOCAL_Y + bodyR * (sy - 1) * 0.55;
+
     const w = this.walkWeight;
     if (w < 1e-4) {
-      this.leftHand.position.copyFrom(this.leftHandRest);
-      this.rightHand.position.copyFrom(this.rightHandRest);
+      this.leftHand.position.set(
+        this.leftHandRest.x,
+        this.leftHandRest.y + breathHand,
+        this.leftHandRest.z,
+      );
+      this.rightHand.position.set(
+        this.rightHandRest.x,
+        this.rightHandRest.y + breathHand * 0.85,
+        this.rightHandRest.z,
+      );
       this.leftFoot.position.copyFrom(this.leftFootRest);
       this.rightFoot.position.copyFrom(this.rightFootRest);
-      this.bodyRoot.position.y = 0;
+      this.bodyRoot.position.y = breathBob;
       return;
     }
 
@@ -210,12 +294,12 @@ export class Minion {
 
     this.leftHand.position.set(
       this.leftHandRest.x,
-      this.leftHandRest.y + Minion.HAND_BOB * swing,
+      this.leftHandRest.y + Minion.HAND_BOB * swing + breathHand,
       this.leftHandRest.z + Minion.HAND_SWING * swing,
     );
     this.rightHand.position.set(
       this.rightHandRest.x,
-      this.rightHandRest.y - Minion.HAND_BOB * swing * 0.6,
+      this.rightHandRest.y - Minion.HAND_BOB * swing * 0.6 + breathHand * 0.85,
       this.rightHandRest.z - handSwing * swing,
     );
 
@@ -233,7 +317,7 @@ export class Minion {
     );
 
     this.bodyRoot.position.y =
-      Math.abs(Math.sin(this.walkPhase)) * Minion.BODY_BOB * w;
+      Math.abs(Math.sin(this.walkPhase)) * Minion.BODY_BOB * w + breathBob;
   }
 
   private applyTurn(dt: number): void {
@@ -245,6 +329,58 @@ export class Minion {
     } else {
       this.root.rotation.y += Math.sign(diff) * maxStep;
     }
+  }
+
+  /**
+   * 眨眼待机：约 2.4–5.2s 眨一次，闭眼 ~0.11s；
+   * 约 28% 概率连眨（中间睁 ~0.07s，再闭 ~0.08s）。
+   */
+  private updateBlink(dt: number): void {
+    if (!this.blinkEnabled) return;
+
+    // 闭眼阶段
+    if (this.blinkClosedT > 0) {
+      this.blinkClosedT -= dt;
+      if (this.blinkClosedT > 0) return;
+
+      this.setEyesClosed(false);
+      if (this.pendingDoubleBlink) {
+        this.pendingDoubleBlink = false;
+        this.blinkFollowUp = true;
+        this.blinkTimer = 0.07; // 极短睁眼后立刻再眨
+      } else {
+        this.blinkTimer =
+          Minion.BLINK_GAP_MIN +
+          Math.random() * (Minion.BLINK_GAP_MAX - Minion.BLINK_GAP_MIN);
+      }
+      return;
+    }
+
+    // 睁眼等待
+    this.blinkTimer -= dt;
+    if (this.blinkTimer > 0) return;
+
+    this.setEyesClosed(true);
+    if (this.blinkFollowUp) {
+      this.blinkFollowUp = false;
+      this.blinkClosedT = Minion.BLINK_CLOSED_DOUBLE;
+      this.pendingDoubleBlink = false;
+    } else {
+      this.blinkClosedT = Minion.BLINK_CLOSED;
+      this.pendingDoubleBlink = Math.random() < 0.28;
+    }
+  }
+
+  private setEyesClosed(closed: boolean): void {
+    if (this.eyesClosed === closed) return;
+    this.eyesClosed = closed;
+    this.bodyMat.diffuseTexture = getFaceTexture(
+      this.scene,
+      this.skinColor,
+      this.faceStyle,
+      this.mosaicFace,
+      closed,
+    );
   }
 
   getFocusPoint(out = new Vector3()): Vector3 {
