@@ -123,9 +123,13 @@ export class SpellProjectileSystem {
           Math.abs(nextPos.x) >= 19.8 || Math.abs(nextPos.z) >= 19.8;
 
         if (hitRes.hit || outOfBounds) {
-          if (hitRes.hitMinion?.physicsProxy) {
-            // 给物理胶囊施加平滑后退冲击力，防止由于一帧拉回渲染坐标导致的闪烁跳变
-            hitRes.hitMinion.physicsProxy.applyHitKnockback(b.direction, 2.0);
+          if (hitRes.hitMinion) {
+            if (hitRes.hitMinion.physicsProxy) {
+              // 给物理胶囊施加平滑后退冲击力，防止由于一帧拉回渲染坐标导致的闪烁跳变
+              hitRes.hitMinion.physicsProxy.applyHitKnockback(b.direction, 2.0);
+            }
+            // 造成 25 点法术伤害
+            hitRes.hitMinion.takeDamage(25, b.direction);
           }
           b.mesh.dispose();
           this.bullets.splice(i, 1);

@@ -288,8 +288,8 @@ export class HubWorld implements GameWorld {
     return this.teleportPad.getVisualCharge01();
   }
 
-  getDefaultLandingXZ(): { x: number; z: number } {
-    return this.teleportPad.getLandingXZ();
+  getDefaultLandingXZ(yaw?: number): { x: number; z: number } {
+    return this.teleportPad.getLandingXZ(yaw);
   }
 
   snapshotCamera(): CameraStateSnapshot {
@@ -332,7 +332,11 @@ export class HubWorld implements GameWorld {
     }
     this.setGridVisible(opts.showGrid);
 
-    const spawn = opts.spawn ?? this.teleportPad.getLandingXZ();
+    if (opts.spawnYaw !== undefined) {
+      this.minion.setRotationY(opts.spawnYaw);
+    }
+
+    const spawn = opts.spawn ?? this.teleportPad.getLandingXZ(opts.spawnYaw);
 
     if (opts.playLandingWarp && this.onRequestLandingWarp) {
       this.onRequestLandingWarp(
@@ -343,6 +347,8 @@ export class HubWorld implements GameWorld {
       );
     } else if (opts.spawn) {
       this.teleportPlayer(spawn.x, spawn.z);
+    } else {
+      this.minionPhys.teleportToTarget();
     }
 
     this.setCameraMode(opts.cameraMode, opts.canvas, opts.menuOpen);

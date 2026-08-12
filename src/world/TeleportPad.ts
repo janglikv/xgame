@@ -18,11 +18,45 @@ export class TeleportPad {
   static readonly DEFAULT_X = 15;
   static readonly DEFAULT_Z = 0;
   /**
-   * 传送落地相对阵心偏移。
-   * 固定俯视镜头 α=0 时屏幕「下」= 世界 −Z；落在阵外避免一落地又站上触发。
+   * 传送落地相对阵心偏移距离（米）。
+   * 必须大于 RADIUS(0.725)，落在阵外避免一落地又站上触发。
    */
+  static readonly LANDING_DISTANCE = 1.6;
+  /** 默认备用固定偏移（未提供 yaw 时使用，面向 -Z 方向） */
   static readonly LANDING_OFFSET_X = 0;
   static readonly LANDING_OFFSET_Z = -1.6;
+
+  /**
+   * 传送成功后的落地点。
+   * 若传入角色朝向 yaw，则根据角色前方延伸 LANDING_DISTANCE 确定落点；
+   * 否则保留默认 fallback 偏移。
+   */
+  getLandingXZ(yaw?: number): { x: number; z: number } {
+    if (yaw !== undefined) {
+      return {
+        x: this.x + Math.sin(yaw) * TeleportPad.LANDING_DISTANCE,
+        z: this.z + Math.cos(yaw) * TeleportPad.LANDING_DISTANCE,
+      };
+    }
+    return {
+      x: this.x + TeleportPad.LANDING_OFFSET_X,
+      z: this.z + TeleportPad.LANDING_OFFSET_Z,
+    };
+  }
+
+  /** 枢纽默认阵的落地点（无实例时用） */
+  static defaultLandingXZ(yaw?: number): { x: number; z: number } {
+    if (yaw !== undefined) {
+      return {
+        x: TeleportPad.DEFAULT_X + Math.sin(yaw) * TeleportPad.LANDING_DISTANCE,
+        z: TeleportPad.DEFAULT_Z + Math.cos(yaw) * TeleportPad.LANDING_DISTANCE,
+      };
+    }
+    return {
+      x: TeleportPad.DEFAULT_X + TeleportPad.LANDING_OFFSET_X,
+      z: TeleportPad.DEFAULT_Z + TeleportPad.LANDING_OFFSET_Z,
+    };
+  }
   /** 触发半径（世界单位，原 1.45 缩小一倍） */
   static readonly RADIUS = 0.725;
   /** 光柱高度 */
@@ -156,25 +190,6 @@ export class TeleportPad {
     const dx = px - this.x;
     const dz = pz - this.z;
     return dx * dx + dz * dz <= this.radius * this.radius;
-  }
-
-  /**
-   * 传送成功后的落地点（阵心 + LANDING_OFFSET，默认在阵「下方」）。
-   * 与触发圆分离，配合 disarm 双重避免循环传送。
-   */
-  getLandingXZ(): { x: number; z: number } {
-    return {
-      x: this.x + TeleportPad.LANDING_OFFSET_X,
-      z: this.z + TeleportPad.LANDING_OFFSET_Z,
-    };
-  }
-
-  /** 枢纽默认阵的落地点（无实例时用） */
-  static defaultLandingXZ(): { x: number; z: number } {
-    return {
-      x: TeleportPad.DEFAULT_X + TeleportPad.LANDING_OFFSET_X,
-      z: TeleportPad.DEFAULT_Z + TeleportPad.LANDING_OFFSET_Z,
-    };
   }
 
   /** 传送落地后调用：必须先离开再站上才重新蓄力 */

@@ -33,6 +33,8 @@ export interface WorldActivateOptions {
   appearance?: MinionAppearance;
   /** 覆盖出生点；缺省用世界自己的默认/存档点 */
   spawn?: { x: number; z: number };
+  /** 诞生/落地的角色朝向 yaw */
+  spawnYaw?: number;
   /** 是否播放落地下落动画 */
   playLandingWarp?: boolean;
 }
@@ -70,10 +72,10 @@ export interface GameWorld {
   getTeleportCharge01(): number;
 
   /**
-   * 传送进入本世界时的默认落点（通常在阵外下方）。
-   * WorldRouter 切场景时使用，避免落在阵心循环触发。
+   * 传送进入本世界时的默认落点。
+   * 可传入角色当前朝向 yaw，计算落在传送阵前方一点的位置；未传则使用默认 fallback。
    */
-  getDefaultLandingXZ(): { x: number; z: number };
+  getDefaultLandingXZ(yaw?: number): { x: number; z: number };
 
   /**
    * 成为当前活动世界：挂相机、同步外观/网格、必要时落地动画与传送阵 disarm。

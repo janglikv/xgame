@@ -237,6 +237,13 @@ export class Minion {
   /** 下一次闭眼是连眨的第二下 */
   private blinkFollowUp = false;
 
+  private isPunching = false;
+  private punchProgress = 0;
+  private readonly punchDuration = 0.32;
+  private punchCombo = 0;
+  private punchHitTriggered = false;
+  private onPunchHitCallback?: () => void;
+
   constructor(scene: Scene, x = 0, z = 0, options: MinionOptions = {}) {
     const facePositiveX = options.facePositiveX ?? true;
     const shadowGen = options.shadowGenerator;
@@ -406,6 +413,57 @@ export class Minion {
     if (this.staffFx) {
       this.staffFx.orb.scaling.set(1.65, 1.65, 1.65);
     }
+  }
+
+  /** 受到伤害时的事件回调 */
+  onTakeDamage?: (damage: number, dir?: Vector3) => void;
+
+  /** 对角色施加伤害 */
+  takeDamage(amount: number, dir?: Vector3): void {
+    this.onTakeDamage?.(amount, dir);
+  }
+
+  /** 获取角色当前 Yaw 旋转角（弧度） */
+  getRotationY(): number {
+    return this.root.rotation.y;
+  }
+
+  /** 触发空手近战挥拳击打 */
+  triggerMeleePunch(onHit?: () => void): boolean {
+    if (this.hasStaff()) return false;
+    if (this.isPunching && this.punchProgress < 0.18) {
+      return false;
+    }
+    this.punchCombo = (this.punchCombo + 1) % 2;
+    this.punchProgress = 0;
+    this.punchHitTriggered = false;
+    this.onPunchHitCallback = onHit;
+    this.isPunching = true;
+    return true;
+  }
+
+  isMeleePunching(): boolean {
+    return this.isPunching;
+  }
+
+  /** 获取当前出拳手（拳头落点）的世界坐标 */
+  getAttackingHandWorldPos(): Vector3 {
+    const isRight = this.punchCombo === 0;
+    const hand = isRight ? this.rightHand : this.leftHand;
+    hand.computeWorldMatrix(true);
+    return hand.absolutePosition.clone();
+  }
+
+  /** 获取角色当前在 XZ 平面上的标准正前方单位向量 */
+  getForwardVector(): Vector3 {
+    const yaw = this.root.rotation.y;
+    return new Vector3(Math.sin(yaw), 0, Math.cos(yaw));
+  }
+
+  /** 强制设置角色 Yaw 旋转角（弧度），同时重置 targetYaw */
+  setRotationY(yaw: number): void {
+    this.root.rotation.y = yaw;
+    this.targetYaw = yaw;
   }
 
   /** 获取法杖当前在世界空间中的真实水平前向向量 */
@@ -634,6 +692,85 @@ export class Minion {
 
       this.bodyRoot.position.y =
         Math.abs(Math.sin(this.walkPhase)) * Minion.BODY_BOB * w + breathBob;
+    }
+
+    // 空手近战挥拳动画（高流畅度三阶段前摇-直出-收回）
+    if (this.isPunching) {
+      this.punchProgress += dt;
+      const p = Math.min(1, this.punchProgress / this.punchDuration);
+
+      // 约 35% 帧处触发打击点（扇形范围判定与特效）
+      if (p >= 0.35 && !this.punchHitTriggered) {
+        this.punchHitTriggered = true;
+        this.onPunchHitCallback?.();
+      }
+
+      const isRight = this.punchCombo === 0;
+      const punchHand = isRight ? this.rightHand : this.leftHand;
+      const otherHand = isRight ? this.leftHand : this.rightHand;
+      const punchRest = isRight ? this.rightHandRest : this.leftHandRest;
+      const otherRest = isRight ? this.leftHandRest : this.rightHandRest;
+      const sideSign = isRight ? 1 : -1;
+
+      if (p < 0.3) {
+        // Phase 1 (0 ~ 0.3): 前摇蓄力拉拳，身体微拧
+        const t1 = p / 0.3;
+        punchHand.position.set(
+          punchRest.x + 0.08 * sideSign * t1,
+          punchRest.y + 0.12 * t1,
+          punchRest.z - 0.3 * t1,
+        );
+        this.torso.rotation.y = -0.3 * sideSign * t1;
+        this.torso.rotation.x = -0.08 * t1;
+      } else if (p < 0.6) {
+        // Phase 2 (0.3 ~ 0.6): 暴风直拳冲出，躯干向前下压
+        const t2 = (p - 0.3) / 0.3;
+        const s2 = t2 * t2 * (3 - 2 * t2);
+
+        const startZ = punchRest.z - 0.3;
+        const targetZ = 0.95;
+        const currZ = startZ + (targetZ - startZ) * s2;
+
+        punchHand.position.set(
+          punchRest.x * (1 - s2) + (-0.12 * sideSign) * s2,
+          punchRest.y * (1 - s2) + 0.58 * s2,
+          currZ,
+        );
+
+        otherHand.position.set(
+          otherRest.x * (1 - s2 * 0.4),
+          otherRest.y + 0.15 * s2,
+          otherRest.z - 0.18 * s2,
+        );
+
+        this.torso.rotation.y = -0.3 * sideSign * (1 - s2) + 0.4 * sideSign * s2;
+        this.torso.rotation.x = -0.08 * (1 - s2) + 0.26 * s2;
+      } else {
+        // Phase 3 (0.6 ~ 1.0): 快速收拳恢复
+        const t3 = (p - 0.6) / 0.4;
+        const s3 = 1 - t3;
+
+        punchHand.position.set(
+          punchRest.x + (-0.12 * sideSign - punchRest.x) * s3,
+          punchRest.y + (0.58 - punchRest.y) * s3,
+          punchRest.z + (0.95 - punchRest.z) * s3,
+        );
+
+        otherHand.position.set(
+          otherRest.x * (1 - s3 * 0.4),
+          otherRest.y + 0.15 * s3,
+          otherRest.z - 0.18 * s3,
+        );
+
+        this.torso.rotation.y = 0.4 * sideSign * s3;
+        this.torso.rotation.x = 0.26 * s3;
+      }
+
+      if (p >= 1) {
+        this.isPunching = false;
+        this.torso.rotation.x = 0;
+        this.torso.rotation.y = 0;
+      }
     }
 
     // 瞄准姿态调整：右手臂位姿插值 & 法杖实时旋转指向目标点

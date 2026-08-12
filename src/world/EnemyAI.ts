@@ -2,6 +2,7 @@ import type { Minion } from './Minion';
 import type { MinionPhysicsProxy } from './physics/MinionPhysicsProxy';
 import type { SpellProjectileSystem } from './SpellProjectileSystem';
 import type { StaffStyle } from './minion/staff';
+import { HealthBar } from './HealthBar';
 
 export interface GroupAggroState {
   isGroupAggroLocked: boolean;
@@ -30,17 +31,21 @@ export interface EnemyAIOptions {
   spellStyle?: StaffStyle;
   /** 同组共享仇恨状态控制 */
   groupState?: GroupAggroState;
+  /** 敌军最大生命值（默认 100） */
+  maxHp?: number;
 }
 
 /**
  * 极简敌军 AI：
  * 1. 在固定点 (spawnX, spawnZ) 两侧 (±patrolRadius) 来回踱步巡逻（支持 X 轴横向 / Z 轴纵向）；
  * 2. 同组中任意 1 人发现玩家，全组共享仇恨拉开 5 米锁定；
- * 3. 连续发射 2 次法术后各自强制随机选向踱步 0.5 秒避让。
+ * 3. 连续发射 2 次法术后各自强制随机选向踱步 0.5 秒避让；
+ * 4. 挂载 3D 悬浮血条，支持受击扣血与倒下复活。
  */
 export class EnemyAI {
   readonly enemy: Minion;
   readonly enemyPhys: MinionPhysicsProxy;
+  readonly healthBar: HealthBar;
   private readonly spellSystem: SpellProjectileSystem;
 
   private spawnX: number;
@@ -64,6 +69,11 @@ export class EnemyAI {
   private forcedPatrolTimer = 0;
   /** 单体仇恨锁定 */
   private isAggroLocked = false;
+
+  /** 是否处于击败死亡倒下状态 */
+  private isDead = false;
+  /** 击败后复活倒计时（秒） */
+  private respawnTimer = 0;
 
   constructor(
     enemy: Minion,
@@ -89,10 +99,63 @@ export class EnemyAI {
 
     // 随机错开首次攻击，增强自然感
     this.cooldownTimer = 0.6 + Math.random() * 0.4;
+
+    // 创建 3D 悬浮血条 (头顶 Y+0.62)
+    this.healthBar = new HealthBar(enemy.root.getScene(), enemy.root, {
+      maxHp: options.maxHp ?? 100,
+      offsetY: 0.62,
+    });
+
+    // 绑定 Minion 受击事件
+    this.enemy.onTakeDamage = (amount) => this.takeDamage(amount);
+  }
+
+  takeDamage(amount: number): void {
+    if (this.isDead) return;
+
+    this.healthBar.takeDamage(amount);
+
+    // 受击时激怒敌人拉起仇恨
+    if (this.groupState) {
+      this.groupState.isGroupAggroLocked = true;
+    } else {
+      this.isAggroLocked = true;
+    }
+
+    if (this.healthBar.isDead()) {
+      this.die();
+    }
+  }
+
+  private die(): void {
+    this.isDead = true;
+    this.respawnTimer = 4.5; // 4.5 秒后在 Spawn 点自动复活刷新
+    this.enemy.root.setEnabled(false);
+    this.healthBar.setVisible(false);
+    this.enemyPhys.setHorizontalVelocity(0, 0);
+  }
+
+  private respawn(): void {
+    this.isDead = false;
+    this.enemy.root.position.set(this.spawnX, 0, this.spawnZ);
+    this.enemyPhys.teleportToTarget();
+
+    this.healthBar.setHp(this.healthBar.getMaxHp());
+    this.enemy.root.setEnabled(true);
+    this.healthBar.setVisible(true);
   }
 
   /** 每帧更新 AI 逻辑 */
   update(dt: number, targetPlayer: Minion, allEnemies?: Minion[]): void {
+    if (this.isDead) {
+      this.respawnTimer -= dt;
+      if (this.respawnTimer <= 0) {
+        this.respawn();
+      }
+      return;
+    }
+
+    this.healthBar.update(dt);
     const ePos = this.enemy.root.position;
     const pPos = targetPlayer.root.position;
 
@@ -253,5 +316,9 @@ export class EnemyAI {
     // 发射能量弹并触发法杖火焰脉冲特效（敌军子弹速度降低一倍：4.5 m/s）
     this.spellSystem.spawnOrb(tipPos, shootDir, this.spellStyle, this.enemy, 4.5);
     this.enemy.triggerStaffShootFx();
+  }
+
+  dispose(): void {
+    this.healthBar.dispose();
   }
 }

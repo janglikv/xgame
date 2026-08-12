@@ -150,14 +150,20 @@ export class WorldRouter {
       const from = fromId ? this.worlds.get(fromId) ?? null : null;
       const appearance = from?.getAppearance();
 
-      // 离开前记住站位
+      // 离开前记住站位与朝向
+      let playerYaw: number | undefined;
       if (from) {
         this.spawns[from.id] = from.getPlayerXZ();
+        playerYaw = from.getPlayer().getRotationY();
       }
 
       const world = await this.ensureWorld(target, appearance);
 
-      const spawn = this.resolveSpawn(world, opts.restorePosition === true);
+      const spawn = this.resolveSpawn(
+        world,
+        opts.restorePosition === true,
+        playerYaw,
+      );
 
       from?.deactivate();
 
@@ -168,6 +174,7 @@ export class WorldRouter {
         showGrid: this.ctx.getShowGrid(),
         appearance: appearance ?? world.getAppearance(),
         spawn,
+        spawnYaw: playerYaw,
         playLandingWarp: !opts.isInitialLoad,
       };
       world.activate(activateOpts);
@@ -238,11 +245,12 @@ export class WorldRouter {
   private resolveSpawn(
     world: GameWorld,
     restore: boolean,
+    yaw?: number,
   ): { x: number; z: number } {
     if (restore) {
-      return this.spawns[world.id] ?? world.getDefaultLandingXZ();
+      return this.spawns[world.id] ?? world.getDefaultLandingXZ(yaw);
     }
-    return world.getDefaultLandingXZ();
+    return world.getDefaultLandingXZ(yaw);
   }
 
   private async ensureWorld(

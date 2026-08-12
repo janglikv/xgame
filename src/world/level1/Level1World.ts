@@ -302,8 +302,8 @@ export class Level1World implements GameWorld {
     return this.teleportPad.getVisualCharge01();
   }
 
-  getDefaultLandingXZ(): { x: number; z: number } {
-    const p = this.teleportPad.getLandingXZ();
+  getDefaultLandingXZ(yaw?: number): { x: number; z: number } {
+    const p = this.teleportPad.getLandingXZ(yaw);
     return clampLevel1Position(p.x, p.z);
   }
 
@@ -313,8 +313,12 @@ export class Level1World implements GameWorld {
     }
     this.setGridVisible(opts.showGrid);
 
-    // 默认落在阵下方，避免 activate 时仍站在阵心
-    const raw = opts.spawn ?? this.teleportPad.getLandingXZ();
+    if (opts.spawnYaw !== undefined) {
+      this.minion.setRotationY(opts.spawnYaw);
+    }
+
+    // 默认落在阵前方一点，避免 activate 时仍站在阵心
+    const raw = opts.spawn ?? this.teleportPad.getLandingXZ(opts.spawnYaw);
     const spawn = clampLevel1Position(raw.x, raw.z);
 
     if (opts.playLandingWarp && this.onRequestLandingWarp) {
@@ -383,6 +387,7 @@ export class Level1World implements GameWorld {
     this.minionPhys.dispose();
     for (const e of this.enemies) {
       e.phys.dispose();
+      e.ai.dispose();
     }
     this.scene.dispose();
   }

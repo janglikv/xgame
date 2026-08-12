@@ -14,6 +14,8 @@ import { HAT_LABELS, HAT_STYLES } from './minion/hat';
 import { STAFF_LABELS, STAFF_STYLES } from './minion/staff';
 import { MinionPhysicsProxy } from './physics/MinionPhysicsProxy';
 
+import { HealthBar } from './HealthBar';
+
 const _demoVel = new Vector3();
 
 /** 展示行 category → E 键部分替换槽位 */
@@ -162,6 +164,7 @@ export function spawnMinionDemoLineup(
 
   const minions: Minion[] = [];
   const physicsProxies: MinionPhysicsProxy[] = [];
+  const healthBars: HealthBar[] = [];
 
   DEMO_ROWS.forEach((row, rowIndex) => {
     const x = x0 + rowIndex * rowGap;
@@ -180,9 +183,23 @@ export function spawnMinionDemoLineup(
       });
       minions.push(minion);
 
+      const scaleMul = preset.options.scaleMultiplier ?? 1;
+      const healthBar = new HealthBar(scene, minion.root, {
+        maxHp: 100,
+        offsetY: 0.85 * scaleMul,
+      });
+      minion.onTakeDamage = (amount) => {
+        healthBar.takeDamage(amount);
+        if (healthBar.isDead()) {
+          setTimeout(() => {
+            healthBar.setHp(100);
+          }, 4000);
+        }
+      };
+      healthBars.push(healthBar);
+
       if (usePhysics) {
         // 体型缩小的展示位用略矮胶囊；pushable 才能被主角推走
-        const scaleMul = preset.options.scaleMultiplier ?? 1;
         const proxy = new MinionPhysicsProxy(scene, minion.root, {
           mode: 'pushable',
           radius: physicsRadius * Math.max(0.55, scaleMul),
@@ -199,6 +216,7 @@ export function spawnMinionDemoLineup(
     minions,
     physicsProxies,
     update(dt: number): void {
+      for (const hb of healthBars) hb.update(dt);
       // 上一帧物理结果 → 表现位姿；被推时跟着动、转向、走路动画
       if (physicsProxies.length > 0) {
         for (let i = 0; i < physicsProxies.length; i++) {
