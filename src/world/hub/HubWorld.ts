@@ -1,0 +1,418 @@
+import type {
+  ArcRotateCamera,
+  Engine,
+  Scene,
+  ShadowGenerator,
+} from '@babylonjs/core';
+import { Vector3 } from '@babylonjs/core';
+import {
+  loadCameraState,
+  type CameraStateSnapshot,
+} from '../../storage/cameraState';
+import { loadFloorSurfaceState } from '../../storage/floorState';
+import { loadMinionAppearanceState } from '../../storage/minionAppearanceState';
+import type { CameraMode } from '../../storage/settingsState';
+import type {
+  GameWorld,
+  WorldActivateOptions,
+  WorldFrameContext,
+  WorldTransition,
+} from '../GameWorld';
+import { Floor } from '../Floor';
+import { FloorPickerGallery } from '../FloorPickerGallery';
+import { HoverOutline } from '../HoverOutline';
+import { Minion, type MinionAppearance } from '../Minion';
+import { spawnMinionDemoLineup, type DemoLineup } from '../MinionDemoLineup';
+import {
+  buildArenaColliders,
+  initPhysics,
+  MinionPhysicsProxy,
+} from '../physics';
+import { RangeRing } from '../RangeRing';
+import {
+  applyCameraMode,
+  addStandardLighting,
+  createDarkScene,
+  createFollowCamera,
+  defaultFocusY,
+} from '../shared/sceneBasics';
+import { SpatialAxesGrid } from '../SpatialAxesGrid';
+import { SpellProjectileSystem } from '../SpellProjectileSystem';
+import { TeleportPad } from '../TeleportPad';
+
+export interface CreateHubWorldOptions {
+  cameraMode: CameraMode;
+  /** 枢纽出生点 */
+  spawnX: number;
+  spawnZ: number;
+  freeCamera?: { alpha: number; beta: number; radius: number };
+  onAppearanceChanged?: (appearance: MinionAppearance) => void;
+  onRequestLandingWarp?: (
+    minion: Minion,
+    phys: MinionPhysicsProxy,
+    x: number,
+    z: number,
+  ) => void;
+}
+
+/**
+ * 枢纽：换装展台、地板选择、进关传送阵。
+ */
+export class HubWorld implements GameWorld {
+  readonly id = 'hub' as const;
+
+  readonly scene: Scene;
+  readonly camera: ArcRotateCamera;
+  readonly minion: Minion;
+  readonly minionPhys: MinionPhysicsProxy;
+  readonly spellSystem: SpellProjectileSystem;
+  readonly floor: Floor;
+  readonly floorPickerGallery: FloorPickerGallery;
+  readonly spatialAxesGrid: SpatialAxesGrid;
+  readonly teleportPad: TeleportPad;
+  readonly hoverOutline: HoverOutline;
+  readonly swapRangeRing: RangeRing;
+  readonly demoLineup: DemoLineup;
+  readonly shadowGen: ShadowGenerator;
+
+  private readonly onRequestLandingWarp?: CreateHubWorldOptions['onRequestLandingWarp'];
+  private wasMoving = false;
+  private onPlayerMoved: (() => void) | null = null;
+  private onPlayerStopped: (() => void) | null = null;
+  private readonly swapRange: number;
+
+  private constructor(
+    scene: Scene,
+    camera: ArcRotateCamera,
+    minion: Minion,
+    minionPhys: MinionPhysicsProxy,
+    spellSystem: SpellProjectileSystem,
+    floor: Floor,
+    floorPickerGallery: FloorPickerGallery,
+    spatialAxesGrid: SpatialAxesGrid,
+    teleportPad: TeleportPad,
+    hoverOutline: HoverOutline,
+    swapRangeRing: RangeRing,
+    demoLineup: DemoLineup,
+    shadowGen: ShadowGenerator,
+    onRequestLandingWarp?: CreateHubWorldOptions['onRequestLandingWarp'],
+  ) {
+    this.scene = scene;
+    this.camera = camera;
+    this.minion = minion;
+    this.minionPhys = minionPhys;
+    this.spellSystem = spellSystem;
+    this.floor = floor;
+    this.floorPickerGallery = floorPickerGallery;
+    this.spatialAxesGrid = spatialAxesGrid;
+    this.teleportPad = teleportPad;
+    this.hoverOutline = hoverOutline;
+    this.swapRangeRing = swapRangeRing;
+    this.demoLineup = demoLineup;
+    this.shadowGen = shadowGen;
+    this.onRequestLandingWarp = onRequestLandingWarp;
+    this.swapRange = RangeRing.DEFAULT_RADIUS;
+  }
+
+  static async create(
+    engine: Engine,
+    options: CreateHubWorldOptions,
+  ): Promise<HubWorld> {
+    const scene = createDarkScene(engine, { start: 22, end: 45 });
+    await initPhysics(scene);
+
+    const { shadowGen } = addStandardLighting(scene, {
+      half: 32,
+      mapSize: 2048,
+    });
+
+    const initialFloorSurface = loadFloorSurfaceState();
+    const floor = new Floor(scene, shadowGen, {
+      surface: initialFloorSurface,
+      centerWallSize: 3,
+      addLWall: true,
+    });
+    const floorPickerGallery = new FloorPickerGallery(scene, floor);
+    buildArenaColliders(scene, {
+      centerWallSize: 3,
+      addLWall: true,
+    });
+    const spatialAxesGrid = new SpatialAxesGrid(scene);
+
+    const teleportPad = new TeleportPad(
+      scene,
+      TeleportPad.DEFAULT_X,
+      TeleportPad.DEFAULT_Z,
+    );
+
+    let spawnX = options.spawnX;
+    let spawnZ = options.spawnZ;
+    if (Math.abs(spawnX) < 2.2 && Math.abs(spawnZ) < 2.2) {
+      spawnX = 0;
+      spawnZ = -4;
+    }
+
+    const minion = new Minion(scene, spawnX, spawnZ, {
+      facePositiveX: true,
+      shadowGenerator: shadowGen,
+      allBlack: true,
+      face: 'fierce',
+      redHat: true,
+      magicStaff: true,
+      scaleMultiplier: 0.5,
+      formation: 'crimson',
+    });
+    const savedAppearance = loadMinionAppearanceState();
+    if (savedAppearance) {
+      minion.applyPatch(savedAppearance);
+    }
+    if (options.onAppearanceChanged) {
+      minion.onAppearanceChanged = options.onAppearanceChanged;
+    }
+
+    const minionPhys = new MinionPhysicsProxy(scene, minion.root, {
+      mode: 'player',
+      radius: 0.13,
+      height: 0.38,
+      mass: 2.6,
+    });
+    minionPhys.teleportToTarget();
+
+    const demoLineup = spawnMinionDemoLineup(scene, shadowGen, {
+      x0: 1,
+      rowGap: 1.6,
+      zEnd: 5,
+      colGap: 1.1,
+      physics: true,
+    });
+
+    const hoverOutline = new HoverOutline(scene);
+    hoverOutline.registerMinions(demoLineup.minions);
+    const swapRangeRing = new RangeRing(scene, RangeRing.DEFAULT_RADIUS);
+    const spellSystem = new SpellProjectileSystem(scene);
+
+    const focusY = defaultFocusY(minion.getAppearance().scaleMultiplier);
+    const camera = createFollowCamera(scene, {
+      name: 'hubCam',
+      mode: options.cameraMode,
+      target: new Vector3(spawnX, focusY, spawnZ),
+      free: options.freeCamera,
+    });
+
+    return new HubWorld(
+      scene,
+      camera,
+      minion,
+      minionPhys,
+      spellSystem,
+      floor,
+      floorPickerGallery,
+      spatialAxesGrid,
+      teleportPad,
+      hoverOutline,
+      swapRangeRing,
+      demoLineup,
+      shadowGen,
+      options.onRequestLandingWarp,
+    );
+  }
+
+  setMovePersistenceHandlers(handlers: {
+    onMoved?: () => void;
+    onStopped?: () => void;
+  }): void {
+    this.onPlayerMoved = handlers.onMoved ?? null;
+    this.onPlayerStopped = handlers.onStopped ?? null;
+  }
+
+  getPlayer(): Minion {
+    return this.minion;
+  }
+
+  getPlayerPhys(): MinionPhysicsProxy {
+    return this.minionPhys;
+  }
+
+  getSpellSystem(): SpellProjectileSystem {
+    return this.spellSystem;
+  }
+
+  attachCamera(canvas: HTMLCanvasElement): void {
+    this.camera.attachControl(canvas, true);
+  }
+
+  detachCamera(): void {
+    this.camera.detachControl();
+  }
+
+  setCameraMode(
+    mode: CameraMode,
+    canvas: HTMLCanvasElement,
+    menuOpen: boolean,
+  ): void {
+    applyCameraMode(this.camera, mode, canvas, !menuOpen && mode === 'free');
+  }
+
+  /** 恢复上次自由镜头角度（切到 free 时由 App 调用） */
+  restoreFreeCameraAngles(): void {
+    const free = loadCameraState();
+    if (!free) return;
+    this.camera.alpha = free.alpha;
+    this.camera.beta = free.beta;
+    this.camera.radius = free.radius;
+  }
+
+  setGridVisible(visible: boolean): void {
+    this.spatialAxesGrid.setVisible(visible);
+  }
+
+  getAppearance(): MinionAppearance {
+    return this.minion.getAppearance();
+  }
+
+  applyAppearance(appearance: MinionAppearance): void {
+    this.minion.applyPatch(appearance);
+  }
+
+  getPlayerXZ(): { x: number; z: number } {
+    const p = this.minion.root.position;
+    return { x: p.x, z: p.z };
+  }
+
+  teleportPlayer(x: number, z: number): void {
+    this.minion.root.position.set(x, 0, z);
+    this.minionPhys.teleportToTarget();
+  }
+
+  getTeleportCharge01(): number {
+    return this.teleportPad.getVisualCharge01();
+  }
+
+  getDefaultLandingXZ(): { x: number; z: number } {
+    return this.teleportPad.getLandingXZ();
+  }
+
+  snapshotCamera(): CameraStateSnapshot {
+    return {
+      alpha: this.camera.alpha,
+      beta: this.camera.beta,
+      radius: this.camera.radius,
+      targetX: this.camera.target.x,
+      targetY: this.camera.target.y,
+      targetZ: this.camera.target.z,
+    };
+  }
+
+  /**
+   * 悬停展示目标后：
+   * - partial：只拷该行展示槽
+   * - full：全量外观
+   * @returns 是否消费了按键
+   */
+  tryApplyHoverAppearance(mode: 'partial' | 'full'): boolean {
+    const target = this.hoverOutline.getHovered();
+    if (!target || target === this.minion) return false;
+    if (!this.isInSwapRange(target)) {
+      this.swapRangeRing.show(target.root.position);
+      return true;
+    }
+    this.minion.applyFrom(target, mode);
+    this.hoverOutline.refreshSelection();
+    return true;
+  }
+
+  setHoverEnabled(enabled: boolean): void {
+    this.hoverOutline.setEnabled(enabled);
+    if (!enabled) this.hoverOutline.clear();
+  }
+
+  activate(opts: WorldActivateOptions): void {
+    if (opts.appearance) {
+      this.applyAppearance(opts.appearance);
+    }
+    this.setGridVisible(opts.showGrid);
+
+    const spawn = opts.spawn ?? this.teleportPad.getLandingXZ();
+
+    if (opts.playLandingWarp && this.onRequestLandingWarp) {
+      this.onRequestLandingWarp(
+        this.minion,
+        this.minionPhys,
+        spawn.x,
+        spawn.z,
+      );
+    } else if (opts.spawn) {
+      this.teleportPlayer(spawn.x, spawn.z);
+    }
+
+    this.setCameraMode(opts.cameraMode, opts.canvas, opts.menuOpen);
+    this.setHoverEnabled(!opts.menuOpen);
+    {
+      const focus = new Vector3();
+      this.minion.getFocusPoint(focus);
+      this.camera.setTarget(focus);
+    }
+    this.teleportPad.disarmUntilLeave();
+  }
+
+  deactivate(): void {
+    this.detachCamera();
+    this.hoverOutline.clear();
+    this.setHoverEnabled(false);
+    this.teleportPad.resetCharge();
+  }
+
+  update(ctx: WorldFrameContext): WorldTransition {
+    const { dt, menuOpen, moveWish, pointerOverCanvas } = ctx;
+
+    this.minionPhys.syncToTarget();
+
+    if (moveWish.moving) {
+      this.minion.faceToward(moveWish.dirX, moveWish.dirZ);
+      this.onPlayerMoved?.();
+    }
+    this.minionPhys.setHorizontalVelocity(moveWish.wishX, moveWish.wishZ);
+    this.minion.update(dt, moveWish.moving);
+    this.spellSystem.update(dt);
+    this.demoLineup.update(dt);
+    this.floorPickerGallery.update(this.minion.root.position);
+
+    if (!moveWish.moving && this.wasMoving) {
+      this.onPlayerStopped?.();
+    }
+    this.wasMoving = moveWish.moving;
+
+    const p = this.minion.root.position;
+    const onPad = this.teleportPad.contains(p.x, p.z);
+    if (this.teleportPad.update(dt, onPad && !menuOpen)) {
+      return { type: 'goto', world: 'level1' };
+    }
+
+    if (!menuOpen && pointerOverCanvas) {
+      this.hoverOutline.updateFromScenePick(this.scene);
+    }
+    this.swapRangeRing.update(dt);
+
+    return null;
+  }
+
+  dispose(): void {
+    this.spellSystem.dispose();
+    this.teleportPad.dispose();
+    this.minionPhys.dispose();
+    this.scene.dispose();
+  }
+
+  private isInSwapRange(target: Minion): boolean {
+    const a = this.minion.root.position;
+    const b = target.root.position;
+    return Math.hypot(a.x - b.x, a.z - b.z) <= this.swapRange;
+  }
+}
+
+export async function createHubWorld(
+  engine: Engine,
+  options: CreateHubWorldOptions,
+): Promise<HubWorld> {
+  return HubWorld.create(engine, options);
+}

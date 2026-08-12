@@ -17,12 +17,18 @@ export class TeleportPad {
   /** 默认放置 X */
   static readonly DEFAULT_X = 15;
   static readonly DEFAULT_Z = 0;
+  /**
+   * 传送落地相对阵心偏移。
+   * 固定俯视镜头 α=0 时屏幕「下」= 世界 −Z；落在阵外避免一落地又站上触发。
+   */
+  static readonly LANDING_OFFSET_X = 0;
+  static readonly LANDING_OFFSET_Z = -1.6;
   /** 触发半径（世界单位，原 1.45 缩小一倍） */
   static readonly RADIUS = 0.725;
   /** 光柱高度 */
   static readonly PILLAR_HEIGHT = 1.2;
   /** 站上后蓄力传送时间（秒） */
-  static readonly CHARGE_TIME = 1.5;
+  static readonly CHARGE_TIME = 0.75;
   /** 满蓄时相对默认转速的倍率（站上后要明显加速） */
   static readonly SPIN_MAX_MUL = 16;
   /** 空闲时细高光束：更极细的极光束半径比例 (3.5%) */
@@ -152,6 +158,25 @@ export class TeleportPad {
     return dx * dx + dz * dz <= this.radius * this.radius;
   }
 
+  /**
+   * 传送成功后的落地点（阵心 + LANDING_OFFSET，默认在阵「下方」）。
+   * 与触发圆分离，配合 disarm 双重避免循环传送。
+   */
+  getLandingXZ(): { x: number; z: number } {
+    return {
+      x: this.x + TeleportPad.LANDING_OFFSET_X,
+      z: this.z + TeleportPad.LANDING_OFFSET_Z,
+    };
+  }
+
+  /** 枢纽默认阵的落地点（无实例时用） */
+  static defaultLandingXZ(): { x: number; z: number } {
+    return {
+      x: TeleportPad.DEFAULT_X + TeleportPad.LANDING_OFFSET_X,
+      z: TeleportPad.DEFAULT_Z + TeleportPad.LANDING_OFFSET_Z,
+    };
+  }
+
   /** 传送落地后调用：必须先离开再站上才重新蓄力 */
   disarmUntilLeave(): void {
     this.requireLeave = true;
@@ -162,14 +187,22 @@ export class TeleportPad {
     this.charge = 0;
   }
 
-  /** 蓄力进度 0~1 */
+  /** 逻辑蓄力进度 0~1（离开阵立刻归零） */
   getCharge01(): number {
     return Math.min(1, this.charge / TeleportPad.CHARGE_TIME);
   }
 
   /**
+   * 视觉蓄力进度 0~1（离阵时平滑衰减，适合驱动黑场遮罩）。
+   * 蓄满触发传送时会锁在 1，避免 charge 清零导致遮罩闪回透明。
+   */
+  getVisualCharge01(): number {
+    return Math.min(1, this.visualCharge / TeleportPad.CHARGE_TIME);
+  }
+
+  /**
    * @param occupied 角色是否站在阵上
-   * @returns 是否本帧应触发传送（蓄满 1.5s）
+   * @returns 是否本帧应触发传送（蓄满 0.75s）
    */
   update(dt: number, occupied: boolean): boolean {
     let triggered = false;
@@ -180,6 +213,8 @@ export class TeleportPad {
     } else if (occupied) {
       this.charge = Math.min(TeleportPad.CHARGE_TIME, this.charge + dt);
       if (this.charge >= TeleportPad.CHARGE_TIME) {
+        // 触发瞬间视觉锁满，避免 charge 归零后黑场遮罩闪一下
+        this.visualCharge = TeleportPad.CHARGE_TIME;
         this.charge = 0;
         triggered = true;
       }
@@ -189,7 +224,10 @@ export class TeleportPad {
     }
 
     // 离阵平滑归位：若视觉蓄力大于逻辑蓄力，按 4x 速率快速衰减缩回归位（约 0.25s），避免闪现
-    if (this.charge > this.visualCharge) {
+    // 触发传送当帧不衰减，保证遮罩能接到 100% 全黑
+    if (triggered) {
+      this.visualCharge = TeleportPad.CHARGE_TIME;
+    } else if (this.charge > this.visualCharge) {
       this.visualCharge = this.charge;
     } else {
       const decaySpeed = TeleportPad.CHARGE_TIME * 4.0;
