@@ -39,12 +39,19 @@ import {
 import { computeCameraRelativeWish } from './input/cameraRelativeMove';
 import { FpsOverlay } from './ui/FpsOverlay';
 import { SettingsPanel } from './ui/SettingsPanel';
-import { createBlankWorld, type BlankWorld } from './world/blankWorld';
+import {
+  BLANK_PAD_X,
+  BLANK_PAD_Z,
+  clampBlankMapPosition,
+  createBlankWorld,
+  type BlankWorld,
+} from './world/level1World';
 import { loadFloorSurfaceState } from './storage/floorState';
 import { Floor } from './world/Floor';
 import { FloorPickerGallery } from './world/FloorPickerGallery';
 import { HoverOutline } from './world/HoverOutline';
 import { Minion } from './world/Minion';
+import { SpellProjectileSystem } from './world/SpellProjectileSystem';
 import { spawnMinionDemoLineup } from './world/MinionDemoLineup';
 import {
   buildArenaColliders,
@@ -101,8 +108,13 @@ async function initScene(): Promise<void> {
   const savedMinion = loadMinionState();
   const hubMinionX = savedMinion?.hubX ?? savedMinion?.x ?? 1;
   const hubMinionZ = savedMinion?.hubZ ?? savedMinion?.z ?? 0;
-  const blankMinionX = savedMinion?.blankX ?? TeleportPad.DEFAULT_X;
-  const blankMinionZ = savedMinion?.blankZ ?? TeleportPad.DEFAULT_Z;
+  // 第一关 20×20：默认出生在回程传送阵；旧存档越界坐标会钳制
+  const blankSpawnSaved = clampBlankMapPosition(
+    savedMinion?.blankX ?? BLANK_PAD_X,
+    savedMinion?.blankZ ?? BLANK_PAD_Z,
+  );
+  const blankMinionX = blankSpawnSaved.x;
+  const blankMinionZ = blankSpawnSaved.z;
 
   const minionX = hubMinionX;
   const minionZ = hubMinionZ;
@@ -291,7 +303,7 @@ async function initScene(): Promise<void> {
 
   // 鼠标悬停：深红整体外轮廓；仅展示阵列可作 E/R 替换源（不描主角也可悬停）
   const hoverOutline = new HoverOutline(scene);
-  hoverOutline.registerMinions([minion, ...demoLineup.minions]);
+  hoverOutline.registerMinions(demoLineup.minions);
   /** 外观替换最大距离；不够近时在主角脚下画红圈提示 */
   const SWAP_RANGE = RangeRing.DEFAULT_RADIUS;
   const swapRangeRing = new RangeRing(scene, SWAP_RANGE);
@@ -306,6 +318,12 @@ async function initScene(): Promise<void> {
     return distXZ(a.x, a.z, b.x, b.z) <= SWAP_RANGE;
   };
 
+  /** 法杖能量光球发射系统 */
+  const spellSystem = new SpellProjectileSystem(scene);
+  let blankSpellSystem: SpellProjectileSystem | null = null;
+  let shootCooldown = 0;
+  const SHOOT_INTERVAL = 0.20;
+
   /** 指针是否在画布上（leave 后勿用残留 pointerX/Y 重拾取） */
   let pointerOverCanvas = false;
   let isPointerDown = false;
@@ -313,6 +331,8 @@ async function initScene(): Promise<void> {
   canvas.addEventListener('pointerdown', (e) => {
     if (e.button === 0 || e.button === 2) {
       isPointerDown = true;
+      // 按下瞬间立刻重置冷却，触发第 1 发发射
+      shootCooldown = 0;
     }
   });
 
@@ -454,8 +474,12 @@ async function initScene(): Promise<void> {
     blankEnterBusy = true;
     try {
       const appearance = minion.getAppearance();
-      const spawnX = isInitialLoad ? blankMinionX : TeleportPad.DEFAULT_X;
-      const spawnZ = isInitialLoad ? blankMinionZ : TeleportPad.DEFAULT_Z;
+      // 非首屏进入：落在空白场景回程传送阵；首屏恢复存档位置
+      const spawnRawX = isInitialLoad ? blankMinionX : BLANK_PAD_X;
+      const spawnRawZ = isInitialLoad ? blankMinionZ : BLANK_PAD_Z;
+      const spawnClamped = clampBlankMapPosition(spawnRawX, spawnRawZ);
+      const spawnX = spawnClamped.x;
+      const spawnZ = spawnClamped.z;
 
       if (!blankWorld) {
         blankWorld = await createBlankWorld(
@@ -465,6 +489,7 @@ async function initScene(): Promise<void> {
           spawnX,
           spawnZ,
         );
+        blankSpellSystem = new SpellProjectileSystem(blankWorld.scene);
         blankWorld.camera.onViewMatrixChangedObservable.add(scheduleSaveCamera);
         blankWorld.spatialAxesGrid.setVisible(showGrid);
       } else {
@@ -732,6 +757,8 @@ async function initScene(): Promise<void> {
     const activeMinion =
       worldMode === 'blank' && blankWorld ? blankWorld.minion : minion;
 
+    shootCooldown = Math.max(0, shootCooldown - dt);
+
     if (
       isPointerDown &&
       pointerOverCanvas &&
@@ -750,6 +777,32 @@ async function initScene(): Promise<void> {
         if (t > 0) {
           const aimPoint = ray.origin.add(ray.direction.scale(t));
           activeMinion.setAimTarget(aimPoint);
+
+          // 仅当满足冷却且法杖与地面平行（动作前摇完成）时触发击发
+          if (shootCooldown <= 0 && activeMinion.isStaffHorizontal()) {
+            // 成功击发！赋予完整固定的 CD 间隔
+            shootCooldown = SHOOT_INTERVAL;
+
+            // 1. 发射起点：严格取自法杖尖端 (Orb)
+            const tipPos = activeMinion.getStaffTipWorldPos();
+
+            // 2. 发射方向：精准指向鼠标指针在 3D 世界地面的落点中心 (aimPoint)
+            // 解决首发子弹因模型转向延迟导致方向错误的问题，确保子弹轨迹精准穿过指针中心
+            const aimVec = aimPoint.subtract(tipPos);
+            aimVec.y = 0;
+            const shootDir =
+              aimVec.lengthSquared() > 1e-6
+                ? aimVec.normalize()
+                : activeMinion.getStaffForwardVector();
+
+            const style = activeMinion.getStaffStyle() ?? 'arcane';
+            const activeSpellSys =
+              worldMode === 'blank' && blankWorld
+                ? blankSpellSystem
+                : spellSystem;
+            activeSpellSys?.spawnOrb(tipPos, shootDir, style, activeMinion);
+            activeMinion.triggerStaffShootFx();
+          }
         }
       }
     } else {
@@ -788,6 +841,7 @@ async function initScene(): Promise<void> {
       }
       bw.minionPhys.setHorizontalVelocity(wish.wishX, wish.wishZ);
       bw.minion.update(dt, wish.moving);
+      blankSpellSystem?.update(dt);
 
       if (!wish.moving && wasMovingBlank) {
         saveMinionState(snapshotMinion());
@@ -829,6 +883,7 @@ async function initScene(): Promise<void> {
     minionPhys.setHorizontalVelocity(wish.wishX, wish.wishZ);
 
     minion.update(dt, wish.moving);
+    spellSystem.update(dt);
     demoLineup.update(dt);
     floorPickerGallery.update(minion.root.position);
 

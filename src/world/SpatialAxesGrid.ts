@@ -21,17 +21,24 @@ interface AxisExtents {
   z: number;
 }
 
+export interface SpatialAxesGridOptions {
+  /** X 轴半范围（米）；默认 20 */
+  extentX?: number;
+  /** Z 轴半范围（米）；默认 20 */
+  extentZ?: number;
+}
+
 /**
  * 空间坐标网格：XZ 轴 + 每米刻度点 + 地面（XZ）参考网格。
- * 约定：1 世界单位 = 1 米。配置内聚在类内，不对外传参。
+ * 约定：1 世界单位 = 1 米。
  *
- * 范围：X ∈ [-20, 20]，Z ∈ [-20, 20]（无 Y 轴）
+ * 默认范围：X ∈ [-20, 20]，Z ∈ [-20, 20]（无 Y 轴）
  * 网格仅画地板面，不画 XY / YZ 竖直面。
  */
 export class SpatialAxesGrid {
-  /** X：-20 ~ 20 */
+  /** X：默认 -20 ~ 20 */
   private static readonly EXTENT_X = 20;
-  /** Z：-20 ~ 20 */
+  /** Z：默认 -20 ~ 20 */
   private static readonly EXTENT_Z = 20;
   /** 刻度间隔（米） */
   private static readonly STEP = 1;
@@ -40,12 +47,12 @@ export class SpatialAxesGrid {
 
   readonly root: TransformNode;
 
-  constructor(scene: Scene) {
+  constructor(scene: Scene, options: SpatialAxesGridOptions = {}) {
     this.root = new TransformNode('SpatialAxesGrid', scene);
 
     const extents: AxisExtents = {
-      x: SpatialAxesGrid.EXTENT_X,
-      z: SpatialAxesGrid.EXTENT_Z,
+      x: options.extentX ?? SpatialAxesGrid.EXTENT_X,
+      z: options.extentZ ?? SpatialAxesGrid.EXTENT_Z,
     };
     const step = SpatialAxesGrid.STEP;
     const majorEvery = SpatialAxesGrid.MAJOR_EVERY;

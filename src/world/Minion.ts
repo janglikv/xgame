@@ -286,6 +286,7 @@ export class Minion {
       scene,
     );
     // 相对 torso 球心
+    body.metadata = { minion: this };
     body.position.set(0, 0, 0);
     body.rotation.y = Math.PI / 2;
     body.material = bodyMat;
@@ -308,6 +309,7 @@ export class Minion {
       limbSegments,
       appearance.lowPolyFlat,
     );
+    this.leftHand.metadata = { minion: this };
     this.leftHand.position.copyFrom(this.leftHandRest);
     this.leftHand.parent = this.bodyRoot;
     cast(this.leftHand, shadowGen);
@@ -320,6 +322,7 @@ export class Minion {
       limbSegments,
       appearance.lowPolyFlat,
     );
+    this.rightHand.metadata = { minion: this };
     this.rightHand.position.copyFrom(this.rightHandRest);
     this.rightHand.parent = this.bodyRoot;
     cast(this.rightHand, shadowGen);
@@ -383,6 +386,60 @@ export class Minion {
   /** 获取当前法杖款式 */
   getStaffStyle(): StaffStyle | null {
     return this.appearance.staff;
+  }
+
+  /** 获取法杖宝珠/顶端世界坐标 */
+  getStaffTipWorldPos(): Vector3 {
+    if (this.staffFx) {
+      return this.staffFx.orb.absolutePosition.clone();
+    }
+    return this.rightHand.absolutePosition.clone().addInPlace(new Vector3(0, 0.65, 0));
+  }
+
+  /** 发射能量光球时的顶端宝珠瞬间脉动放大 */
+  triggerStaffShootFx(): void {
+    if (this.staffFx) {
+      this.staffFx.orb.scaling.set(1.65, 1.65, 1.65);
+    }
+  }
+
+  /** 获取法杖当前在世界空间中的真实水平前向向量 */
+  getStaffForwardVector(): Vector3 {
+    if (this.staffFx) {
+      const tip = this.staffFx.orb.absolutePosition;
+      const root = this.staffFx.root.absolutePosition;
+      const dir = tip.subtract(root);
+      dir.y = 0;
+      if (dir.lengthSquared() > 1e-4) {
+        return dir.normalize();
+      }
+    }
+    const yaw = this.root.rotation.y;
+    return new Vector3(Math.sin(yaw), 0, Math.cos(yaw));
+  }
+
+  /** 判断法杖是否与地面平行（动作前摇完成） */
+  isStaffHorizontal(): boolean {
+    if (!this.staffFx) return false;
+    const tip = this.staffFx.orb.absolutePosition;
+    const root = this.staffFx.root.absolutePosition;
+    const dir = tip.subtract(root);
+    const len = dir.length();
+    if (len < 1e-4) return false;
+    // |dir.y| / len <= 0.25 (相当于倾角小于约 14.5 度)，代表法杖已平举与地面平行
+    return Math.abs(dir.y) / len <= 0.25;
+  }
+
+  /** 判断法杖指向是否已经就绪（完成转向并对齐目标方向） */
+  isStaffAimReady(): boolean {
+    if (!this.hasStaff()) return false;
+    if (this.aimWeight < 0.75) return false;
+    let diff = this.targetYaw - this.root.rotation.y;
+    diff =
+      ((diff + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) -
+      Math.PI;
+    // 角度差小于 ~12 度（0.21 弧度）视为指向就绪
+    return Math.abs(diff) <= 0.21;
   }
 
   /** 当前完整外观（拷贝） */
@@ -470,7 +527,6 @@ export class Minion {
   }
 
   update(dt: number, moving: boolean): void {
-    this.applyTurn(dt);
 
     // 瞄准动画过渡权重（手持法杖且设置了 aimTarget 时渐增）
     const isAiming = this.aimTarget !== null && this.appearance.staff !== null;
@@ -485,9 +541,10 @@ export class Minion {
       if (dx * dx + dz * dz > 1e-6) {
         const yaw = Math.atan2(dx, dz);
         this.targetYaw = yaw;
-        this.root.rotation.y = yaw;
       }
     }
+
+    this.applyTurn(dt);
 
     if (this.staffFx) updateStaffFx(this.staffFx, dt);
     this.formationBuff?.update(dt);
@@ -590,14 +647,11 @@ export class Minion {
 
     if (this.staffFx) {
       if (this.aimWeight > 0.001 && this.aimTarget) {
-        const rightHandWorldMat = this.rightHand.getWorldMatrix();
-        const staffWorldPos = Vector3.TransformCoordinates(
-          new Vector3(0, -0.06, 0),
-          rightHandWorldMat,
-        );
-        let dirWorld = this.aimTarget.subtract(staffWorldPos);
-        if (dirWorld.lengthSquared() > 1e-6) {
-          dirWorld = dirWorld.normalize();
+        const dx = this.aimTarget.x - this.root.position.x;
+        const dz = this.aimTarget.z - this.root.position.z;
+        if (dx * dx + dz * dz > 1e-6) {
+          const dirWorld = new Vector3(dx, 0, dz).normalize();
+          const rightHandWorldMat = this.rightHand.getWorldMatrix();
           const invHandMat = rightHandWorldMat.clone().invert();
           const dirInHand = Vector3.TransformNormal(
             dirWorld,

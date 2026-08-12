@@ -13,6 +13,10 @@ export interface ArenaColliderOptions {
   includeFloor?: boolean;
   /** 围墙高度覆盖（米）；地形起伏时可加高 */
   wallHeight?: number;
+  /** 场地半宽（X）；默认 Floor.HALF_X */
+  halfX?: number;
+  /** 场地半深（Z）；默认 Floor.HALF_Z */
+  halfZ?: number;
 }
 
 /**
@@ -25,8 +29,8 @@ export function buildArenaColliders(
 ): TransformNode {
   const includeFloor = options.includeFloor !== false;
   const root = new TransformNode('ArenaColliders', scene);
-  const halfX = Floor.HALF_X;
-  const halfZ = Floor.HALF_Z;
+  const halfX = options.halfX ?? Floor.HALF_X;
+  const halfZ = options.halfZ ?? Floor.HALF_Z;
   const t = Floor.WALL_THICKNESS;
   const h = options.wallHeight ?? Floor.WALL_HEIGHT;
   const floorThick = Floor.FLOOR_THICKNESS;
@@ -62,7 +66,7 @@ export function buildArenaColliders(
     );
     wall.position = new Vector3(0, wallY, z);
     wall.isVisible = false;
-    wall.isPickable = false;
+    wall.isPickable = true;
     wall.parent = root;
     new PhysicsAggregate(
       wall,
@@ -79,7 +83,7 @@ export function buildArenaColliders(
     );
     wall.position = new Vector3(x, wallY, 0);
     wall.isVisible = false;
-    wall.isPickable = false;
+    wall.isPickable = true;
     wall.parent = root;
     new PhysicsAggregate(
       wall,

@@ -111,6 +111,15 @@ export const FLOOR_SURFACE_PRESETS: FloorSurfacePreset[] = [
 
 export interface FloorOptions {
   surface?: FloorSurface;
+  /** 场地半宽（X 轴，米）；默认 {@link Floor.HALF_X}。围墙与可玩边界以此为准 */
+  halfX?: number;
+  /** 场地半深（Z 轴，米）；默认 {@link Floor.HALF_Z}。围墙与可玩边界以此为准 */
+  halfZ?: number;
+  /**
+   * 可视地板相对围墙四边外延的格数（1 格 = 1 米）。
+   * 仅扩大主场地贴图平面，不移动围墙；用于避免地图外纯黑空洞。
+   */
+  extend?: number;
 }
 
 const OFFICIAL_TEX_BASE =
@@ -118,12 +127,13 @@ const OFFICIAL_TEX_BASE =
 
 /**
  * 简单矩形场地：Y=0 平面地板 + 四周矮墙 + 外围兜底大地板。
- * 与坐标系范围对齐：X ±20、Z ±20。
+ * 默认与坐标系范围对齐：X ±20、Z ±20（边长 40×40）。
+ * 可通过 options.halfX / halfZ 覆盖可玩区；options.extend 让地板向外多铺一圈。
  */
 export class Floor {
   static readonly HALF_X = 20;
   static readonly HALF_Z = 20;
-  static readonly WALL_THICKNESS = 0.25;
+  static readonly WALL_THICKNESS = 1.0;
   static readonly WALL_HEIGHT = 0.5;
   static readonly GROUND_SIZE = 4000;
   static readonly FLOOR_THICKNESS = 0.05;
@@ -131,6 +141,12 @@ export class Floor {
 
   readonly root: TransformNode;
   readonly scene: Scene;
+  /** 本实例可玩区半宽（X，围墙位置） */
+  readonly halfX: number;
+  /** 本实例可玩区半深（Z，围墙位置） */
+  readonly halfZ: number;
+  /** 可视地板相对围墙的外延（米） */
+  readonly extend: number;
   private currentSurface: FloorSurface;
   private floorMesh?: Mesh;
   private groundMesh?: Mesh;
@@ -144,9 +160,15 @@ export class Floor {
     this.scene = scene;
     this.root = new TransformNode('Floor', scene);
     this.currentSurface = options.surface ?? 'tiles';
+    this.halfX = options.halfX ?? Floor.HALF_X;
+    this.halfZ = options.halfZ ?? Floor.HALF_Z;
+    this.extend = Math.max(0, options.extend ?? 0);
 
-    const sizeX = Floor.HALF_X * 2;
-    const sizeZ = Floor.HALF_Z * 2;
+    // 围墙按可玩区；主地板可外延，避免墙外一片黑
+    const floorHalfX = this.halfX + this.extend;
+    const floorHalfZ = this.halfZ + this.extend;
+    const floorSizeX = floorHalfX * 2;
+    const floorSizeZ = floorHalfZ * 2;
     const t = Floor.WALL_THICKNESS;
     const h = Floor.WALL_HEIGHT;
 
@@ -160,47 +182,37 @@ export class Floor {
     this.groundMesh.receiveShadows = false;
     this.groundMesh.parent = this.root;
 
-    // 矩形主场地 Plane
+    // 主场地贴图平面（可大于围墙范围）
     this.floorMesh = MeshBuilder.CreateGround(
       'FloorSurface',
-      { width: sizeX, height: sizeZ, subdivisions: 1 },
+      { width: floorSizeX, height: floorSizeZ, subdivisions: 1 },
       scene,
     );
     this.floorMesh.position.y = 0;
     this.floorMesh.receiveShadows = true;
     this.floorMesh.parent = this.root;
 
-    const wallY = h / 2;
-    const halfX = Floor.HALF_X;
-    const halfZ = Floor.HALF_Z;
+    const halfX = this.halfX;
+    const halfZ = this.halfZ;
 
-    // ±Z 长边（沿 X）
-    for (const [i, z] of [-halfZ - t / 2, halfZ + t / 2].entries()) {
-      const wall = MeshBuilder.CreateBox(
-        `WallLong_${i}`,
-        { width: sizeX + t * 2, height: h, depth: t },
-        scene,
-      );
-      wall.position = new Vector3(0, wallY, z);
-      wall.receiveShadows = true;
-      wall.parent = this.root;
-      shadowGenerator?.addShadowCaster(wall);
-      this.wallMeshes.push(wall);
-    }
+    // 单条首尾闭合路径：绕场地四周一整圈，4点梯形截面 Extrude 挤压无缝连贯
+    const loopPath = [
+      new Vector3(-halfX - t / 2, 0, -halfZ - t / 2),
+      new Vector3(halfX + t / 2, 0, -halfZ - t / 2),
+      new Vector3(halfX + t / 2, 0, halfZ + t / 2),
+      new Vector3(-halfX - t / 2, 0, halfZ + t / 2),
+      new Vector3(-halfX - t / 2, 0, -halfZ - t / 2),
+    ];
 
-    // ±X 短边（沿 Z）
-    for (const [i, x] of [-halfX - t / 2, halfX + t / 2].entries()) {
-      const wall = MeshBuilder.CreateBox(
-        `WallShort_${i}`,
-        { width: t, height: h, depth: sizeZ },
-        scene,
-      );
-      wall.position = new Vector3(x, wallY, 0);
-      wall.receiveShadows = true;
-      wall.parent = this.root;
-      shadowGenerator?.addShadowCaster(wall);
-      this.wallMeshes.push(wall);
-    }
+    const wall = createTrapezoidExtrudedWall(
+      'WallClosedLoop',
+      { path: loopPath, bottomWidth: t, topWidth: 0.5, height: h, close: true },
+      scene,
+    );
+    wall.receiveShadows = true;
+    wall.parent = this.root;
+    shadowGenerator?.addShadowCaster(wall);
+    this.wallMeshes.push(wall);
 
     // 初始化应用当前 Surface
     this.applySurface(this.currentSurface);
@@ -217,7 +229,17 @@ export class Floor {
   }
 
   private applySurface(surface: FloorSurface): void {
-    const { floorMat, wallMat, fallbackMat } = createMaterials(this.scene, surface);
+    // 贴图预设按默认 40m 场地校准；按可视地板边长等比缩放以保持米级对齐
+    const visualSizeX = (this.halfX + this.extend) * 2;
+    const visualSizeZ = (this.halfZ + this.extend) * 2;
+    const uMul = visualSizeX / (Floor.HALF_X * 2);
+    const vMul = visualSizeZ / (Floor.HALF_Z * 2);
+    const { floorMat, wallMat, fallbackMat } = createMaterials(
+      this.scene,
+      surface,
+      uMul,
+      vMul,
+    );
     if (this.floorMesh) {
       this.floorMesh.material = floorMat;
     }
@@ -232,10 +254,13 @@ export class Floor {
 
 /**
  * 材质生成器
+ * @param uMul / vMul 相对默认 40m 场地的 UV 缩放（保持每格世界米数不变）
  */
 function createMaterials(
   scene: Scene,
   surface: FloorSurface,
+  uMul = 1,
+  vMul = 1,
 ): {
   floorMat: StandardMaterial;
   wallMat: StandardMaterial;
@@ -244,6 +269,10 @@ function createMaterials(
   const preset =
     FLOOR_SURFACE_PRESETS.find((p) => p.id === surface) ||
     FLOOR_SURFACE_PRESETS[0];
+  const uScale = preset.uScale * uMul;
+  const vScale = preset.vScale * vMul;
+
+  const wallMat = createWallMaterialForSurface(surface, scene);
 
   if (surface === 'tiles') {
     const floorMat = new StandardMaterial('floorMat_tiles', scene);
@@ -254,8 +283,8 @@ function createMaterials(
       true,
       Texture.TRILINEAR_SAMPLINGMODE,
     );
-    diffuse.uScale = preset.uScale;
-    diffuse.vScale = preset.vScale;
+    diffuse.uScale = uScale;
+    diffuse.vScale = vScale;
     diffuse.wrapU = Texture.WRAP_ADDRESSMODE;
     diffuse.wrapV = Texture.WRAP_ADDRESSMODE;
     floorMat.diffuseTexture = diffuse;
@@ -264,7 +293,6 @@ function createMaterials(
     floorMat.specularPower = 32;
     floorMat.ambientColor = new Color3(0.35, 0.35, 0.38);
 
-    const wallMat = mat(scene, 'wallMat_tiles', 0x3a3d42);
     const fallbackMat = mat(scene, 'fallbackMat_tiles', 0x1a1b1e);
     return { floorMat, wallMat, fallbackMat };
   }
@@ -272,14 +300,13 @@ function createMaterials(
   if (surface === 'dirtGrass') {
     const floorMat = new StandardMaterial('floorMat_dirtGrass', scene);
     const tex = bakeDirtGrassTexture(scene, 512);
-    tex.uScale = preset.uScale;
-    tex.vScale = preset.vScale;
+    tex.uScale = uScale;
+    tex.vScale = vScale;
     floorMat.diffuseTexture = tex;
     floorMat.diffuseColor = Color3.White();
     floorMat.specularColor = Color3.Black();
     floorMat.ambientColor = new Color3(0.35, 0.38, 0.3);
 
-    const wallMat = mat(scene, 'wallMat_dirtGrass', 0x4a3f32);
     const fallbackMat = mat(scene, 'fallbackMat_dirtGrass', 0x2c241c);
     return { floorMat, wallMat, fallbackMat };
   }
@@ -287,15 +314,14 @@ function createMaterials(
   if (surface === 'cyberGrid') {
     const floorMat = new StandardMaterial('floorMat_cyberGrid', scene);
     const tex = bakeCyberGridTexture(scene, 512);
-    tex.uScale = preset.uScale;
-    tex.vScale = preset.vScale;
+    tex.uScale = uScale;
+    tex.vScale = vScale;
     floorMat.diffuseTexture = tex;
     // 微弱自发光，不再全量使用亮纹理做 emissiveTexture，避免夺目刺眼
     floorMat.emissiveColor = new Color3(0.06, 0.08, 0.12);
     floorMat.diffuseColor = new Color3(0.65, 0.65, 0.7);
     floorMat.specularColor = new Color3(0.1, 0.15, 0.25);
 
-    const wallMat = mat(scene, 'wallMat_cyberGrid', 0x120b20);
     const fallbackMat = mat(scene, 'fallbackMat_cyberGrid', 0x06030c);
     return { floorMat, wallMat, fallbackMat };
   }
@@ -303,13 +329,12 @@ function createMaterials(
   if (surface === 'checker') {
     const floorMat = new StandardMaterial('floorMat_checker', scene);
     const tex = bakeCheckerTexture(scene, 512);
-    tex.uScale = preset.uScale;
-    tex.vScale = preset.vScale;
+    tex.uScale = uScale;
+    tex.vScale = vScale;
     floorMat.diffuseTexture = tex;
     floorMat.diffuseColor = Color3.White();
     floorMat.specularColor = new Color3(0.2, 0.2, 0.2);
 
-    const wallMat = mat(scene, 'wallMat_checker', 0x2b2c30);
     const fallbackMat = mat(scene, 'fallbackMat_checker', 0x111215);
     return { floorMat, wallMat, fallbackMat };
   }
@@ -317,13 +342,12 @@ function createMaterials(
   if (surface === 'cobblestone') {
     const floorMat = new StandardMaterial('floorMat_cobblestone', scene);
     const tex = bakeCobblestoneTexture(scene, 512);
-    tex.uScale = preset.uScale;
-    tex.vScale = preset.vScale;
+    tex.uScale = uScale;
+    tex.vScale = vScale;
     floorMat.diffuseTexture = tex;
     floorMat.diffuseColor = Color3.White();
     floorMat.specularColor = new Color3(0.1, 0.1, 0.1);
 
-    const wallMat = mat(scene, 'wallMat_cobblestone', 0x3d3835);
     const fallbackMat = mat(scene, 'fallbackMat_cobblestone', 0x1c1917);
     return { floorMat, wallMat, fallbackMat };
   }
@@ -331,13 +355,12 @@ function createMaterials(
   if (surface === 'sand') {
     const floorMat = new StandardMaterial('floorMat_sand', scene);
     const tex = bakeSandTexture(scene, 512);
-    tex.uScale = preset.uScale;
-    tex.vScale = preset.vScale;
+    tex.uScale = uScale;
+    tex.vScale = vScale;
     floorMat.diffuseTexture = tex;
     floorMat.diffuseColor = Color3.White();
     floorMat.specularColor = Color3.Black();
 
-    const wallMat = mat(scene, 'wallMat_sand', 0x735a3b);
     const fallbackMat = mat(scene, 'fallbackMat_sand', 0x3d2f1d);
     return { floorMat, wallMat, fallbackMat };
   }
@@ -345,14 +368,13 @@ function createMaterials(
   if (surface === 'marble') {
     const floorMat = new StandardMaterial('floorMat_marble', scene);
     const tex = bakeMarbleTexture(scene, 512);
-    tex.uScale = preset.uScale;
-    tex.vScale = preset.vScale;
+    tex.uScale = uScale;
+    tex.vScale = vScale;
     floorMat.diffuseTexture = tex;
     floorMat.diffuseColor = Color3.White();
     floorMat.specularColor = new Color3(0.4, 0.4, 0.45);
     floorMat.specularPower = 64;
 
-    const wallMat = mat(scene, 'wallMat_marble', 0x484b54);
     const fallbackMat = mat(scene, 'fallbackMat_marble', 0x212328);
     return { floorMat, wallMat, fallbackMat };
   }
@@ -360,13 +382,12 @@ function createMaterials(
   if (surface === 'woodPlanks') {
     const floorMat = new StandardMaterial('floorMat_woodPlanks', scene);
     const tex = bakeWoodPlanksTexture(scene, 512);
-    tex.uScale = preset.uScale;
-    tex.vScale = preset.vScale;
+    tex.uScale = uScale;
+    tex.vScale = vScale;
     floorMat.diffuseTexture = tex;
     floorMat.diffuseColor = Color3.White();
     floorMat.specularColor = new Color3(0.15, 0.1, 0.05);
 
-    const wallMat = mat(scene, 'wallMat_woodPlanks', 0x4a2e1b);
     const fallbackMat = mat(scene, 'fallbackMat_woodPlanks', 0x24160c);
     return { floorMat, wallMat, fallbackMat };
   }
@@ -374,9 +395,124 @@ function createMaterials(
   // default 'dark'
   const floorMat = mat(scene, 'floorMat_dark', 0x1b1d20);
   floorMat.specularColor = new Color3(0.2, 0.2, 0.22);
-  const wallMat = mat(scene, 'wallMat_dark', 0x282b30);
   const fallbackMat = mat(scene, 'fallbackMat_dark', 0x101114);
   return { floorMat, wallMat, fallbackMat };
+}
+
+/**
+ * 用 4 个点构成的梯形截面（上小下大），沿着路径线段挤出（ExtrudeShape）生成管道围墙。
+ */
+function createTrapezoidExtrudedWall(
+  name: string,
+  options: {
+    path: Vector3[];
+    bottomWidth?: number;
+    topWidth?: number;
+    height?: number;
+    close?: boolean;
+  },
+  scene: Scene,
+): Mesh {
+  const b = options.bottomWidth ?? 1.2;
+  const a = options.topWidth ?? 0.5;
+  const h = options.height ?? 0.5;
+
+  // 1. 标准 4 点梯形截面 (内底、外底、外顶、内顶)
+  const shape = [
+    new Vector3(-b / 2, 0, 0),  // 1. 内侧底
+    new Vector3(b / 2, 0, 0),   // 2. 外侧底
+    new Vector3(a / 2, h, 0),   // 3. 外侧顶
+    new Vector3(-a / 2, h, 0),  // 4. 内侧顶
+    new Vector3(-b / 2, 0, 0),  // 闭合点
+  ];
+
+  // 2. 将低多面体截面沿路径挤出成整圈管道墙体
+  const wallMesh = MeshBuilder.ExtrudeShape(
+    name,
+    {
+      shape,
+      path: options.path,
+      closePath: options.close ?? true,
+      closeShape: true,
+      sideOrientation: Mesh.DOUBLESIDE,
+      updatable: false,
+    },
+    scene,
+  );
+
+  // 3. 强制使用 Flat Shading 扁平着色，消除法线平滑，呈现硬朗的低多面体（Low-Poly）几何棱角感
+  wallMesh.convertToFlatShadedMesh();
+
+  return wallMesh;
+}
+
+/**
+ * 根据当前地板 Presets 样式匹配纯色深色系围墙材质（无贴图，色调与地板主题呼应，依赖 Flat Shading 折光）
+ */
+function createWallMaterialForSurface(
+  surface: FloorSurface,
+  scene: Scene,
+): StandardMaterial {
+  const matName = `wallMat_${surface}`;
+  const existing = scene.getMaterialByName(matName);
+  if (existing && existing instanceof StandardMaterial) {
+    return existing;
+  }
+
+  const wallMat = new StandardMaterial(matName, scene);
+  wallMat.diffuseTexture = null;
+
+  switch (surface) {
+    case 'tiles':
+      wallMat.diffuseColor = new Color3(0.04, 0.05, 0.06);
+      wallMat.specularColor = new Color3(0.22, 0.24, 0.28);
+      wallMat.ambientColor = new Color3(0.02, 0.02, 0.03);
+      break;
+    case 'dirtGrass':
+      wallMat.diffuseColor = new Color3(0.03, 0.05, 0.03);
+      wallMat.specularColor = new Color3(0.18, 0.22, 0.16);
+      wallMat.ambientColor = new Color3(0.015, 0.02, 0.015);
+      break;
+    case 'cyberGrid':
+      wallMat.diffuseColor = new Color3(0.02, 0.03, 0.06);
+      wallMat.specularColor = new Color3(0.20, 0.24, 0.35);
+      wallMat.ambientColor = new Color3(0.01, 0.015, 0.03);
+      break;
+    case 'checker':
+      wallMat.diffuseColor = new Color3(0.03, 0.03, 0.04);
+      wallMat.specularColor = new Color3(0.20, 0.22, 0.25);
+      wallMat.ambientColor = new Color3(0.015, 0.015, 0.02);
+      break;
+    case 'cobblestone':
+      wallMat.diffuseColor = new Color3(0.05, 0.04, 0.03);
+      wallMat.specularColor = new Color3(0.22, 0.19, 0.16);
+      wallMat.ambientColor = new Color3(0.02, 0.02, 0.015);
+      break;
+    case 'sand':
+      wallMat.diffuseColor = new Color3(0.06, 0.04, 0.03);
+      wallMat.specularColor = new Color3(0.24, 0.18, 0.13);
+      wallMat.ambientColor = new Color3(0.025, 0.02, 0.015);
+      break;
+    case 'marble':
+      wallMat.diffuseColor = new Color3(0.05, 0.06, 0.07);
+      wallMat.specularColor = new Color3(0.25, 0.28, 0.32);
+      wallMat.ambientColor = new Color3(0.02, 0.025, 0.03);
+      break;
+    case 'woodPlanks':
+      wallMat.diffuseColor = new Color3(0.05, 0.03, 0.02);
+      wallMat.specularColor = new Color3(0.20, 0.13, 0.09);
+      wallMat.ambientColor = new Color3(0.02, 0.01, 0.01);
+      break;
+    default:
+    case 'dark':
+      wallMat.diffuseColor = new Color3(0.02, 0.02, 0.025);
+      wallMat.specularColor = new Color3(0.18, 0.20, 0.24);
+      wallMat.ambientColor = new Color3(0.01, 0.01, 0.015);
+      break;
+  }
+
+  wallMat.specularPower = 32;
+  return wallMat;
 }
 
 /** 1. 泥土 + 草皮贴图 */

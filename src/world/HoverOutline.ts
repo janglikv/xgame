@@ -34,7 +34,7 @@ export class HoverOutline {
     this.layer.occlusionThreshold = 0.01;
   }
 
-  /** 注册可悬停描边的小兵（主角 + 展示阵列均可） */
+  /** 注册可悬停描边的小兵（展示阵列目标） */
   registerMinions(minions: readonly Minion[]): void {
     for (const m of minions) {
       if (this.minions.includes(m)) continue;

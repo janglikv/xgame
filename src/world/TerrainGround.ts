@@ -98,7 +98,11 @@ export function createTerrainGround(
   terrain.parent = root;
 
   // —— 围墙 ——
-  const wallMat = solidMat(scene, 'terrainWallMat', 0x4a3f32);
+  const wallMat = new StandardMaterial('terrainWallMat', scene);
+  wallMat.diffuseColor = new Color3(0.10, 0.11, 0.13);
+  wallMat.specularColor = new Color3(0.28, 0.30, 0.35);
+  wallMat.ambientColor = new Color3(0.05, 0.05, 0.06);
+
   const t = Floor.WALL_THICKNESS;
   const h = Floor.WALL_HEIGHT;
   const wallY = h / 2;

@@ -27,6 +27,32 @@ import { Floor } from './Floor';
 import { SpatialAxesGrid } from './SpatialAxesGrid';
 import { TeleportPad } from './TeleportPad';
 
+/** 第一关（Level 1）可玩地图边长（米）：20×20 */
+export const BLANK_MAP_SIZE = 20;
+/** 半边长（X/Z ∈ [−half, +half]，即 [−10, +10]） */
+export const BLANK_MAP_HALF = BLANK_MAP_SIZE / 2;
+/** 可视地板相对围墙四边外延格数（1 格 = 1 米） */
+export const BLANK_FLOOR_EXTEND = 10;
+/**
+ * 回程传送阵位置（须在 20×20 地图内）。
+ * 距 +X 边约 3m，与枢纽「边侧放置」风格一致。
+ */
+export const BLANK_PAD_X = 7;
+export const BLANK_PAD_Z = 0;
+
+/** 将坐标钳到空白场景可站立区域（留半米边距） */
+export function clampBlankMapPosition(
+  x: number,
+  z: number,
+  margin = 0.5,
+): { x: number; z: number } {
+  const lim = BLANK_MAP_HALF - margin;
+  return {
+    x: Math.max(-lim, Math.min(lim, x)),
+    z: Math.max(-lim, Math.min(lim, z)),
+  };
+}
+
 export interface BlankWorld {
   scene: Scene;
   camera: ArcRotateCamera;
@@ -46,15 +72,16 @@ export interface BlankWorld {
 }
 
 /**
- * 空白场景：仅地板 + 光照 + 可操控主角（暂无其它内容）。
+ * 第一关（Level 1）：仅地板 + 光照 + 可操控主角。
  * 独立 Scene / 物理世界，与枢纽互不干扰。
+ * 可玩区 20×20（X/Z ∈ [−10, +10]）；可视地板四边各外延 10 格。
  */
 export async function createBlankWorld(
   engine: Engine,
   appearance: MinionAppearance,
   cameraMode: CameraMode,
-  initialX = TeleportPad.DEFAULT_X,
-  initialZ = TeleportPad.DEFAULT_Z,
+  initialX = BLANK_PAD_X,
+  initialZ = BLANK_PAD_Z,
 ): Promise<BlankWorld> {
   const scene = new Scene(engine);
   scene.useRightHandedSystem = true;
@@ -62,8 +89,9 @@ export async function createBlankWorld(
   scene.clearColor = Color4.FromColor3(skyColor, 1);
   scene.fogMode = Scene.FOGMODE_LINEAR;
   scene.fogColor = skyColor;
-  scene.fogStart = 22;
-  scene.fogEnd = 45;
+  // 雾推远：墙外 10 格延展地板仍清晰可见
+  scene.fogStart = 28;
+  scene.fogEnd = 48;
 
   await initPhysics(scene);
 
@@ -85,28 +113,39 @@ export async function createBlankWorld(
   shadowGen.bias = 0.001;
   shadowGen.normalBias = 0.02;
   dir.autoUpdateExtends = false;
-  dir.orthoLeft = -32;
-  dir.orthoRight = 32;
-  dir.orthoTop = 32;
-  dir.orthoBottom = -32;
+  // 阴影覆盖可玩区 + 外延地板
+  const shadowHalf = BLANK_MAP_HALF + BLANK_FLOOR_EXTEND + 4;
+  dir.orthoLeft = -shadowHalf;
+  dir.orthoRight = shadowHalf;
+  dir.orthoTop = shadowHalf;
+  dir.orthoBottom = -shadowHalf;
   dir.shadowMinZ = 1;
   dir.shadowMaxZ = 70;
 
-  // 赛博网格地板
-  // 物理：标准平面地板 + 围墙（与枢纽一致）
-  const floor = new Floor(scene, shadowGen, { surface: 'cyberGrid' });
-  buildArenaColliders(scene, { includeFloor: true });
-  const spatialAxesGrid = new SpatialAxesGrid(scene);
+  // 可玩 15×15 + 围墙；可视地板四边各外延 10 格
+  const half = BLANK_MAP_HALF;
+  const floor = new Floor(scene, shadowGen, {
+    surface: 'cyberGrid',
+    halfX: half,
+    halfZ: half,
+    extend: BLANK_FLOOR_EXTEND,
+  });
+  buildArenaColliders(scene, {
+    includeFloor: true,
+    halfX: half,
+    halfZ: half,
+  });
+  const spatialAxesGrid = new SpatialAxesGrid(scene, {
+    extentX: half,
+    extentZ: half,
+  });
 
-  // 回程传送阵：与枢纽同坐标风格，站在阵中按 E 返回
-  const teleportPad = new TeleportPad(
-    scene,
-    TeleportPad.DEFAULT_X,
-    TeleportPad.DEFAULT_Z,
-  );
+  // 回程传送阵（地图内侧）
+  const teleportPad = new TeleportPad(scene, BLANK_PAD_X, BLANK_PAD_Z);
 
-  // 出生点
-  const minion = new Minion(scene, initialX, initialZ, {
+  // 出生点（钳制在地图内，兼容旧存档越界坐标）
+  const spawn = clampBlankMapPosition(initialX, initialZ);
+  const minion = new Minion(scene, spawn.x, spawn.z, {
     facePositiveX: true,
     shadowGenerator: shadowGen,
     face: appearance.face,
