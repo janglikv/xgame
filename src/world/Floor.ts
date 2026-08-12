@@ -9,7 +9,6 @@ import {
   Texture,
   TransformNode,
   Vector3,
-  VertexData,
 } from '@babylonjs/core';
 
 /**

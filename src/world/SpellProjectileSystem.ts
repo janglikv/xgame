@@ -71,6 +71,7 @@ export class SpellProjectileSystem {
     direction: Vector3,
     style: StaffStyle = 'arcane',
     shooter?: Minion,
+    speed = 9.0,
   ): void {
     const dir =
       direction.lengthSquared() > 1e-6
@@ -93,7 +94,7 @@ export class SpellProjectileSystem {
       position: spawnPos.clone(),
       lastPos: spawnPos.clone(),
       direction: dir,
-      speed: 9.0,
+      speed,
       age: 0,
       maxAge: 2.8,
       shooter,
@@ -122,6 +123,10 @@ export class SpellProjectileSystem {
           Math.abs(nextPos.x) >= 19.8 || Math.abs(nextPos.z) >= 19.8;
 
         if (hitRes.hit || outOfBounds) {
+          if (hitRes.hitMinion?.physicsProxy) {
+            // 给物理胶囊施加平滑后退冲击力，防止由于一帧拉回渲染坐标导致的闪烁跳变
+            hitRes.hitMinion.physicsProxy.applyHitKnockback(b.direction, 2.0);
+          }
           b.mesh.dispose();
           this.bullets.splice(i, 1);
           continue;

@@ -28,6 +28,8 @@ import {
   updateStaffFx,
 } from './minion/staff';
 
+import type { MinionPhysicsProxy } from './physics/MinionPhysicsProxy';
+
 export type { FaceStyle } from './minion/faces';
 export type { StaffStyle } from './minion/staff';
 export type { HatStyle } from './minion/hat';
@@ -193,6 +195,9 @@ export class Minion {
 
   /** 外观发生变更时的监听回调 */
   public onAppearanceChanged?: (appearance: MinionAppearance) => void;
+
+  /** 绑定的物理代理 */
+  public physicsProxy?: MinionPhysicsProxy;
 
   /** 当前完整外观 */
   private appearance: MinionAppearance;
@@ -651,6 +656,8 @@ export class Minion {
         const dz = this.aimTarget.z - this.root.position.z;
         if (dx * dx + dz * dz > 1e-6) {
           const dirWorld = new Vector3(dx, 0, dz).normalize();
+          // 强制刷新当前帧右手最新的世界矩阵，防止父节点旋转更新延迟导致法杖角度跳变闪烁
+          this.rightHand.computeWorldMatrix(true);
           const rightHandWorldMat = this.rightHand.getWorldMatrix();
           const invHandMat = rightHandWorldMat.clone().invert();
           const dirInHand = Vector3.TransformNormal(
@@ -677,7 +684,16 @@ export class Minion {
             qAim,
             this.aimWeight,
           );
-          this.staffFx.root.rotationQuaternion = qFinal;
+          if (!this.staffFx.root.rotationQuaternion) {
+            this.staffFx.root.rotationQuaternion = qFinal;
+          } else {
+            Quaternion.SlerpToRef(
+              this.staffFx.root.rotationQuaternion,
+              qFinal,
+              Math.min(1, dt * 25),
+              this.staffFx.root.rotationQuaternion,
+            );
+          }
         }
 
         // 瞄准脉动强化

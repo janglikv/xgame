@@ -27,6 +27,9 @@ import { Floor } from './Floor';
 import { SpatialAxesGrid } from './SpatialAxesGrid';
 import { TeleportPad } from './TeleportPad';
 
+import { EnemyAI } from './EnemyAI';
+import { SpellProjectileSystem } from './SpellProjectileSystem';
+
 /** 第一关（Level 1）可玩地图边长（米）：20×20 */
 export const BLANK_MAP_SIZE = 20;
 /** 半边长（X/Z ∈ [−half, +half]，即 [−10, +10]） */
@@ -58,6 +61,15 @@ export interface BlankWorld {
   camera: ArcRotateCamera;
   minion: Minion;
   minionPhys: MinionPhysicsProxy;
+  enemies: Array<{
+    minion: Minion;
+    phys: MinionPhysicsProxy;
+    ai: EnemyAI;
+  }>;
+  enemyMinion: Minion;
+  enemyPhys: MinionPhysicsProxy;
+  enemyAI: EnemyAI;
+  spellSystem: SpellProjectileSystem;
   floor: Floor;
   spatialAxesGrid: SpatialAxesGrid;
   /** 回枢纽传送阵（站上蓄力自动返回） */
@@ -172,6 +184,67 @@ export async function createBlankWorld(
   });
   minionPhys.teleportToTarget();
 
+  // ── 敌军防线阵容生成 (Z = +7.0 上方队 与 Z = -7.0 下方队 上下绝对对称) ──
+  const spellSystem = new SpellProjectileSystem(scene);
+  const topGroupState = { isGroupAggroLocked: false };
+  const bottomGroupState = { isGroupAggroLocked: false };
+
+  const enemyConfigs = [
+    // ── 上方敌军小队 (Z = +7.0, X ∈ [-3.4, 3.4]) ──
+    { spawnX: -2.4, spawnZ: 7.0, patrolRadius: 1.0, moveSpeed: 1.2, patrolAxis: 'x' as const, groupState: topGroupState, rotY: Math.PI },
+    { spawnX: -0.8, spawnZ: 7.0, patrolRadius: 1.0, moveSpeed: 1.2, patrolAxis: 'x' as const, groupState: topGroupState, rotY: Math.PI },
+    { spawnX: 0.8, spawnZ: 7.0, patrolRadius: 1.0, moveSpeed: 1.2, patrolAxis: 'x' as const, groupState: topGroupState, rotY: Math.PI },
+    { spawnX: 2.4, spawnZ: 7.0, patrolRadius: 1.0, moveSpeed: 1.2, patrolAxis: 'x' as const, groupState: topGroupState, rotY: Math.PI },
+
+    // ── 下方敌军小队 (Z = -7.0 位置, X ∈ [-3.4, 3.4]，与上方完全对称) ──
+    { spawnX: -2.4, spawnZ: -7.0, patrolRadius: 1.0, moveSpeed: 1.2, patrolAxis: 'x' as const, groupState: bottomGroupState, rotY: 0 },
+    { spawnX: -0.8, spawnZ: -7.0, patrolRadius: 1.0, moveSpeed: 1.2, patrolAxis: 'x' as const, groupState: bottomGroupState, rotY: 0 },
+    { spawnX: 0.8, spawnZ: -7.0, patrolRadius: 1.0, moveSpeed: 1.2, patrolAxis: 'x' as const, groupState: bottomGroupState, rotY: 0 },
+    { spawnX: 2.4, spawnZ: -7.0, patrolRadius: 1.0, moveSpeed: 1.2, patrolAxis: 'x' as const, groupState: bottomGroupState, rotY: 0 },
+  ];
+
+  const enemies = enemyConfigs.map((cfg) => {
+    const eMinion = new Minion(scene, cfg.spawnX, cfg.spawnZ, {
+      facePositiveX: false,
+      shadowGenerator: shadowGen,
+      face: 'fierce',
+      bodyColor: 0x28262a, // 统一黑皮肤
+      hat: 'horns',       // 统一双角战盔
+      staff: 'flame',     // 统一烈焰法杖
+      formation: null,    // 统一无脚底 Buff
+    });
+    eMinion.root.rotation.y = cfg.rotY;
+
+    const ePhys = new MinionPhysicsProxy(scene, eMinion.root, {
+      mode: 'pushable',
+      radius: 0.14,
+      height: 0.42,
+      mass: 3.0,
+    });
+    ePhys.teleportToTarget();
+
+    const eAI = new EnemyAI(eMinion, ePhys, spellSystem, {
+      spawnX: cfg.spawnX,
+      spawnZ: cfg.spawnZ,
+      patrolRadius: cfg.patrolRadius,
+      moveSpeed: cfg.moveSpeed,
+      patrolAxis: cfg.patrolAxis,
+      initialAttackRange: 4.0,
+      retainedAttackRange: 5.0,
+      forcedPatrolDuration: 0.5,
+      attackCooldown: 1.8,
+      spellStyle: 'flame',
+      groupState: cfg.groupState, // 同组共享仇恨控制
+    });
+
+    return { minion: eMinion, phys: ePhys, ai: eAI };
+  });
+
+  const primaryEnemy = enemies[0]!;
+  const enemyMinion = primaryEnemy.minion;
+  const enemyPhys = primaryEnemy.phys;
+  const enemyAI = primaryEnemy.ai;
+
   // 固定 = 略倾俯视（与枢纽 FIXED_CAMERA 一致）；自由 = 调试轨道
   const focusY = Minion.BODY_LOCAL_Y * Minion.SCALE * appearance.scaleMultiplier;
   const camera = new ArcRotateCamera(
@@ -194,12 +267,12 @@ export async function createBlankWorld(
   camera.maxZ = 1000;
 
   /** 固定俯视锁定：角色居中、略倾 + 窄 FOV 弱透视 */
-  const lockFixed = (): void => {
+  function lockFixed(): void {
     camera.alpha = FIXED_CAMERA.alpha;
     camera.beta = FIXED_CAMERA.beta;
     camera.radius = FIXED_CAMERA.radius;
     camera.fov = FIXED_CAMERA.fov;
-  };
+  }
   if (cameraMode === 'fixed') {
     lockFixed();
   } else {
@@ -211,6 +284,11 @@ export async function createBlankWorld(
     camera,
     minion,
     minionPhys,
+    enemies,
+    enemyMinion,
+    enemyPhys,
+    enemyAI,
+    spellSystem,
     floor,
     spatialAxesGrid,
     teleportPad,
@@ -233,8 +311,12 @@ export async function createBlankWorld(
       minion.applyPatch(next);
     },
     dispose() {
+      spellSystem.dispose();
       teleportPad.dispose();
       minionPhys.dispose();
+      for (const e of enemies) {
+        e.phys.dispose();
+      }
       scene.dispose();
     },
   };

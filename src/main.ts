@@ -333,7 +333,6 @@ async function initScene(): Promise<void> {
 
   /** 法杖能量光球发射系统 */
   const spellSystem = new SpellProjectileSystem(scene);
-  let blankSpellSystem: SpellProjectileSystem | null = null;
   let shootCooldown = 0;
   const SHOOT_INTERVAL = 0.20;
 
@@ -502,7 +501,6 @@ async function initScene(): Promise<void> {
           spawnX,
           spawnZ,
         );
-        blankSpellSystem = new SpellProjectileSystem(blankWorld.scene);
         blankWorld.camera.onViewMatrixChangedObservable.add(scheduleSaveCamera);
         blankWorld.spatialAxesGrid.setVisible(showGrid);
       } else {
@@ -811,7 +809,7 @@ async function initScene(): Promise<void> {
             const style = activeMinion.getStaffStyle() ?? 'arcane';
             const activeSpellSys =
               worldMode === 'blank' && blankWorld
-                ? blankSpellSystem
+                ? blankWorld.spellSystem
                 : spellSystem;
             activeSpellSys?.spawnOrb(tipPos, shootDir, style, activeMinion);
             activeMinion.triggerStaffShootFx();
@@ -847,6 +845,12 @@ async function initScene(): Promise<void> {
       const bw = blankWorld;
       bw.minionPhys.syncToTarget();
 
+      const allEnemyMinions = bw.enemies.map((e) => e.minion);
+      for (const e of bw.enemies) {
+        e.phys.syncToTarget();
+        e.ai.update(dt, bw.minion, allEnemyMinions);
+      }
+
       const wish = readMoveWish(bw.camera, menuOpen);
       if (wish.moving) {
         bw.minion.faceToward(wish.dirX, wish.dirZ);
@@ -854,7 +858,8 @@ async function initScene(): Promise<void> {
       }
       bw.minionPhys.setHorizontalVelocity(wish.wishX, wish.wishZ);
       bw.minion.update(dt, wish.moving);
-      blankSpellSystem?.update(dt);
+
+      bw.spellSystem.update(dt);
 
       if (!wish.moving && wasMovingBlank) {
         saveMinionState(snapshotMinion());

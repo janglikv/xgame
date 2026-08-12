@@ -107,6 +107,20 @@ export class MinionPhysicsProxy {
     this.aggregate.body.setAngularDamping(8);
     // 物理驱动 mesh（disablePreStep 默认 true）
     this.aggregate.body.disablePreStep = true;
+
+    // 若 target 的 body 上记录了 minion，自动进行物理代理反向引用绑定
+    const minionObj = (target as unknown as { metadata?: { minion?: unknown } }).metadata?.minion;
+    if (minionObj && typeof minionObj === 'object') {
+      (minionObj as { physicsProxy?: unknown }).physicsProxy = this;
+    }
+  }
+
+  /** 受击击退：平滑叠加物理线性速度 */
+  applyHitKnockback(dir: Vector3, force = 2.0): void {
+    this.aggregate.body.getLinearVelocityToRef(this.tmpVel);
+    this.tmpVel.x += dir.x * force;
+    this.tmpVel.z += dir.z * force;
+    this.aggregate.body.setLinearVelocity(this.tmpVel);
   }
 
   /** 脚底 → 胶囊中心 */
