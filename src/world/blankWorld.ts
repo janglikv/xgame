@@ -11,6 +11,7 @@ import {
 } from '@babylonjs/core';
 import {
   FIXED_CAMERA,
+  FREE_CAMERA_FOV,
   type CameraMode,
 } from '../storage/settingsState';
 import {
@@ -125,6 +126,7 @@ export async function createBlankWorld(
   });
   minionPhys.teleportToTarget();
 
+  // 固定 = 略倾俯视（与枢纽 FIXED_CAMERA 一致）；自由 = 调试轨道
   const focusY = Minion.BODY_LOCAL_Y * Minion.SCALE * appearance.scaleMultiplier;
   const camera = new ArcRotateCamera(
     'blankCam',
@@ -145,13 +147,17 @@ export async function createBlankWorld(
   camera.minZ = 0.1;
   camera.maxZ = 1000;
 
+  /** 固定俯视锁定：角色居中、略倾 + 窄 FOV 弱透视 */
   const lockFixed = (): void => {
     camera.alpha = FIXED_CAMERA.alpha;
     camera.beta = FIXED_CAMERA.beta;
     camera.radius = FIXED_CAMERA.radius;
+    camera.fov = FIXED_CAMERA.fov;
   };
   if (cameraMode === 'fixed') {
     lockFixed();
+  } else {
+    camera.fov = FREE_CAMERA_FOV;
   }
 
   return {
@@ -173,6 +179,7 @@ export async function createBlankWorld(
         camera.detachControl();
         lockFixed();
       } else {
+        camera.fov = FREE_CAMERA_FOV;
         camera.attachControl(canvas, true);
       }
     },

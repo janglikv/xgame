@@ -171,22 +171,9 @@ export class SettingsPanel {
     );
     stack.addControl(this.spacer(8));
 
-    const freeRow = this.makeToggleRow(
-      'freeCamRow',
-      '自由镜头',
-      this.deps.getCameraMode() === 'free',
-      (checked) => {
-        if (this.syncingModeUi) return;
-        if (checked) this.applyModeFromUi('free');
-        else this.applyModeFromUi('fixed');
-      },
-    );
-    this.freeCheck = freeRow.check;
-    stack.addControl(freeRow.row);
-
     const fixedRow = this.makeToggleRow(
       'fixedCamRow',
-      '固定镜头',
+      '俯视镜头',
       this.deps.getCameraMode() === 'fixed',
       (checked) => {
         if (this.syncingModeUi) return;
@@ -197,12 +184,25 @@ export class SettingsPanel {
     this.fixedCheck = fixedRow.check;
     stack.addControl(fixedRow.row);
 
+    const freeRow = this.makeToggleRow(
+      'freeCamRow',
+      '自由镜头（调试）',
+      this.deps.getCameraMode() === 'free',
+      (checked) => {
+        if (this.syncingModeUi) return;
+        if (checked) this.applyModeFromUi('free');
+        else this.applyModeFromUi('fixed');
+      },
+    );
+    this.freeCheck = freeRow.check;
+    stack.addControl(freeRow.row);
+
     this.camModeHint = this.makeText(
       'modeHint',
       this.modeHintText(this.deps.getCameraMode()),
       {
         fontSize: 13,
-        height: 28,
+        height: 36,
         color: 'rgba(255,255,255,0.38)',
       },
     );
@@ -228,18 +228,22 @@ export class SettingsPanel {
 
     stack.addControl(this.spacer(32));
     stack.addControl(
-      this.makeText('foot', '两种模式均跟随角色；自由可调角度，固定锁角度；WASD 移动', {
-        fontSize: 14,
-        height: 36,
-        color: 'rgba(255,255,255,0.4)',
-      }),
+      this.makeText(
+        'foot',
+        '俯视：角色居中、略倾看清侧身；自由仅调试可拖拽；WASD 相对镜头移动',
+        {
+          fontSize: 14,
+          height: 40,
+          color: 'rgba(255,255,255,0.4)',
+        },
+      ),
     );
   }
 
   private modeHintText(mode: CameraMode): string {
     return mode === 'fixed'
-      ? '角色始终居中，角度与距离锁定，不可拖拽'
-      : '角色始终居中，可拖拽旋转与滚轮缩放';
+      ? '略倾俯视锁定：角色居中，可看侧身，不可拖拽'
+      : '调试用轨道相机：可拖拽旋转与滚轮缩放';
   }
 
   private applyModeFromUi(mode: CameraMode): void {

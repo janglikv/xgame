@@ -26,6 +26,7 @@ import {
 } from './storage/minionAppearanceState';
 import {
   FIXED_CAMERA,
+  FREE_CAMERA_FOV,
   loadSettingsState,
   saveSettingsState,
   type CameraMode,
@@ -89,7 +90,8 @@ async function initScene(): Promise<void> {
   // 2b. Havok 物理（须在创建任何 PhysicsAggregate 之前）
   await initPhysics(scene);
 
-  // 3. 相机：注视点始终跟角色；固定模式只锁 α/β/半径且禁止拖拽
+  // 3. 相机：注视点始终跟角色
+  // 固定 = 略倾俯视（看清角色）；自由 = 调试用轨道相机
   const settingsBoot = loadSettingsState();
   let cameraMode: CameraMode = settingsBoot.cameraMode;
   let showFps = settingsBoot.showFps;
@@ -114,7 +116,7 @@ async function initScene(): Promise<void> {
   );
   const savedCam = loadCameraState();
 
-  // 固定：预设角度距离 + 角色中心；自由：恢复上次角度（注视点仍跟角色）
+  // 固定：略倾俯视锁 α/β/半径；自由：恢复上次调试角度（注视点仍跟角色）
   const bootAlpha =
     cameraMode === 'fixed'
       ? FIXED_CAMERA.alpha
@@ -161,11 +163,12 @@ async function initScene(): Promise<void> {
     };
   };
 
-  /** 固定模式：锁角度/距离（注视点由跟随逻辑写） */
+  /** 固定俯视：锁略倾机位、距离与窄 FOV（注视点由跟随逻辑写） */
   const lockFixedOrbit = (): void => {
     camera.alpha = FIXED_CAMERA.alpha;
     camera.beta = FIXED_CAMERA.beta;
     camera.radius = FIXED_CAMERA.radius;
+    camera.fov = FIXED_CAMERA.fov;
   };
 
   const applyCameraMode = (mode: CameraMode, attachIfFree: boolean): void => {
@@ -173,8 +176,11 @@ async function initScene(): Promise<void> {
     if (mode === 'fixed') {
       camera.detachControl();
       lockFixedOrbit();
-    } else if (attachIfFree) {
-      camera.attachControl(canvas, true);
+    } else {
+      camera.fov = FREE_CAMERA_FOV;
+      if (attachIfFree) {
+        camera.attachControl(canvas, true);
+      }
     }
   };
 
@@ -191,8 +197,11 @@ async function initScene(): Promise<void> {
 
   camera.onViewMatrixChangedObservable.add(scheduleSaveCamera);
 
-  // 初始：固定不挂控制；自由才 attach
-  if (cameraMode === 'free') {
+  // 初始：固定锁窄 FOV；自由用默认 FOV 并 attach
+  if (cameraMode === 'fixed') {
+    lockFixedOrbit();
+  } else {
+    camera.fov = FREE_CAMERA_FOV;
     camera.attachControl(canvas, true);
   }
 
@@ -799,6 +808,7 @@ async function initScene(): Promise<void> {
         bw.camera.alpha = FIXED_CAMERA.alpha;
         bw.camera.beta = FIXED_CAMERA.beta;
         bw.camera.radius = FIXED_CAMERA.radius;
+        bw.camera.fov = FIXED_CAMERA.fov;
       }
 
       if (showFps) fpsOverlay?.update();
