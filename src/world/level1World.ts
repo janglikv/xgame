@@ -110,8 +110,8 @@ export async function createBlankWorld(
   const shadowGen = new ShadowGenerator(1024, dir);
   shadowGen.usePercentageCloserFiltering = true;
   shadowGen.filteringQuality = ShadowGenerator.QUALITY_MEDIUM;
-  shadowGen.bias = 0.001;
-  shadowGen.normalBias = 0.02;
+  shadowGen.bias = 0.0005;
+  shadowGen.normalBias = 0.01;
   dir.autoUpdateExtends = false;
   // 阴影覆盖可玩区 + 外延地板
   const shadowHalf = BLANK_MAP_HALF + BLANK_FLOOR_EXTEND + 4;
@@ -122,18 +122,22 @@ export async function createBlankWorld(
   dir.shadowMinZ = 1;
   dir.shadowMaxZ = 70;
 
-  // 可玩 15×15 + 围墙；可视地板四边各外延 10 格
+  // 可玩 20×20 + 围墙；中心 3x3 围墙 + 右下角 L 型围墙
   const half = BLANK_MAP_HALF;
   const floor = new Floor(scene, shadowGen, {
     surface: 'cyberGrid',
     halfX: half,
     halfZ: half,
     extend: BLANK_FLOOR_EXTEND,
+    centerWallSize: 3,
+    addLWall: true,
   });
   buildArenaColliders(scene, {
     includeFloor: true,
     halfX: half,
     halfZ: half,
+    centerWallSize: 3,
+    addLWall: true,
   });
   const spatialAxesGrid = new SpatialAxesGrid(scene, {
     extentX: half,
@@ -143,8 +147,11 @@ export async function createBlankWorld(
   // 回程传送阵（地图内侧）
   const teleportPad = new TeleportPad(scene, BLANK_PAD_X, BLANK_PAD_Z);
 
-  // 出生点（钳制在地图内，兼容旧存档越界坐标）
-  const spawn = clampBlankMapPosition(initialX, initialZ);
+  // 出生点（钳制在地图内，避免出生在中心 3x3 围墙重叠区）
+  let spawn = clampBlankMapPosition(initialX, initialZ);
+  if (Math.abs(spawn.x) < 2.2 && Math.abs(spawn.z) < 2.2) {
+    spawn = { x: BLANK_PAD_X, z: BLANK_PAD_Z };
+  }
   const minion = new Minion(scene, spawn.x, spawn.z, {
     facePositiveX: true,
     shadowGenerator: shadowGen,

@@ -235,8 +235,8 @@ async function initScene(): Promise<void> {
   // PCF 软阴影；避免 blur ESM 在场地尺度下糊成脏带
   shadowGen.usePercentageCloserFiltering = true;
   shadowGen.filteringQuality = ShadowGenerator.QUALITY_MEDIUM;
-  shadowGen.bias = 0.001;
-  shadowGen.normalBias = 0.02;
+  shadowGen.bias = 0.0005;
+  shadowGen.normalBias = 0.01;
   // 手写正交阴影体，只覆盖矩形场地（X±20、Z±20），略留边
   dir.autoUpdateExtends = false;
   dir.orthoLeft = -32;
@@ -248,13 +248,20 @@ async function initScene(): Promise<void> {
 
   // 5. 地板（贴图选择与预设烘焙）+ 展台选择器 + 物理静态场地 + 坐标系
   const initialFloorSurface = loadFloorSurfaceState();
-  const floor = new Floor(scene, shadowGen, { surface: initialFloorSurface });
+  const floor = new Floor(scene, shadowGen, {
+    surface: initialFloorSurface,
+    centerWallSize: 3,
+    addLWall: true,
+  });
   const floorPickerGallery = new FloorPickerGallery(scene, floor);
-  buildArenaColliders(scene);
+  buildArenaColliders(scene, {
+    centerWallSize: 3,
+    addLWall: true,
+  });
   const spatialAxesGrid = new SpatialAxesGrid(scene);
   spatialAxesGrid.setVisible(showGrid);
 
-  // 5b. 传送阵（X=15）：站上蓄力 3s 自动切换场景（阵法加速旋转）
+  // 5b. 传送阵（X=15）：站上蓄力 1.5s 自动切换场景（阵法加速旋转）
   const teleportPad = new TeleportPad(
     scene,
     TeleportPad.DEFAULT_X,
@@ -265,9 +272,15 @@ async function initScene(): Promise<void> {
   let blankWorld: BlankWorld | null = null;
   let blankEnterBusy = false;
 
-  // 6. 小兵模型（位置与换装造型可 localStorage 恢复）
+  // 6. 小兵模型（位置与换装造型可 localStorage 恢复，避开中心 3x3 围墙）
   const savedAppearance = loadMinionAppearanceState();
-  const minion = new Minion(scene, minionX, minionZ, {
+  let spawnX = minionX;
+  let spawnZ = minionZ;
+  if (Math.abs(spawnX) < 2.2 && Math.abs(spawnZ) < 2.2) {
+    spawnX = 0;
+    spawnZ = -4;
+  }
+  const minion = new Minion(scene, spawnX, spawnZ, {
     facePositiveX: true,
     shadowGenerator: shadowGen,
     allBlack: true,
@@ -848,7 +861,7 @@ async function initScene(): Promise<void> {
       }
       wasMovingBlank = wish.moving;
 
-      // 传送阵：站上蓄力加速，满 3s 回枢纽
+      // 传送阵：站上蓄力加速，满 1.5s 回枢纽
       {
         const p = bw.minion.root.position;
         const onPad = bw.teleportPad.contains(p.x, p.z);
@@ -892,7 +905,7 @@ async function initScene(): Promise<void> {
     }
     wasMovingHub = wish.moving;
 
-    // 传送阵：站上蓄力加速，满 3s 进空白场景
+    // 传送阵：站上蓄力加速，满 1.5s 进空白场景
     {
       const p = minion.root.position;
       const onPad = teleportPad.contains(p.x, p.z);

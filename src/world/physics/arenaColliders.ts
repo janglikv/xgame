@@ -17,6 +17,10 @@ export interface ArenaColliderOptions {
   halfX?: number;
   /** 场地半深（Z）；默认 Floor.HALF_Z */
   halfZ?: number;
+  /** 是否生成中心围墙物理碰撞（指定边长米数，如 3 表示 3×3 米围墙） */
+  centerWallSize?: number;
+  /** 是否生成右下角 L 型围墙物理碰撞 */
+  addLWall?: boolean;
 }
 
 /**
@@ -91,6 +95,100 @@ export function buildArenaColliders(
       { mass: 0, friction: 0.5, restitution: 0.25 },
       scene,
     );
+  }
+
+  // 中心围墙物理碰撞盒（如 3×3 米围墙，完全匹配 90° 标准正方形）
+  if (options.centerWallSize && options.centerWallSize > 0) {
+    const cSize = options.centerWallSize;
+    const cThickness = 0.8;
+    const halfS = cSize / 2;
+
+    // 北墙和南墙 (平行于 X，全宽 cSize，深 cThickness)
+    for (const [i, zSign] of [-1, 1].entries()) {
+      const wall = MeshBuilder.CreateBox(
+        `PhysCenterWallNS_${i}`,
+        { width: cSize, height: h, depth: cThickness },
+        scene,
+      );
+      wall.position = new Vector3(0, wallY, zSign * (halfS - cThickness / 2));
+      wall.isVisible = false;
+      wall.isPickable = true;
+      wall.parent = root;
+      new PhysicsAggregate(
+        wall,
+        PhysicsShapeType.BOX,
+        { mass: 0, friction: 0.5, restitution: 0.25 },
+        scene,
+      );
+    }
+
+    // 东墙和西墙 (平行于 Z，宽 cThickness，深 cSize - 2*cThickness)
+    for (const [i, xSign] of [-1, 1].entries()) {
+      const wall = MeshBuilder.CreateBox(
+        `PhysCenterWallEW_${i}`,
+        { width: cThickness, height: h, depth: cSize - 2 * cThickness },
+        scene,
+      );
+      wall.position = new Vector3(xSign * (halfS - cThickness / 2), wallY, 0);
+      wall.isVisible = false;
+      wall.isPickable = true;
+      wall.parent = root;
+      new PhysicsAggregate(
+        wall,
+        PhysicsShapeType.BOX,
+        { mass: 0, friction: 0.5, restitution: 0.25 },
+        scene,
+      );
+    }
+  }
+
+  // 四角 L 型围墙物理碰撞盒 (四个象限)
+  if (options.addLWall) {
+    const wallY = h / 2;
+    const t = 0.8; // 墙厚 0.8m
+
+    const corners = [
+      { name: 'BR', cx: 6.5, cz: -5.0, zx: 5.0, zz: -6.5 },
+      { name: 'TR', cx: 6.5, cz: 5.0, zx: 5.0, zz: 6.5 },
+      { name: 'TL', cx: -6.5, cz: 5.0, zx: -5.0, zz: 6.5 },
+      { name: 'BL', cx: -6.5, cz: -5.0, zx: -5.0, zz: -6.5 },
+    ];
+
+    for (const c of corners) {
+      // X 臂物理盒
+      const wallX = MeshBuilder.CreateBox(
+        `PhysLWall_ArmX_${c.name}`,
+        { width: 3.8, height: h, depth: t },
+        scene,
+      );
+      wallX.position = new Vector3(c.cx, wallY, c.cz);
+      wallX.isVisible = false;
+      wallX.isPickable = true;
+      wallX.parent = root;
+      new PhysicsAggregate(
+        wallX,
+        PhysicsShapeType.BOX,
+        { mass: 0, friction: 0.5, restitution: 0.25 },
+        scene,
+      );
+
+      // Z 臂物理盒
+      const wallZ = MeshBuilder.CreateBox(
+        `PhysLWall_ArmZ_${c.name}`,
+        { width: t, height: h, depth: 3.8 },
+        scene,
+      );
+      wallZ.position = new Vector3(c.zx, wallY, c.zz);
+      wallZ.isVisible = false;
+      wallZ.isPickable = true;
+      wallZ.parent = root;
+      new PhysicsAggregate(
+        wallZ,
+        PhysicsShapeType.BOX,
+        { mass: 0, friction: 0.5, restitution: 0.25 },
+        scene,
+      );
+    }
   }
 
   return root;

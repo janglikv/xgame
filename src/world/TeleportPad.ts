@@ -22,7 +22,7 @@ export class TeleportPad {
   /** 光柱高度 */
   static readonly PILLAR_HEIGHT = 1.2;
   /** 站上后蓄力传送时间（秒） */
-  static readonly CHARGE_TIME = 3;
+  static readonly CHARGE_TIME = 1.5;
   /** 满蓄时相对默认转速的倍率（站上后要明显加速） */
   static readonly SPIN_MAX_MUL = 16;
   /** 空闲时细高光束：更极细的极光束半径比例 (3.5%) */
@@ -169,7 +169,7 @@ export class TeleportPad {
 
   /**
    * @param occupied 角色是否站在阵上
-   * @returns 是否本帧应触发传送（蓄满 3s）
+   * @returns 是否本帧应触发传送（蓄满 1.5s）
    */
   update(dt: number, occupied: boolean): boolean {
     let triggered = false;

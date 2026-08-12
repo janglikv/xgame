@@ -9,6 +9,7 @@ import {
   Texture,
   TransformNode,
   Vector3,
+  VertexData,
 } from '@babylonjs/core';
 
 /**
@@ -120,6 +121,14 @@ export interface FloorOptions {
    * 仅扩大主场地贴图平面，不移动围墙；用于避免地图外纯黑空洞。
    */
   extend?: number;
+  /**
+   * 是否在场地中心 (0,0) 生成方形围墙（指定边长米数，如 3 表示 3×3 米围墙）。
+   */
+  centerWallSize?: number;
+  /**
+   * 是否在右下角 (5, -5) 生成 L 型梯形围墙。
+   */
+  addLWall?: boolean;
 }
 
 const OFFICIAL_TEX_BASE =
@@ -213,6 +222,61 @@ export class Floor {
     wall.parent = this.root;
     shadowGenerator?.addShadowCaster(wall);
     this.wallMeshes.push(wall);
+
+    // 中心围墙（标准 3×3 米闭合梯形围墙）
+    if (options.centerWallSize && options.centerWallSize > 0) {
+      const cHalf = options.centerWallSize / 2;
+      const centerLoopPath = [
+        new Vector3(-cHalf, 0, -cHalf),
+        new Vector3(cHalf, 0, -cHalf),
+        new Vector3(cHalf, 0, cHalf),
+        new Vector3(-cHalf, 0, cHalf),
+        new Vector3(-cHalf, 0, -cHalf),
+      ];
+      const centerWall = createTrapezoidExtrudedWall(
+        `WallCenter_${options.centerWallSize}x${options.centerWallSize}`,
+        {
+          path: centerLoopPath,
+          bottomWidth: 0.8,
+          topWidth: 0.4,
+          height: h,
+          close: true,
+        },
+        scene,
+      );
+      centerWall.receiveShadows = true;
+      centerWall.parent = this.root;
+      shadowGenerator?.addShadowCaster(centerWall);
+      this.wallMeshes.push(centerWall);
+    }
+
+    // 四角 L 型围墙（位于左上、右上、左下、右下四个象限）
+    if (options.addLWall) {
+      const cornerConfigs = [
+        { name: 'BR', path: [new Vector3(8, 0, -5), new Vector3(5, 0, -5), new Vector3(5, 0, -8)] },
+        { name: 'TR', path: [new Vector3(8, 0, 5), new Vector3(5, 0, 5), new Vector3(5, 0, 8)] },
+        { name: 'TL', path: [new Vector3(-8, 0, 5), new Vector3(-5, 0, 5), new Vector3(-5, 0, 8)] },
+        { name: 'BL', path: [new Vector3(-8, 0, -5), new Vector3(-5, 0, -5), new Vector3(-5, 0, -8)] },
+      ];
+
+      for (const config of cornerConfigs) {
+        const lWall = createTrapezoidExtrudedWall(
+          `WallLShaped_${config.name}`,
+          {
+            path: config.path,
+            bottomWidth: 0.8,
+            topWidth: 0.4,
+            height: h,
+            close: false,
+          },
+          scene,
+        );
+        lWall.receiveShadows = true;
+        lWall.parent = this.root;
+        shadowGenerator?.addShadowCaster(lWall);
+        this.wallMeshes.push(lWall);
+      }
+    }
 
     // 初始化应用当前 Surface
     this.applySurface(this.currentSurface);
@@ -400,7 +464,7 @@ function createMaterials(
 }
 
 /**
- * 用 4 个点构成的梯形截面（上小下大），沿着路径线段挤出（ExtrudeShape）生成管道围墙。
+ * 用 4 个点构成的梯形截面（上窄下宽），沿着路径线段挤出（ExtrudeShape）生成高品质防闪烁围墙。
  */
 function createTrapezoidExtrudedWall(
   name: string,
@@ -413,20 +477,19 @@ function createTrapezoidExtrudedWall(
   },
   scene: Scene,
 ): Mesh {
-  const b = options.bottomWidth ?? 1.2;
-  const a = options.topWidth ?? 0.5;
-  const h = options.height ?? 0.5;
+  const b = options.bottomWidth ?? 0.8;
+  const a = options.topWidth ?? 0.4;
+  const h = options.height ?? Floor.WALL_HEIGHT;
 
-  // 1. 标准 4 点梯形截面 (内底、外底、外顶、内顶)
+  // 标准闭合梯形截面，底面在 Y = 0.01（微抬 1 厘米，彻底消除与地面 Y=0 的深度冲突）
   const shape = [
-    new Vector3(-b / 2, 0, 0),  // 1. 内侧底
-    new Vector3(b / 2, 0, 0),   // 2. 外侧底
-    new Vector3(a / 2, h, 0),   // 3. 外侧顶
-    new Vector3(-a / 2, h, 0),  // 4. 内侧顶
-    new Vector3(-b / 2, 0, 0),  // 闭合点
+    new Vector3(-b / 2, 0.01, 0), // 1. 内侧底
+    new Vector3(-a / 2, h, 0),    // 2. 内侧顶
+    new Vector3(a / 2, h, 0),     // 3. 外侧顶
+    new Vector3(b / 2, 0.01, 0),  // 4. 外侧底
+    new Vector3(-b / 2, 0.01, 0), // 5. 闭合
   ];
 
-  // 2. 将低多面体截面沿路径挤出成整圈管道墙体
   const wallMesh = MeshBuilder.ExtrudeShape(
     name,
     {
@@ -440,11 +503,13 @@ function createTrapezoidExtrudedWall(
     scene,
   );
 
-  // 3. 强制使用 Flat Shading 扁平着色，消除法线平滑，呈现硬朗的低多面体（Low-Poly）几何棱角感
   wallMesh.convertToFlatShadedMesh();
-
   return wallMesh;
 }
+
+
+
+
 
 /**
  * 根据当前地板 Presets 样式匹配纯色深色系围墙材质（无贴图，色调与地板主题呼应，依赖 Flat Shading 折光）
@@ -512,6 +577,7 @@ function createWallMaterialForSurface(
   }
 
   wallMat.specularPower = 32;
+  wallMat.backFaceCulling = false;
   return wallMat;
 }
 
