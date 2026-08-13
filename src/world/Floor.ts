@@ -9,6 +9,7 @@ import {
   Texture,
   TransformNode,
   Vector3,
+  VertexData,
 } from '@babylonjs/core';
 
 /**
@@ -463,7 +464,10 @@ function createMaterials(
 }
 
 /**
- * 用 4 个点构成的梯形截面（上窄下宽），沿着路径线段挤出（ExtrudeShape）生成高品质防闪烁围墙。
+ * 沿折线生成等宽梯形墙。
+ * 不用 ExtrudeShape：闭合矩形只在拐角取样时，Path3D 会把切线取成 45° 平分线，
+ * 整段墙的水平宽度会被插值拉歪（南北/东西看起来不一样宽）。
+ * 这里对每个顶点做法线偏移（直角用 miter），保证垂直于墙身的底宽/顶宽处处相等。
  */
 function createTrapezoidExtrudedWall(
   name: string,
@@ -476,35 +480,138 @@ function createTrapezoidExtrudedWall(
   },
   scene: Scene,
 ): Mesh {
-  const b = options.bottomWidth ?? 0.8;
-  const a = options.topWidth ?? 0.4;
+  const bottomW = options.bottomWidth ?? 0.8;
+  const topW = options.topWidth ?? 0.4;
   const h = options.height ?? Floor.WALL_HEIGHT;
+  const closed = options.close ?? true;
+  const y0 = 0.01;
 
-  // 标准闭合梯形截面，底面在 Y = 0.01（微抬 1 厘米，彻底消除与地面 Y=0 的深度冲突）
-  const shape = [
-    new Vector3(-b / 2, 0.01, 0), // 1. 内侧底
-    new Vector3(-a / 2, h, 0),    // 2. 内侧顶
-    new Vector3(a / 2, h, 0),     // 3. 外侧顶
-    new Vector3(b / 2, 0.01, 0),  // 4. 外侧底
-    new Vector3(-b / 2, 0.01, 0), // 5. 闭合
-  ];
+  const verts = unwrapPath(options.path, closed);
+  if (verts.length < 2) {
+    return MeshBuilder.CreateBox(name, { size: 0.01 }, scene);
+  }
 
-  const wallMesh = MeshBuilder.ExtrudeShape(
-    name,
-    {
-      shape,
-      path: options.path,
-      closePath: options.close ?? true,
-      closeShape: true,
-      sideOrientation: Mesh.DOUBLESIDE,
-      updatable: false,
-    },
-    scene,
-  );
+  const innerBot: Vector3[] = [];
+  const innerTop: Vector3[] = [];
+  const outerTop: Vector3[] = [];
+  const outerBot: Vector3[] = [];
 
+  for (let i = 0; i < verts.length; i++) {
+    const p = verts[i]!;
+    const inward = pathVertexInward(verts, i, closed);
+    innerBot.push(
+      new Vector3(p.x + inward.x * (bottomW / 2), y0, p.z + inward.z * (bottomW / 2)),
+    );
+    innerTop.push(
+      new Vector3(p.x + inward.x * (topW / 2), h, p.z + inward.z * (topW / 2)),
+    );
+    outerTop.push(
+      new Vector3(p.x - inward.x * (topW / 2), h, p.z - inward.z * (topW / 2)),
+    );
+    outerBot.push(
+      new Vector3(p.x - inward.x * (bottomW / 2), y0, p.z - inward.z * (bottomW / 2)),
+    );
+  }
+
+  const rings = [innerBot, innerTop, outerTop, outerBot];
+  const ringLen = innerBot.length;
+  const positions: number[] = [];
+  const indices: number[] = [];
+
+  for (const ring of rings) {
+    for (const v of ring) {
+      positions.push(v.x, v.y, v.z);
+    }
+  }
+
+  const ringIndex = (r: number, i: number) => r * ringLen + i;
+  const quad = (a: number, b: number, c: number, d: number) => {
+    indices.push(a, b, c, a, c, d);
+  };
+
+  const segs = closed ? ringLen : ringLen - 1;
+  for (let i = 0; i < segs; i++) {
+    const j = closed ? (i + 1) % ringLen : i + 1;
+    for (let r = 0; r < rings.length; r++) {
+      const r2 = (r + 1) % rings.length;
+      quad(ringIndex(r, i), ringIndex(r, j), ringIndex(r2, j), ringIndex(r2, i));
+    }
+  }
+
+  if (!closed) {
+    quad(ringIndex(0, 0), ringIndex(1, 0), ringIndex(2, 0), ringIndex(3, 0));
+    const e = ringLen - 1;
+    quad(ringIndex(0, e), ringIndex(3, e), ringIndex(2, e), ringIndex(1, e));
+  }
+
+  const normals = new Array<number>(positions.length).fill(0);
+  VertexData.ComputeNormals(positions, indices, normals);
+
+  const vertexData = new VertexData();
+  vertexData.positions = positions;
+  vertexData.indices = indices;
+  vertexData.normals = normals;
+
+  const wallMesh = new Mesh(name, scene);
+  vertexData.applyToMesh(wallMesh);
   wallMesh.convertToFlatShadedMesh();
   wallMesh.isPickable = true;
   return wallMesh;
+}
+
+/** 去掉闭合路径末尾重复的起点。 */
+function unwrapPath(path: Vector3[], closed: boolean): Vector3[] {
+  if (
+    closed &&
+    path.length > 1 &&
+    path[0] &&
+    path[path.length - 1] &&
+    Vector3.DistanceSquared(path[0], path[path.length - 1]!) < 1e-8
+  ) {
+    return path.slice(0, -1);
+  }
+  return path.slice();
+}
+
+/** XZ 平面上垂直于折线的内向单位偏移（拐角按 miter，端点按段法线）。 */
+function pathVertexInward(verts: Vector3[], i: number, closed: boolean): Vector3 {
+  const n = verts.length;
+  const p = verts[i]!;
+  const prev = closed ? verts[(i - 1 + n) % n]! : verts[i - 1];
+  const next = closed ? verts[(i + 1) % n]! : verts[i + 1];
+
+  const horiz = (from: Vector3, to: Vector3): Vector3 | null => {
+    const dx = to.x - from.x;
+    const dz = to.z - from.z;
+    const len = Math.hypot(dx, dz);
+    if (len < 1e-6) return null;
+    return new Vector3(dx / len, 0, dz / len);
+  };
+
+  // 左法线（Y 向上时指向路径左侧）
+  const leftOf = (dir: Vector3) => new Vector3(-dir.z, 0, dir.x);
+
+  const dirIn = prev ? horiz(prev, p) : null;
+  const dirOut = next ? horiz(p, next) : null;
+
+  if (dirIn && dirOut) {
+    const n0 = leftOf(dirIn);
+    const n1 = leftOf(dirOut);
+    const bis = n0.add(n1);
+    const bl = bis.length();
+    if (bl > 1e-6) {
+      bis.scaleInPlace(1 / bl);
+      const denom = Vector3.Dot(bis, n1);
+      const miter = Math.abs(denom) < 1e-4 ? 1 : 1 / denom;
+      // 限制极尖角，避免 miter 爆炸
+      const clamped = Math.min(Math.abs(miter), 4) * Math.sign(miter || 1);
+      return bis.scale(clamped);
+    }
+    return n1;
+  }
+  if (dirOut) return leftOf(dirOut);
+  if (dirIn) return leftOf(dirIn);
+  return new Vector3(1, 0, 0);
 }
 
 
