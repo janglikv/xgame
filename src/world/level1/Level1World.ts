@@ -8,6 +8,7 @@ import type {
 } from '../GameWorld';
 import { EnemyAI } from '../EnemyAI';
 import { Floor } from '../Floor';
+import { HealthBar } from '../HealthBar';
 import { Minion, type MinionAppearance } from '../Minion';
 import {
   buildArenaColliders,
@@ -65,6 +66,7 @@ export class Level1World implements GameWorld {
   readonly camera: ArcRotateCamera;
   readonly minion: Minion;
   readonly minionPhys: MinionPhysicsProxy;
+  readonly playerHealthBar: HealthBar;
   readonly enemies: Level1Enemy[];
   readonly spellSystem: SpellProjectileSystem;
   readonly floor: Floor;
@@ -81,6 +83,7 @@ export class Level1World implements GameWorld {
     camera: ArcRotateCamera,
     minion: Minion,
     minionPhys: MinionPhysicsProxy,
+    playerHealthBar: HealthBar,
     enemies: Level1Enemy[],
     spellSystem: SpellProjectileSystem,
     floor: Floor,
@@ -92,6 +95,7 @@ export class Level1World implements GameWorld {
     this.camera = camera;
     this.minion = minion;
     this.minionPhys = minionPhys;
+    this.playerHealthBar = playerHealthBar;
     this.enemies = enemies;
     this.spellSystem = spellSystem;
     this.floor = floor;
@@ -157,6 +161,13 @@ export class Level1World implements GameWorld {
       lowPolyFlat: appearance.lowPolyFlat,
       formation: appearance.formation,
     });
+    const scaleMul = appearance.scaleMultiplier ?? 1;
+    const playerHealthBar = new HealthBar(scene, minion.root, {
+      maxHp: 100,
+      offsetY: 1.55 * scaleMul,
+      theme: 'green',
+    });
+
     const minionPhys = new MinionPhysicsProxy(scene, minion.root, {
       mode: 'player',
       radius: 0.13,
@@ -224,11 +235,12 @@ export class Level1World implements GameWorld {
       target: focusTarget,
     });
 
-    return new Level1World(
+    const level1World = new Level1World(
       scene,
       camera,
       minion,
       minionPhys,
+      playerHealthBar,
       enemies,
       spellSystem,
       floor,
@@ -236,6 +248,16 @@ export class Level1World implements GameWorld {
       teleportPad,
       options.onRequestLandingWarp,
     );
+
+    minion.onTakeDamage = (amount) => {
+      playerHealthBar.takeDamage(amount);
+      if (playerHealthBar.isDead() && !minion.isDead()) {
+        minion.setDead(true);
+        level1World.triggerPlayerDeath();
+      }
+    };
+
+    return level1World;
   }
 
   /** 移动开始/停止时由 App 挂钩存档节流 */
@@ -347,8 +369,31 @@ export class Level1World implements GameWorld {
     this.teleportPad.resetCharge();
   }
 
+  private respawnTimer = 0;
+
+  triggerPlayerDeath(): void {
+    this.respawnTimer = 3.0;
+  }
+
   update(ctx: WorldFrameContext): WorldTransition {
     const { dt, menuOpen, moveWish } = ctx;
+
+    if (this.minion.isDead()) {
+      this.respawnTimer -= dt;
+      if (this.respawnTimer <= 0) {
+        const landing = this.teleportPad.getLandingXZ();
+        this.teleportPlayer(landing.x, landing.z);
+        this.teleportPad.disarmUntilLeave();
+        this.playerHealthBar.setHp(100);
+        this.minion.setDead(false);
+      } else {
+        this.minionPhys.setHorizontalVelocity(0, 0);
+        this.minion.update(dt, false);
+        this.playerHealthBar.update(dt);
+        this.spellSystem.update(dt);
+        return null;
+      }
+    }
 
     this.minionPhys.syncToTarget();
 
@@ -364,6 +409,7 @@ export class Level1World implements GameWorld {
     }
     this.minionPhys.setHorizontalVelocity(moveWish.wishX, moveWish.wishZ);
     this.minion.update(dt, moveWish.moving);
+    this.playerHealthBar.update(dt);
 
     this.spellSystem.update(dt);
 
@@ -382,6 +428,7 @@ export class Level1World implements GameWorld {
   }
 
   dispose(): void {
+    this.playerHealthBar.dispose();
     this.spellSystem.dispose();
     this.teleportPad.dispose();
     this.minionPhys.dispose();

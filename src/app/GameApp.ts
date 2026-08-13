@@ -269,6 +269,7 @@ export class GameApp {
       player: world.getPlayer(),
       spellSystem: world.getSpellSystem(),
       menuOpen: menuOpen || lock,
+      cameraFollow: this.cameraFollow,
     });
 
     this.warpLanding.update(dt);

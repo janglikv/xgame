@@ -107,6 +107,7 @@ export const DEMO_ROWS: readonly DemoRow[] = [
   {
     category: '体型',
     presets: [
+      { label: '普通', options: {} },
       { label: '缩小一半', options: { scaleMultiplier: 0.5 } },
       { label: '低面数', options: { lowPolyFlat: true } },
     ],
@@ -186,7 +187,7 @@ export function spawnMinionDemoLineup(
       const scaleMul = preset.options.scaleMultiplier ?? 1;
       const healthBar = new HealthBar(scene, minion.root, {
         maxHp: 100,
-        offsetY: 0.85 * scaleMul,
+        offsetY: 1.65 * scaleMul,
       });
       minion.onTakeDamage = (amount) => {
         healthBar.takeDamage(amount);

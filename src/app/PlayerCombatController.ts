@@ -1,6 +1,8 @@
 import { Matrix, Vector3, type ArcRotateCamera, type Scene } from '@babylonjs/core';
 import type { Minion } from '../world/Minion';
+import { spawnHitSparkFx } from '../world/MeleeSectorFx';
 import type { SpellProjectileSystem } from '../world/SpellProjectileSystem';
+import type { CameraFollow } from './CameraFollow';
 
 /**
  * 玩家战斗控制器：
@@ -73,6 +75,7 @@ export class PlayerCombatController {
       player: Minion;
       spellSystem: SpellProjectileSystem;
       menuOpen: boolean;
+      cameraFollow?: CameraFollow;
     },
   ): void {
     this.shootCooldown = Math.max(0, this.shootCooldown - dt);
@@ -80,7 +83,7 @@ export class PlayerCombatController {
 
     const { scene, camera, player, spellSystem, menuOpen } = opts;
 
-    if (!this.isPointerDown || !this.pointerOverCanvas || menuOpen) {
+    if (!this.isPointerDown || !this.pointerOverCanvas || menuOpen || player.isDead()) {
       player.setAimTarget(null);
       return;
     }
@@ -136,7 +139,7 @@ export class PlayerCombatController {
     if (this.meleeCooldown > 0) return;
 
     const triggered = player.triggerMeleePunch(() => {
-      this.performMeleePunchAttack(scene, player);
+      this.performMeleePunchAttack(scene, player, opts.cameraFollow);
     });
 
     if (triggered) {
@@ -147,7 +150,11 @@ export class PlayerCombatController {
   /**
    * 执行拳头落点精确定点打击
    */
-  private performMeleePunchAttack(scene: Scene, player: Minion): void {
+  private performMeleePunchAttack(
+    scene: Scene,
+    player: Minion,
+    cameraFollow?: CameraFollow,
+  ): void {
     // 1. 获取拳头绝对世界坐标（拳头落点）
     const impactPos = player.getAttackingHandWorldPos();
     const forwardDir = player.getForwardVector();
@@ -190,13 +197,21 @@ export class PlayerCombatController {
       const pushDir =
         hitDir.lengthSquared() > 1e-4 ? hitDir.normalize() : forwardDir;
 
+      const targetCenter = closestHitTarget.root.position
+        .clone()
+        .addInPlace(new Vector3(0, 0.32, 0));
+      spawnHitSparkFx(scene, targetCenter, pushDir);
+
       // 造成 40 点单点拳击伤害
       closestHitTarget.takeDamage(40, pushDir);
 
       // 物理后退击退 (Knockback)
       if (closestHitTarget.physicsProxy) {
-        closestHitTarget.physicsProxy.applyHitKnockback(pushDir, 3.8);
+        closestHitTarget.physicsProxy.applyHitKnockback(pushDir, 4.6);
       }
+
+      player.punchConnected();
+      cameraFollow?.impulse(1);
     }
   }
 }

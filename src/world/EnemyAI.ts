@@ -100,10 +100,10 @@ export class EnemyAI {
     // 随机错开首次攻击，增强自然感
     this.cooldownTimer = 0.6 + Math.random() * 0.4;
 
-    // 创建 3D 悬浮血条 (头顶 Y+0.62)
+    // 创建 3D 悬浮血条 (头顶 Y+1.55，高悬离头顶远)
     this.healthBar = new HealthBar(enemy.root.getScene(), enemy.root, {
       maxHp: options.maxHp ?? 100,
-      offsetY: 0.62,
+      offsetY: 1.55,
     });
 
     // 绑定 Minion 受击事件
@@ -193,13 +193,23 @@ export class EnemyAI {
       // ── 1. 攻击行为：停下踱步，站立锁定玩家开火 ──────────────
       this.enemyPhys.setHorizontalVelocity(0, 0);
 
-      // 朝向玩家并举起法杖锁敌
+      // 朝向玩家
       this.enemy.faceToward(dx, dz);
-      this.enemy.setAimTarget(pPos);
+
+      // 开火前摇瞄准阶段（仅在冷却剩余 <= 0.6s 时举起法杖，发射后立即收起法杖）
+      const aimWindupWindow = 0.6;
+      if (this.cooldownTimer <= aimWindupWindow) {
+        this.enemy.setAimTarget(pPos);
+      } else {
+        this.enemy.setAimTarget(null);
+      }
 
       // 攻击冷却完毕：发射能量弹
       if (this.cooldownTimer <= 0) {
         this.shootAtPlayer(targetPlayer);
+        // 发射完一发子弹后立刻收起法杖
+        this.enemy.setAimTarget(null);
+
         this.cooldownTimer = this.attackCooldown;
         this.attackCount++;
 

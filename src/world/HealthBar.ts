@@ -14,6 +14,7 @@ export interface HealthBarOptions {
   height?: number;
   offsetY?: number;
   maxHp?: number;
+  theme?: 'red' | 'green';
 }
 
 function drawRoundRect(
@@ -39,7 +40,7 @@ function drawRoundRect(
 
 /**
  * 悬浮 3D 科技风血条 (Billboard Health Bar)。
- * 面向摄像机展示，支持缓冲血条延迟追赶 (Damage catch-up)、受击高亮闪烁动效。
+ * 面向摄像机展示，支持缓冲血条延迟追赶 (Damage catch-up)、受击高亮闪烁动效、自定义红/绿主题。
  */
 export class HealthBar {
   private readonly scene: Scene;
@@ -54,6 +55,7 @@ export class HealthBar {
   /** 受击闪烁高亮脉冲 (0~1) */
   private hitPulse = 0;
 
+  private theme: 'red' | 'green';
   private isVisible = true;
 
   constructor(
@@ -65,10 +67,11 @@ export class HealthBar {
     this.maxHp = options.maxHp ?? 100;
     this.currentHp = this.maxHp;
     this.lagHp = this.maxHp;
+    this.theme = options.theme ?? 'red';
 
     const w = options.width ?? 0.68;
     const h = options.height ?? 0.11;
-    const offsetY = options.offsetY ?? 0.85;
+    const offsetY = options.offsetY ?? 1.65;
 
     this.plane = MeshBuilder.CreatePlane(
       'healthBarPlane',
@@ -144,6 +147,10 @@ export class HealthBar {
     this.plane.setEnabled(visible);
   }
 
+  setOffsetY(offsetY: number): void {
+    this.plane.position.y = offsetY;
+  }
+
   update(dt: number): void {
     if (!this.isVisible) return;
 
@@ -210,34 +217,41 @@ export class HealthBar {
     const mainPct = Math.max(0, Math.min(1, this.currentHp / this.maxHp));
     const lagPct = Math.max(0, Math.min(1, this.lagHp / this.maxHp));
 
-    // 2. 扣血缓冲滞后条 (Damage Lag Bar: 白色/金橙色)
+    // 2. 扣血缓冲滞后条 (Damage Lag Bar: 白色/金黄色)
     if (lagPct > mainPct) {
       const lagW = innerW * lagPct;
-      ctx.fillStyle = '#ffaa33';
+      ctx.fillStyle = this.theme === 'green' ? '#ffcc00' : '#ffaa33';
       ctx.fillRect(innerX, innerY, lagW, innerH);
     }
 
-    // 3. 当前 HP 饱满鲜艳血条
+    // 3. 当前 HP 饱满纯色血条
     if (mainPct > 0) {
       const barW = innerW * mainPct;
 
-      const grad = ctx.createLinearGradient(innerX, innerY, innerX + barW, innerY);
-      if (mainPct > 0.5) {
-        grad.addColorStop(0, '#ff2244');
-        grad.addColorStop(1, '#ff6600');
-      } else if (mainPct > 0.25) {
-        grad.addColorStop(0, '#ff4400');
-        grad.addColorStop(1, '#ff8800');
+      let fillColor = '#ff2244';
+      if (this.theme === 'green') {
+        if (mainPct > 0.5) {
+          fillColor = '#00e676';
+        } else if (mainPct > 0.25) {
+          fillColor = '#84cc16';
+        } else {
+          fillColor = '#ef4444';
+        }
       } else {
-        grad.addColorStop(0, '#e60026');
-        grad.addColorStop(1, '#ff3344');
+        if (mainPct > 0.5) {
+          fillColor = '#ff2244';
+        } else if (mainPct > 0.25) {
+          fillColor = '#ff6600';
+        } else {
+          fillColor = '#d32f2f';
+        }
       }
 
-      ctx.fillStyle = grad;
+      ctx.fillStyle = fillColor;
       ctx.fillRect(innerX, innerY, barW, innerH);
 
-      // 顶部晶体高光线
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.35)';
+      // 顶部高光线
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.25)';
       ctx.fillRect(innerX, innerY, barW, innerH * 0.35);
     }
 

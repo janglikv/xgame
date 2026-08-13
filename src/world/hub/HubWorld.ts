@@ -20,6 +20,7 @@ import type {
 } from '../GameWorld';
 import { Floor } from '../Floor';
 import { FloorPickerGallery } from '../FloorPickerGallery';
+import { HealthBar } from '../HealthBar';
 import { HoverOutline } from '../HoverOutline';
 import { Minion, type MinionAppearance } from '../Minion';
 import { spawnMinionDemoLineup, type DemoLineup } from '../MinionDemoLineup';
@@ -65,6 +66,7 @@ export class HubWorld implements GameWorld {
   readonly camera: ArcRotateCamera;
   readonly minion: Minion;
   readonly minionPhys: MinionPhysicsProxy;
+  readonly playerHealthBar: HealthBar;
   readonly spellSystem: SpellProjectileSystem;
   readonly floor: Floor;
   readonly floorPickerGallery: FloorPickerGallery;
@@ -86,6 +88,7 @@ export class HubWorld implements GameWorld {
     camera: ArcRotateCamera,
     minion: Minion,
     minionPhys: MinionPhysicsProxy,
+    playerHealthBar: HealthBar,
     spellSystem: SpellProjectileSystem,
     floor: Floor,
     floorPickerGallery: FloorPickerGallery,
@@ -101,6 +104,7 @@ export class HubWorld implements GameWorld {
     this.camera = camera;
     this.minion = minion;
     this.minionPhys = minionPhys;
+    this.playerHealthBar = playerHealthBar;
     this.spellSystem = spellSystem;
     this.floor = floor;
     this.floorPickerGallery = floorPickerGallery;
@@ -170,6 +174,13 @@ export class HubWorld implements GameWorld {
       minion.onAppearanceChanged = options.onAppearanceChanged;
     }
 
+    const scaleMul = minion.getAppearance().scaleMultiplier ?? 1;
+    const playerHealthBar = new HealthBar(scene, minion.root, {
+      maxHp: 100,
+      offsetY: 1.55 * scaleMul,
+      theme: 'green',
+    });
+
     const minionPhys = new MinionPhysicsProxy(scene, minion.root, {
       mode: 'player',
       radius: 0.13,
@@ -199,11 +210,12 @@ export class HubWorld implements GameWorld {
       free: options.freeCamera,
     });
 
-    return new HubWorld(
+    const hubWorld = new HubWorld(
       scene,
       camera,
       minion,
       minionPhys,
+      playerHealthBar,
       spellSystem,
       floor,
       floorPickerGallery,
@@ -215,6 +227,16 @@ export class HubWorld implements GameWorld {
       shadowGen,
       options.onRequestLandingWarp,
     );
+
+    minion.onTakeDamage = (amount) => {
+      playerHealthBar.takeDamage(amount);
+      if (playerHealthBar.isDead() && !minion.isDead()) {
+        minion.setDead(true);
+        hubWorld.triggerPlayerDeath();
+      }
+    };
+
+    return hubWorld;
   }
 
   setMovePersistenceHandlers(handlers: {
@@ -368,8 +390,31 @@ export class HubWorld implements GameWorld {
     this.teleportPad.resetCharge();
   }
 
+  private respawnTimer = 0;
+
+  triggerPlayerDeath(): void {
+    this.respawnTimer = 3.0;
+  }
+
   update(ctx: WorldFrameContext): WorldTransition {
     const { dt, menuOpen, moveWish, pointerOverCanvas } = ctx;
+
+    if (this.minion.isDead()) {
+      this.respawnTimer -= dt;
+      if (this.respawnTimer <= 0) {
+        const landing = this.teleportPad.getLandingXZ();
+        this.teleportPlayer(landing.x, landing.z);
+        this.teleportPad.disarmUntilLeave();
+        this.playerHealthBar.setHp(100);
+        this.minion.setDead(false);
+      } else {
+        this.minionPhys.setHorizontalVelocity(0, 0);
+        this.minion.update(dt, false);
+        this.playerHealthBar.update(dt);
+        this.spellSystem.update(dt);
+        return null;
+      }
+    }
 
     this.minionPhys.syncToTarget();
 
@@ -379,6 +424,7 @@ export class HubWorld implements GameWorld {
     }
     this.minionPhys.setHorizontalVelocity(moveWish.wishX, moveWish.wishZ);
     this.minion.update(dt, moveWish.moving);
+    this.playerHealthBar.update(dt);
     this.spellSystem.update(dt);
     this.demoLineup.update(dt);
     this.floorPickerGallery.update(this.minion.root.position);
@@ -403,6 +449,7 @@ export class HubWorld implements GameWorld {
   }
 
   dispose(): void {
+    this.playerHealthBar.dispose();
     this.spellSystem.dispose();
     this.teleportPad.dispose();
     this.minionPhys.dispose();

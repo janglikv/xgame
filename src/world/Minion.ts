@@ -167,6 +167,11 @@ export class Minion {
 
   static readonly HAND_REST_EMPTY = new Vector3(-0.5, 0.5, 0.05);
   static readonly HAND_REST_STAFF = new Vector3(-0.52, 0.68, 0.28);
+  static readonly BODY_RADIUS = 0.42;
+  static readonly HAND_RADIUS = 0.1;
+  /** 拳心与躯干球心的最小间距，略大于两球半径之和 */
+  static readonly HAND_BODY_CLEAR =
+    Minion.BODY_RADIUS + Minion.HAND_RADIUS + 0.02;
 
   readonly root: TransformNode;
   readonly bodyRoot: TransformNode;
@@ -213,8 +218,11 @@ export class Minion {
 
   /** 鼠标按住时的 3D 瞄准目标点（用于法杖实时指向） */
   private aimTarget: Vector3 | null = null;
+  private lastAimTarget: Vector3 | null = null;
   /** 瞄准动画过渡权重（0 = 待机/走路姿态，1 = 完全指向目标） */
   private aimWeight = 0;
+  private isDeadState = false;
+  private deathAnimWeight = 0;
   private readonly defaultStaffQuat = Quaternion.RotationYawPitchRoll(
     0,
     -0.32,
@@ -239,10 +247,15 @@ export class Minion {
 
   private isPunching = false;
   private punchProgress = 0;
-  private readonly punchDuration = 0.32;
+  /** 略长于冷却，连击时下一拳会盖住回收尾段 */
+  private readonly punchDuration = 0.36;
   private punchCombo = 0;
   private punchHitTriggered = false;
+  private punchHitStop = 0;
+  private punchLungeZ = 0;
   private onPunchHitCallback?: () => void;
+  private hitReactT = 0;
+  private readonly hitReactDir = new Vector3();
 
   constructor(scene: Scene, x = 0, z = 0, options: MinionOptions = {}) {
     const facePositiveX = options.facePositiveX ?? true;
@@ -385,9 +398,30 @@ export class Minion {
     }
   }
 
-  /** 设置/清除鼠标 3D 瞄准目标点（手持法杖按下鼠标时实时传入） */
+  /** 设置/清除 3D 瞄准目标点 */
   setAimTarget(target: Vector3 | null): void {
+    if (this.isDeadState) {
+      this.aimTarget = null;
+      return;
+    }
+    if (target) {
+      this.lastAimTarget = target.clone();
+    }
     this.aimTarget = target ? target.clone() : null;
+  }
+
+  /** 设置角色死亡倒地造型/状态 */
+  setDead(dead: boolean): void {
+    this.isDeadState = dead;
+    if (dead) {
+      this.setAimTarget(null);
+      this.eyesClosed = true;
+    }
+  }
+
+  /** 是否处于死亡倒地状态 */
+  isDead(): boolean {
+    return this.isDeadState;
   }
 
   /** 是否手持法杖 */
@@ -420,7 +454,26 @@ export class Minion {
 
   /** 对角色施加伤害 */
   takeDamage(amount: number, dir?: Vector3): void {
+    this.playHitReact(dir);
     this.onTakeDamage?.(amount, dir);
+  }
+
+  /** 受击短反馈：压扁、闪光、沿打击方向一顿 */
+  playHitReact(dir?: Vector3): void {
+    this.hitReactT = 1;
+    if (dir && dir.lengthSquared() > 1e-6) {
+      this.hitReactDir.copyFrom(dir);
+      this.hitReactDir.y = 0;
+      if (this.hitReactDir.lengthSquared() > 1e-6) this.hitReactDir.normalize();
+      else this.hitReactDir.set(0, 0, 0);
+    } else {
+      this.hitReactDir.set(0, 0, 0);
+    }
+  }
+
+  /** 拳头打实后短暂停住，做出击中顿挫 */
+  punchConnected(): void {
+    if (this.isPunching) this.punchHitStop = 0.05;
   }
 
   /** 获取角色当前 Yaw 旋转角（弧度） */
@@ -431,12 +484,15 @@ export class Minion {
   /** 触发空手近战挥拳击打 */
   triggerMeleePunch(onHit?: () => void): boolean {
     if (this.hasStaff()) return false;
-    if (this.isPunching && this.punchProgress < 0.18) {
+    if (this.isPunching && this.punchProgress < 0.2) {
       return false;
     }
     this.punchCombo = (this.punchCombo + 1) % 2;
     this.punchProgress = 0;
     this.punchHitTriggered = false;
+    this.punchHitStop = 0;
+    this.leftHand.scaling.set(1, 1, 1);
+    this.rightHand.scaling.set(1, 1, 1);
     this.onPunchHitCallback = onHit;
     this.isPunching = true;
     return true;
@@ -444,6 +500,183 @@ export class Minion {
 
   isMeleePunching(): boolean {
     return this.isPunching;
+  }
+
+  /**
+   * 空手钩拳：外侧小弧 + 蓄力后甩击定格。
+   * theta=0 为本地 +Z 前方，正值朝 +X（角色左侧）。
+   */
+  private updateMeleePunch(dt: number): void {
+    if (!this.isPunching) {
+      this.punchLungeZ = 0;
+      return;
+    }
+
+    if (this.punchHitStop > 0) {
+      this.punchHitStop = Math.max(0, this.punchHitStop - dt);
+    } else {
+      this.punchProgress += dt;
+    }
+    const p = Math.min(1, this.punchProgress / this.punchDuration);
+
+    // 甩到身前定格时触发落点判定
+    if (p >= 0.46 && !this.punchHitTriggered) {
+      this.punchHitTriggered = true;
+      this.onPunchHitCallback?.();
+    }
+
+    const isRight = this.punchCombo === 0;
+    const punchHand = isRight ? this.rightHand : this.leftHand;
+    const otherHand = isRight ? this.leftHand : this.rightHand;
+    const punchRest = isRight ? this.rightHandRest : this.leftHandRest;
+    const otherRest = isRight ? this.leftHandRest : this.rightHandRest;
+    const sideSign = isRight ? 1 : -1;
+
+    // 落点停在出拳一侧的身前，不穿到对侧，回收才不会切进身体
+    const thetaChamber = -1.45 * sideSign;
+    const thetaImpact = -0.28 * sideSign;
+    const thetaFollow = -0.12 * sideSign;
+    const restTheta = Math.atan2(punchRest.x, punchRest.z);
+    const restRadius = Math.hypot(punchRest.x, punchRest.z);
+    const rChamber = 0.58;
+    const rApex = 0.7;
+    const rImpact = 0.72;
+    const yChamber = punchRest.y - 0.03;
+    const yApex = 0.58;
+    const yImpact = 0.54;
+    const punchRestClear = Math.hypot(
+      punchRest.x,
+      punchRest.y - Minion.BODY_LOCAL_Y,
+      punchRest.z,
+    );
+    const otherRestClear = Math.hypot(
+      otherRest.x,
+      otherRest.y - Minion.BODY_LOCAL_Y,
+      otherRest.z,
+    );
+
+    const easeOut = (t: number) => 1 - (1 - t) * (1 - t);
+    const snapEase = (t: number) => t * t * t;
+    const smooth = (t: number) => t * t * (3 - 2 * t);
+    const quad = (a: number, b: number, c: number, t: number) => {
+      const u = 1 - t;
+      return u * u * a + 2 * u * t * b + t * t * c;
+    };
+    const placePunch = (
+      x: number,
+      y: number,
+      z: number,
+      minDist = Minion.HAND_BODY_CLEAR,
+    ): void => {
+      this.setHandOutsideBody(punchHand, x, y, z, minDist);
+    };
+    const placeGuard = (t: number, minDist = Minion.HAND_BODY_CLEAR): void => {
+      this.setHandOutsideBody(
+        otherHand,
+        otherRest.x * (1 + 0.05 * t),
+        otherRest.y + 0.08 * t,
+        otherRest.z - 0.12 * t,
+        minDist,
+      );
+    };
+
+    let squash = 0;
+    if (p < 0.26) {
+      // 蓄力：略拉长前摇，身体后坐
+      const t = easeOut(p / 0.26);
+      const cx = rChamber * Math.sin(thetaChamber);
+      const cz = rChamber * Math.cos(thetaChamber);
+      placePunch(
+        punchRest.x + (cx - punchRest.x) * t,
+        punchRest.y + (yChamber - punchRest.y) * t,
+        punchRest.z + (cz - punchRest.z) * t,
+      );
+      placeGuard(t);
+      this.torso.rotation.y = -0.26 * sideSign * t;
+      this.torso.rotation.x = -0.06 * t;
+      this.punchLungeZ = -0.025 * t;
+      punchHand.scaling.set(0.96, 0.96, 0.96);
+    } else if (p < 0.46) {
+      // 甩击：三次方加速，后半段才真正打出
+      const t = snapEase((p - 0.26) / 0.2);
+      const theta = thetaChamber + (thetaImpact - thetaChamber) * t;
+      const radius = quad(rChamber, rApex, rImpact, t);
+      const y = quad(yChamber, yApex, yImpact, t);
+      placePunch(radius * Math.sin(theta), y, radius * Math.cos(theta));
+      placeGuard(0.55 + 0.45 * t);
+      this.torso.rotation.y =
+        -0.26 * sideSign * (1 - t) + 0.3 * sideSign * t;
+      this.torso.rotation.x = -0.06 * (1 - t) + 0.12 * t;
+      this.punchLungeZ = -0.025 + 0.09 * t;
+      const stretch = t * t;
+      punchHand.scaling.set(1 - 0.08 * stretch, 1 - 0.08 * stretch, 1 + 0.18 * stretch);
+    } else if (p < 0.6) {
+      // 命中定格：拳头压扁，身体顶出去
+      const t = (p - 0.46) / 0.14;
+      const theta = thetaImpact + (thetaFollow - thetaImpact) * t * 0.35;
+      const radius = rImpact * (1 - 0.03 * t);
+      const y = yImpact - 0.02 * t;
+      placePunch(radius * Math.sin(theta), y, radius * Math.cos(theta));
+      placeGuard(1);
+      this.torso.rotation.y = 0.3 * sideSign + 0.04 * sideSign * t;
+      this.torso.rotation.x = 0.12 - 0.03 * t;
+      this.punchLungeZ = 0.065 * (1 - t * 0.25);
+      squash = 1 - t * 0.45;
+      punchHand.scaling.set(1 + 0.26 * squash, 1 + 0.18 * squash, 1 - 0.22 * squash);
+    } else {
+      // 沿出拳同侧外侧弧收回
+      const t = smooth((p - 0.6) / 0.4);
+      const followR = rImpact * 0.94;
+      const theta = thetaFollow + (restTheta - thetaFollow) * t;
+      const radius = followR + (restRadius - followR) * t;
+      const y = yImpact - 0.02 + (punchRest.y - (yImpact - 0.02)) * t;
+      const clear =
+        Minion.HAND_BODY_CLEAR +
+        (punchRestClear - Minion.HAND_BODY_CLEAR) * t;
+      placePunch(radius * Math.sin(theta), y, radius * Math.cos(theta), clear);
+      placeGuard(
+        1 - t,
+        Minion.HAND_BODY_CLEAR + (otherRestClear - Minion.HAND_BODY_CLEAR) * t,
+      );
+      this.torso.rotation.y = 0.34 * sideSign * (1 - t);
+      this.torso.rotation.x = 0.09 * (1 - t);
+      this.punchLungeZ = 0.05 * (1 - t);
+      punchHand.scaling.set(1, 1, 1);
+    }
+
+    if (p >= 1) {
+      this.isPunching = false;
+      this.punchLungeZ = 0;
+      this.torso.rotation.x = 0;
+      this.torso.rotation.y = 0;
+      punchHand.scaling.set(1, 1, 1);
+    }
+  }
+
+  /** 把拳头从躯干球内顶到最小安全间距，避免穿模 */
+  private setHandOutsideBody(
+    hand: Mesh,
+    x: number,
+    y: number,
+    z: number,
+    minDist: number,
+  ): void {
+    const cy = Minion.BODY_LOCAL_Y;
+    const dx = x;
+    const dy = y - cy;
+    const dz = z;
+    const d2 = dx * dx + dy * dy + dz * dz;
+    if (d2 < minDist * minDist) {
+      const d = Math.sqrt(d2);
+      if (d < 1e-6) {
+        hand.position.set(0, cy, minDist);
+        return;
+      }
+      const s = minDist / d;
+      hand.position.set(dx * s, cy + dy * s, dz * s);
+      return;
+    }
+    hand.position.set(x, y, z);
   }
 
   /** 获取当前出拳手（拳头落点）的世界坐标 */
@@ -590,11 +823,27 @@ export class Minion {
   }
 
   update(dt: number, moving: boolean): void {
+    // 死亡倒地姿态平滑过渡 (0 = 站立，1 = 倒地趴下)
+    const targetDeathWeight = this.isDeadState ? 1 : 0;
+    this.deathAnimWeight +=
+      (targetDeathWeight - this.deathAnimWeight) * Math.min(1, dt * 7);
 
-    // 瞄准动画过渡权重（手持法杖且设置了 aimTarget 时渐增）
+    if (this.deathAnimWeight > 0.001) {
+      // 身体向侧后方翻倒趴下（Pitch 侧翻 -85° = -1.48 弧度）
+      this.bodyRoot.rotation.z = -1.48 * this.deathAnimWeight;
+      this.bodyRoot.rotation.x = 0.35 * this.deathAnimWeight;
+      // 贴紧地面下沉，避免悬空
+      this.bodyRoot.position.y = -0.16 * this.deathAnimWeight;
+      this.eyesClosed = true;
+    } else {
+      this.bodyRoot.rotation.z = 0;
+      this.bodyRoot.rotation.x = 0;
+    }
+
+    // 瞄准动画过渡权重（手持法杖且设置了 aimTarget 时渐增；收起时按 5.5 平滑放低）
     const isAiming = this.aimTarget !== null && this.appearance.staff !== null;
     const aimTargetWeight = isAiming ? 1 : 0;
-    const aimBlendSpeed = isAiming ? 14 : 8;
+    const aimBlendSpeed = isAiming ? 14 : 5.5;
     this.aimWeight +=
       (aimTargetWeight - this.aimWeight) * Math.min(1, dt * aimBlendSpeed);
 
@@ -694,84 +943,7 @@ export class Minion {
         Math.abs(Math.sin(this.walkPhase)) * Minion.BODY_BOB * w + breathBob;
     }
 
-    // 空手近战挥拳动画（高流畅度三阶段前摇-直出-收回）
-    if (this.isPunching) {
-      this.punchProgress += dt;
-      const p = Math.min(1, this.punchProgress / this.punchDuration);
-
-      // 约 35% 帧处触发打击点（扇形范围判定与特效）
-      if (p >= 0.35 && !this.punchHitTriggered) {
-        this.punchHitTriggered = true;
-        this.onPunchHitCallback?.();
-      }
-
-      const isRight = this.punchCombo === 0;
-      const punchHand = isRight ? this.rightHand : this.leftHand;
-      const otherHand = isRight ? this.leftHand : this.rightHand;
-      const punchRest = isRight ? this.rightHandRest : this.leftHandRest;
-      const otherRest = isRight ? this.leftHandRest : this.rightHandRest;
-      const sideSign = isRight ? 1 : -1;
-
-      if (p < 0.3) {
-        // Phase 1 (0 ~ 0.3): 前摇蓄力拉拳，身体微拧
-        const t1 = p / 0.3;
-        punchHand.position.set(
-          punchRest.x + 0.08 * sideSign * t1,
-          punchRest.y + 0.12 * t1,
-          punchRest.z - 0.3 * t1,
-        );
-        this.torso.rotation.y = -0.3 * sideSign * t1;
-        this.torso.rotation.x = -0.08 * t1;
-      } else if (p < 0.6) {
-        // Phase 2 (0.3 ~ 0.6): 暴风直拳冲出，躯干向前下压
-        const t2 = (p - 0.3) / 0.3;
-        const s2 = t2 * t2 * (3 - 2 * t2);
-
-        const startZ = punchRest.z - 0.3;
-        const targetZ = 0.95;
-        const currZ = startZ + (targetZ - startZ) * s2;
-
-        punchHand.position.set(
-          punchRest.x * (1 - s2) + (-0.12 * sideSign) * s2,
-          punchRest.y * (1 - s2) + 0.58 * s2,
-          currZ,
-        );
-
-        otherHand.position.set(
-          otherRest.x * (1 - s2 * 0.4),
-          otherRest.y + 0.15 * s2,
-          otherRest.z - 0.18 * s2,
-        );
-
-        this.torso.rotation.y = -0.3 * sideSign * (1 - s2) + 0.4 * sideSign * s2;
-        this.torso.rotation.x = -0.08 * (1 - s2) + 0.26 * s2;
-      } else {
-        // Phase 3 (0.6 ~ 1.0): 快速收拳恢复
-        const t3 = (p - 0.6) / 0.4;
-        const s3 = 1 - t3;
-
-        punchHand.position.set(
-          punchRest.x + (-0.12 * sideSign - punchRest.x) * s3,
-          punchRest.y + (0.58 - punchRest.y) * s3,
-          punchRest.z + (0.95 - punchRest.z) * s3,
-        );
-
-        otherHand.position.set(
-          otherRest.x * (1 - s3 * 0.4),
-          otherRest.y + 0.15 * s3,
-          otherRest.z - 0.18 * s3,
-        );
-
-        this.torso.rotation.y = 0.4 * sideSign * s3;
-        this.torso.rotation.x = 0.26 * s3;
-      }
-
-      if (p >= 1) {
-        this.isPunching = false;
-        this.torso.rotation.x = 0;
-        this.torso.rotation.y = 0;
-      }
-    }
+    this.updateMeleePunch(dt);
 
     // 瞄准姿态调整：右手臂位姿插值 & 法杖实时旋转指向目标点
     if (this.aimWeight > 0.001) {
@@ -788,9 +960,10 @@ export class Minion {
     }
 
     if (this.staffFx) {
-      if (this.aimWeight > 0.001 && this.aimTarget) {
-        const dx = this.aimTarget.x - this.root.position.x;
-        const dz = this.aimTarget.z - this.root.position.z;
+      const activeAimTarget = this.aimTarget ?? this.lastAimTarget;
+      if (this.aimWeight > 0.001 && activeAimTarget) {
+        const dx = activeAimTarget.x - this.root.position.x;
+        const dz = activeAimTarget.z - this.root.position.z;
         if (dx * dx + dz * dz > 1e-6) {
           const dirWorld = new Vector3(dx, 0, dz).normalize();
           // 强制刷新当前帧右手最新的世界矩阵，防止父节点旋转更新延迟导致法杖角度跳变闪烁
@@ -841,6 +1014,32 @@ export class Minion {
         this.staffFx.root.rotationQuaternion = this.defaultStaffQuat.clone();
       }
     }
+
+    this.applyHitJuice(dt);
+  }
+
+  /** 受击压扁/闪光，并叠加上出拳时的身体前顶 */
+  private applyHitJuice(dt: number): void {
+    if (this.hitReactT > 0) {
+      this.hitReactT = Math.max(0, this.hitReactT - dt * 8);
+    }
+    const k = this.hitReactT * this.hitReactT;
+    let lx = 0;
+    let lz = this.punchLungeZ;
+    if (k > 1e-4) {
+      const yaw = this.root.rotation.y;
+      const c = Math.cos(yaw);
+      const s = Math.sin(yaw);
+      lx = (this.hitReactDir.x * c - this.hitReactDir.z * s) * 0.055 * k;
+      lz += (this.hitReactDir.x * s + this.hitReactDir.z * c) * 0.055 * k;
+      this.bodyRoot.scaling.set(1 + 0.09 * k, 1 - 0.14 * k, 1 + 0.09 * k);
+      this.bodyMat.emissiveColor.set(0.5 * k, 0.14 * k, 0.05 * k);
+    } else {
+      this.bodyRoot.scaling.set(1, 1, 1);
+      this.bodyMat.emissiveColor.set(0, 0, 0);
+    }
+    this.bodyRoot.position.x = lx;
+    this.bodyRoot.position.z = lz;
   }
 
   private setHat(style: HatStyle | null): void {
