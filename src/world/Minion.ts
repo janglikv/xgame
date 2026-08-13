@@ -415,7 +415,9 @@ export class Minion {
     this.isDeadState = dead;
     if (dead) {
       this.setAimTarget(null);
-      this.eyesClosed = true;
+      this.setEyesClosed(true);
+    } else if (this.blinkClosedT <= 0) {
+      this.setEyesClosed(false);
     }
   }
 
@@ -834,10 +836,10 @@ export class Minion {
       this.bodyRoot.rotation.x = 0.35 * this.deathAnimWeight;
       // 贴紧地面下沉，避免悬空
       this.bodyRoot.position.y = -0.16 * this.deathAnimWeight;
-      this.eyesClosed = true;
     } else {
       this.bodyRoot.rotation.z = 0;
       this.bodyRoot.rotation.x = 0;
+      this.bodyRoot.position.y = 0;
     }
 
     // 瞄准动画过渡权重（手持法杖且设置了 aimTarget 时渐增；收起时按 5.5 平滑放低）

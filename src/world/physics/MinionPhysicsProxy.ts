@@ -1,9 +1,9 @@
 import {
+  HavokPlugin,
   MeshBuilder,
   PhysicsAggregate,
   PhysicsMotionType,
   PhysicsShapeType,
-  Quaternion,
   type Scene,
   type TransformNode,
   Vector3,
@@ -51,6 +51,7 @@ export class MinionPhysicsProxy {
   private readonly halfHeight: number;
   private readonly tmpVel = new Vector3();
   private readonly tmpPos = new Vector3();
+  private disposed = false;
 
   constructor(
     scene: Scene,
@@ -117,6 +118,7 @@ export class MinionPhysicsProxy {
 
   /** 受击击退：平滑叠加物理线性速度 */
   applyHitKnockback(dir: Vector3, force = 2.0): void {
+    if (this.disposed) return;
     this.aggregate.body.getLinearVelocityToRef(this.tmpVel);
     this.tmpVel.x += dir.x * force;
     this.tmpVel.z += dir.z * force;
@@ -125,6 +127,7 @@ export class MinionPhysicsProxy {
 
   /** 脚底 → 胶囊中心 */
   private centerFromTarget(): Vector3 {
+    this.target.computeWorldMatrix(true);
     const p = this.target.getAbsolutePosition();
     return new Vector3(p.x, p.y + this.radius + this.halfHeight, p.z);
   }
@@ -139,6 +142,7 @@ export class MinionPhysicsProxy {
    * Y 保留物理结果（贴地/轻跳）。
    */
   setHorizontalVelocity(vx: number, vz: number): void {
+    if (this.disposed) return;
     this.aggregate.body.getLinearVelocityToRef(this.tmpVel);
     this.tmpVel.x = vx;
     this.tmpVel.z = vz;
@@ -147,12 +151,17 @@ export class MinionPhysicsProxy {
 
   /** 读水平速度（用于朝向 / 步态） */
   getHorizontalVelocityToRef(out: Vector3): Vector3 {
+    if (this.disposed) {
+      out.set(0, 0, 0);
+      return out;
+    }
     this.aggregate.body.getLinearVelocityToRef(this.tmpVel);
     out.set(this.tmpVel.x, 0, this.tmpVel.z);
     return out;
   }
 
   getHorizontalSpeed(): number {
+    if (this.disposed) return 0;
     this.aggregate.body.getLinearVelocityToRef(this.tmpVel);
     return Math.hypot(this.tmpVel.x, this.tmpVel.z);
   }
@@ -162,6 +171,7 @@ export class MinionPhysicsProxy {
    * 应在物理步进之后的下一帧开头调用（见 main 循环）。
    */
   syncToTarget(): void {
+    if (this.disposed) return;
     // 禁止翻滚：角速度清零 + 姿态扶正
     this.aggregate.body.setAngularVelocity(Vector3.ZeroReadOnly);
     this.mesh.rotationQuaternion = null;
@@ -180,20 +190,35 @@ export class MinionPhysicsProxy {
   }
 
   /**
-   * 将代理瞬移到 target 脚底（出生/重置用，勿每帧调用）。
+   * 将代理瞬移到 target 脚底（出生/重置/复活用）。
+   *
+   * 不能用 setTargetTransform：那是「设速度去追目标」，会被墙挡住，
+   * 下一帧 syncToTarget 又把表现层拉回原处，看起来像原地复活。
    */
   teleportToTarget(): void {
+    if (this.disposed) return;
     const c = this.centerFromTarget();
     this.mesh.position.copyFrom(c);
     this.mesh.rotationQuaternion = null;
     this.mesh.rotation.set(0, 0, 0);
-    const rot = Quaternion.Identity();
-    this.aggregate.body.setTargetTransform(c, rot);
-    this.aggregate.body.setLinearVelocity(Vector3.ZeroReadOnly);
-    this.aggregate.body.setAngularVelocity(Vector3.ZeroReadOnly);
+    this.mesh.computeWorldMatrix(true);
+
+    const body = this.aggregate.body;
+    const plugin = this.mesh.getScene().getPhysicsEngine()?.getPhysicsPlugin();
+    if (plugin instanceof HavokPlugin) {
+      const wasDisabled = body.disablePreStep;
+      body.disablePreStep = false;
+      plugin.setPhysicsBodyTransformation(body, this.mesh);
+      body.disablePreStep = wasDisabled;
+    }
+
+    body.setLinearVelocity(Vector3.ZeroReadOnly);
+    body.setAngularVelocity(Vector3.ZeroReadOnly);
   }
 
   dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
     this.aggregate.dispose();
     this.mesh.dispose();
   }

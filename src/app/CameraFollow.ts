@@ -37,10 +37,17 @@ export class CameraFollow {
     cameraMode: CameraMode,
   ): void {
     getFocus(this.focusPoint);
-    const t = 1 - Math.exp(-this.followStrength * dt);
-    this.camFollowTarget.x += (this.focusPoint.x - this.camFollowTarget.x) * t;
-    this.camFollowTarget.y += (this.focusPoint.y - this.camFollowTarget.y) * t;
-    this.camFollowTarget.z += (this.focusPoint.z - this.camFollowTarget.z) * t;
+    const jumpX = this.focusPoint.x - this.camFollowTarget.x;
+    const jumpZ = this.focusPoint.z - this.camFollowTarget.z;
+    // 复活/切场景瞬移：直接咬住，避免镜头先拽回死亡点再慢慢跟过去
+    if (jumpX * jumpX + jumpZ * jumpZ > 4) {
+      this.camFollowTarget.copyFrom(this.focusPoint);
+    } else {
+      const t = 1 - Math.exp(-this.followStrength * dt);
+      this.camFollowTarget.x += jumpX * t;
+      this.camFollowTarget.y += (this.focusPoint.y - this.camFollowTarget.y) * t;
+      this.camFollowTarget.z += jumpZ * t;
+    }
     this.shakenTarget.copyFrom(this.camFollowTarget);
     if (this.shake > 0) {
       const mag = 0.05 * this.shake;

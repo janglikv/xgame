@@ -40,6 +40,7 @@ import {
 import { SpatialAxesGrid } from '../SpatialAxesGrid';
 import { SpellProjectileSystem } from '../SpellProjectileSystem';
 import { TeleportPad } from '../TeleportPad';
+import { DeathOverlay } from '../../ui/DeathOverlay';
 
 export interface CreateHubWorldOptions {
   cameraMode: CameraMode;
@@ -67,6 +68,7 @@ export class HubWorld implements GameWorld {
   readonly minion: Minion;
   readonly minionPhys: MinionPhysicsProxy;
   readonly playerHealthBar: HealthBar;
+  readonly deathOverlay: DeathOverlay;
   readonly spellSystem: SpellProjectileSystem;
   readonly floor: Floor;
   readonly floorPickerGallery: FloorPickerGallery;
@@ -89,6 +91,7 @@ export class HubWorld implements GameWorld {
     minion: Minion,
     minionPhys: MinionPhysicsProxy,
     playerHealthBar: HealthBar,
+    deathOverlay: DeathOverlay,
     spellSystem: SpellProjectileSystem,
     floor: Floor,
     floorPickerGallery: FloorPickerGallery,
@@ -105,6 +108,7 @@ export class HubWorld implements GameWorld {
     this.minion = minion;
     this.minionPhys = minionPhys;
     this.playerHealthBar = playerHealthBar;
+    this.deathOverlay = deathOverlay;
     this.spellSystem = spellSystem;
     this.floor = floor;
     this.floorPickerGallery = floorPickerGallery;
@@ -210,12 +214,15 @@ export class HubWorld implements GameWorld {
       free: options.freeCamera,
     });
 
+    const deathOverlay = new DeathOverlay(scene);
+
     const hubWorld = new HubWorld(
       scene,
       camera,
       minion,
       minionPhys,
       playerHealthBar,
+      deathOverlay,
       spellSystem,
       floor,
       floorPickerGallery,
@@ -228,11 +235,15 @@ export class HubWorld implements GameWorld {
       options.onRequestLandingWarp,
     );
 
+    deathOverlay.onRespawnClick = () => {
+      hubWorld.respawnNearPad();
+    };
+
     minion.onTakeDamage = (amount) => {
       playerHealthBar.takeDamage(amount);
       if (playerHealthBar.isDead() && !minion.isDead()) {
         minion.setDead(true);
-        hubWorld.triggerPlayerDeath();
+        deathOverlay.show();
       }
     };
 
@@ -303,7 +314,20 @@ export class HubWorld implements GameWorld {
 
   teleportPlayer(x: number, z: number): void {
     this.minion.root.position.set(x, 0, z);
+    this.minion.root.computeWorldMatrix(true);
     this.minionPhys.teleportToTarget();
+    const focus = new Vector3();
+    this.minion.getFocusPoint(focus);
+    this.camera.setTarget(focus);
+  }
+
+  /** 在传送阵前方落点复活：回满血、站起、瞬移，并 disarm 防止刚落地又传送。 */
+  respawnNearPad(): void {
+    const landing = this.getDefaultLandingXZ();
+    this.teleportPlayer(landing.x, landing.z);
+    this.teleportPad.disarmUntilLeave();
+    this.playerHealthBar.setHp(this.playerHealthBar.getMaxHp());
+    this.minion.setDead(false);
   }
 
   getTeleportCharge01(): number {
@@ -390,57 +414,44 @@ export class HubWorld implements GameWorld {
     this.teleportPad.resetCharge();
   }
 
-  private respawnTimer = 0;
-
-  triggerPlayerDeath(): void {
-    this.respawnTimer = 3.0;
-  }
-
   update(ctx: WorldFrameContext): WorldTransition {
     const { dt, menuOpen, moveWish, pointerOverCanvas } = ctx;
 
-    if (this.minion.isDead()) {
-      this.respawnTimer -= dt;
-      if (this.respawnTimer <= 0) {
-        const landing = this.teleportPad.getLandingXZ();
-        this.teleportPlayer(landing.x, landing.z);
-        this.teleportPad.disarmUntilLeave();
-        this.playerHealthBar.setHp(100);
-        this.minion.setDead(false);
-      } else {
-        this.minionPhys.setHorizontalVelocity(0, 0);
-        this.minion.update(dt, false);
-        this.playerHealthBar.update(dt);
-        this.spellSystem.update(dt);
-        return null;
-      }
-    }
+    this.deathOverlay.update(dt);
+
+    const isDead = this.minion.isDead();
+    const isMoving = !isDead && moveWish.moving;
 
     this.minionPhys.syncToTarget();
 
-    if (moveWish.moving) {
+    if (isMoving) {
       this.minion.faceToward(moveWish.dirX, moveWish.dirZ);
       this.onPlayerMoved?.();
     }
-    this.minionPhys.setHorizontalVelocity(moveWish.wishX, moveWish.wishZ);
-    this.minion.update(dt, moveWish.moving);
+    this.minionPhys.setHorizontalVelocity(
+      isMoving ? moveWish.wishX : 0,
+      isMoving ? moveWish.wishZ : 0,
+    );
+    this.minion.update(dt, isMoving);
     this.playerHealthBar.update(dt);
     this.spellSystem.update(dt);
     this.demoLineup.update(dt);
     this.floorPickerGallery.update(this.minion.root.position);
 
-    if (!moveWish.moving && this.wasMoving) {
+    if (!isMoving && this.wasMoving) {
       this.onPlayerStopped?.();
     }
-    this.wasMoving = moveWish.moving;
+    this.wasMoving = isMoving;
 
-    const p = this.minion.root.position;
-    const onPad = this.teleportPad.contains(p.x, p.z);
-    if (this.teleportPad.update(dt, onPad && !menuOpen)) {
-      return { type: 'goto', world: 'level1' };
+    if (!isDead) {
+      const p = this.minion.root.position;
+      const onPad = this.teleportPad.contains(p.x, p.z);
+      if (this.teleportPad.update(dt, onPad && !menuOpen)) {
+        return { type: 'goto', world: 'level1' };
+      }
     }
 
-    if (!menuOpen && pointerOverCanvas) {
+    if (!isDead && !menuOpen && pointerOverCanvas) {
       this.hoverOutline.updateFromScenePick(this.scene);
     }
     this.swapRangeRing.update(dt);
@@ -449,6 +460,7 @@ export class HubWorld implements GameWorld {
   }
 
   dispose(): void {
+    this.deathOverlay.dispose();
     this.playerHealthBar.dispose();
     this.spellSystem.dispose();
     this.teleportPad.dispose();

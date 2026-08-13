@@ -1,3 +1,4 @@
+import type { Vector3 } from '@babylonjs/core';
 import type { Minion } from './Minion';
 import type { MinionPhysicsProxy } from './physics/MinionPhysicsProxy';
 import type { SpellProjectileSystem } from './SpellProjectileSystem';
@@ -40,7 +41,7 @@ export interface EnemyAIOptions {
  * 1. 在固定点 (spawnX, spawnZ) 两侧 (±patrolRadius) 来回踱步巡逻（支持 X 轴横向 / Z 轴纵向）；
  * 2. 同组中任意 1 人发现玩家，全组共享仇恨拉开 5 米锁定；
  * 3. 连续发射 2 次法术后各自强制随机选向踱步 0.5 秒避让；
- * 4. 挂载 3D 悬浮血条，支持受击扣血与倒下复活。
+ * 4. 挂载 3D 悬浮血条，支持受击扣血；击败后消失，不再刷新。
  */
 export class EnemyAI {
   readonly enemy: Minion;
@@ -70,10 +71,8 @@ export class EnemyAI {
   /** 单体仇恨锁定 */
   private isAggroLocked = false;
 
-  /** 是否处于击败死亡倒下状态 */
+  /** 是否处于击败死亡状态 */
   private isDead = false;
-  /** 击败后复活倒计时（秒） */
-  private respawnTimer = 0;
 
   constructor(
     enemy: Minion,
@@ -129,35 +128,32 @@ export class EnemyAI {
 
   private die(): void {
     this.isDead = true;
-    this.respawnTimer = 4.5; // 4.5 秒后在 Spawn 点自动复活刷新
+    this.enemy.setAimTarget(null);
     this.enemy.root.setEnabled(false);
     this.healthBar.setVisible(false);
     this.enemyPhys.setHorizontalVelocity(0, 0);
+    // 关掉物理胶囊，避免隐形尸体继续挡路
+    this.enemyPhys.dispose();
   }
 
-  private respawn(): void {
-    this.isDead = false;
-    this.enemy.root.position.set(this.spawnX, 0, this.spawnZ);
-    this.enemyPhys.teleportToTarget();
-
-    this.healthBar.setHp(this.healthBar.getMaxHp());
-    this.enemy.root.setEnabled(true);
-    this.healthBar.setVisible(true);
+  /** 是否已被击败（死后不再刷新） */
+  isDefeated(): boolean {
+    return this.isDead;
   }
 
   /** 每帧更新 AI 逻辑 */
   update(dt: number, targetPlayer: Minion, allEnemies?: Minion[]): void {
-    if (this.isDead) {
-      this.respawnTimer -= dt;
-      if (this.respawnTimer <= 0) {
-        this.respawn();
-      }
-      return;
-    }
+    if (this.isDead) return;
 
     this.healthBar.update(dt);
     const ePos = this.enemy.root.position;
     const pPos = targetPlayer.root.position;
+
+    // 玩家若已阵亡：敌军停止攻击鞭尸，收起法杖继续巡逻踱步
+    if (targetPlayer.isDead()) {
+      this.doPatrol(dt, ePos, allEnemies);
+      return;
+    }
 
     const dx = pPos.x - ePos.x;
     const dz = pPos.z - ePos.z;
@@ -245,33 +241,37 @@ export class EnemyAI {
       }
 
       // ── 2. 来回踱步行为：在固定点两侧来回走动 ────────────────
-      this.enemy.setAimTarget(null);
-
-      // 检查前方同线友军：相向相遇提前 0.75m 掉头，彻底防止卡死硬推
-      this.checkAvoidFriendCollision(allEnemies);
-
-      const baseCenter = this.patrolAxis === 'x' ? this.spawnX : this.spawnZ;
-      const currentPos = this.patrolAxis === 'x' ? ePos.x : ePos.z;
-      const minVal = baseCenter - this.patrolRadius;
-      const maxVal = baseCenter + this.patrolRadius;
-
-      // 达到边界时反转踱步方向
-      if (currentPos >= maxVal && this.patrolDir > 0) {
-        this.patrolDir = -1;
-      } else if (currentPos <= minVal && this.patrolDir < 0) {
-        this.patrolDir = 1;
-      }
-
-      const moveSpeedVal = this.patrolDir * this.moveSpeed;
-      const vx = this.patrolAxis === 'x' ? moveSpeedVal : 0;
-      const vz = this.patrolAxis === 'z' ? moveSpeedVal : 0;
-
-      this.enemy.faceToward(vx, vz);
-      this.enemyPhys.setHorizontalVelocity(vx, vz);
-
-      // 播放自然行走迈步动画
-      this.enemy.update(dt, true);
+      this.doPatrol(dt, ePos, allEnemies);
     }
+  }
+
+  private doPatrol(dt: number, ePos: Vector3, allEnemies?: Minion[]): void {
+    this.enemy.setAimTarget(null);
+
+    // 检查前方同线友军：相向相遇提前 0.75m 掉头，彻底防止卡死硬推
+    this.checkAvoidFriendCollision(allEnemies);
+
+    const baseCenter = this.patrolAxis === 'x' ? this.spawnX : this.spawnZ;
+    const currentPos = this.patrolAxis === 'x' ? ePos.x : ePos.z;
+    const minVal = baseCenter - this.patrolRadius;
+    const maxVal = baseCenter + this.patrolRadius;
+
+    // 达到边界时反转踱步方向
+    if (currentPos >= maxVal && this.patrolDir > 0) {
+      this.patrolDir = -1;
+    } else if (currentPos <= minVal && this.patrolDir < 0) {
+      this.patrolDir = 1;
+    }
+
+    const moveSpeedVal = this.patrolDir * this.moveSpeed;
+    const vx = this.patrolAxis === 'x' ? moveSpeedVal : 0;
+    const vz = this.patrolAxis === 'z' ? moveSpeedVal : 0;
+
+    this.enemy.faceToward(vx, vz);
+    this.enemyPhys.setHorizontalVelocity(vx, vz);
+
+    // 播放自然行走迈步动画
+    this.enemy.update(dt, true);
   }
 
   /**

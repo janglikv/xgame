@@ -25,6 +25,7 @@ import {
 import { SpatialAxesGrid } from '../SpatialAxesGrid';
 import { SpellProjectileSystem } from '../SpellProjectileSystem';
 import { TeleportPad } from '../TeleportPad';
+import { DeathOverlay } from '../../ui/DeathOverlay';
 import {
   LEVEL1_FLOOR_EXTEND,
   LEVEL1_LANDING_X,
@@ -67,6 +68,7 @@ export class Level1World implements GameWorld {
   readonly minion: Minion;
   readonly minionPhys: MinionPhysicsProxy;
   readonly playerHealthBar: HealthBar;
+  readonly deathOverlay: DeathOverlay;
   readonly enemies: Level1Enemy[];
   readonly spellSystem: SpellProjectileSystem;
   readonly floor: Floor;
@@ -84,6 +86,7 @@ export class Level1World implements GameWorld {
     minion: Minion,
     minionPhys: MinionPhysicsProxy,
     playerHealthBar: HealthBar,
+    deathOverlay: DeathOverlay,
     enemies: Level1Enemy[],
     spellSystem: SpellProjectileSystem,
     floor: Floor,
@@ -96,6 +99,7 @@ export class Level1World implements GameWorld {
     this.minion = minion;
     this.minionPhys = minionPhys;
     this.playerHealthBar = playerHealthBar;
+    this.deathOverlay = deathOverlay;
     this.enemies = enemies;
     this.spellSystem = spellSystem;
     this.floor = floor;
@@ -235,12 +239,15 @@ export class Level1World implements GameWorld {
       target: focusTarget,
     });
 
+    const deathOverlay = new DeathOverlay(scene);
+
     const level1World = new Level1World(
       scene,
       camera,
       minion,
       minionPhys,
       playerHealthBar,
+      deathOverlay,
       enemies,
       spellSystem,
       floor,
@@ -249,11 +256,15 @@ export class Level1World implements GameWorld {
       options.onRequestLandingWarp,
     );
 
+    deathOverlay.onRespawnClick = () => {
+      level1World.respawnNearPad();
+    };
+
     minion.onTakeDamage = (amount) => {
       playerHealthBar.takeDamage(amount);
       if (playerHealthBar.isDead() && !minion.isDead()) {
         minion.setDead(true);
-        level1World.triggerPlayerDeath();
+        deathOverlay.show();
       }
     };
 
@@ -317,7 +328,20 @@ export class Level1World implements GameWorld {
   teleportPlayer(x: number, z: number): void {
     const c = clampLevel1Position(x, z);
     this.minion.root.position.set(c.x, 0, c.z);
+    this.minion.root.computeWorldMatrix(true);
     this.minionPhys.teleportToTarget();
+    const focus = new Vector3();
+    this.minion.getFocusPoint(focus);
+    this.camera.setTarget(focus);
+  }
+
+  /** 在回程传送阵前方落点复活：回满血、站起、瞬移，并 disarm 防止刚落地又回枢纽。 */
+  respawnNearPad(): void {
+    const landing = this.getDefaultLandingXZ();
+    this.teleportPlayer(landing.x, landing.z);
+    this.teleportPad.disarmUntilLeave();
+    this.playerHealthBar.setHp(this.playerHealthBar.getMaxHp());
+    this.minion.setDead(false);
   }
 
   getTeleportCharge01(): number {
@@ -369,65 +393,54 @@ export class Level1World implements GameWorld {
     this.teleportPad.resetCharge();
   }
 
-  private respawnTimer = 0;
-
-  triggerPlayerDeath(): void {
-    this.respawnTimer = 3.0;
-  }
-
   update(ctx: WorldFrameContext): WorldTransition {
     const { dt, menuOpen, moveWish } = ctx;
 
-    if (this.minion.isDead()) {
-      this.respawnTimer -= dt;
-      if (this.respawnTimer <= 0) {
-        const landing = this.teleportPad.getLandingXZ();
-        this.teleportPlayer(landing.x, landing.z);
-        this.teleportPad.disarmUntilLeave();
-        this.playerHealthBar.setHp(100);
-        this.minion.setDead(false);
-      } else {
-        this.minionPhys.setHorizontalVelocity(0, 0);
-        this.minion.update(dt, false);
-        this.playerHealthBar.update(dt);
-        this.spellSystem.update(dt);
-        return null;
-      }
-    }
+    this.deathOverlay.update(dt);
+
+    const isDead = this.minion.isDead();
+    const isMoving = !isDead && moveWish.moving;
 
     this.minionPhys.syncToTarget();
 
-    const allEnemyMinions = this.enemies.map((e) => e.minion);
-    for (const e of this.enemies) {
+    const living = this.enemies.filter((e) => !e.ai.isDefeated());
+    const allEnemyMinions = living.map((e) => e.minion);
+    for (const e of living) {
       e.phys.syncToTarget();
       e.ai.update(dt, this.minion, allEnemyMinions);
     }
 
-    if (moveWish.moving) {
+    if (isMoving) {
       this.minion.faceToward(moveWish.dirX, moveWish.dirZ);
       this.onPlayerMoved?.();
     }
-    this.minionPhys.setHorizontalVelocity(moveWish.wishX, moveWish.wishZ);
-    this.minion.update(dt, moveWish.moving);
+    this.minionPhys.setHorizontalVelocity(
+      isMoving ? moveWish.wishX : 0,
+      isMoving ? moveWish.wishZ : 0,
+    );
+    this.minion.update(dt, isMoving);
     this.playerHealthBar.update(dt);
 
     this.spellSystem.update(dt);
 
-    if (!moveWish.moving && this.wasMoving) {
+    if (!isMoving && this.wasMoving) {
       this.onPlayerStopped?.();
     }
-    this.wasMoving = moveWish.moving;
+    this.wasMoving = isMoving;
 
-    const p = this.minion.root.position;
-    const onPad = this.teleportPad.contains(p.x, p.z);
-    if (this.teleportPad.update(dt, onPad && !menuOpen)) {
-      return { type: 'goto', world: 'hub' };
+    if (!isDead) {
+      const p = this.minion.root.position;
+      const onPad = this.teleportPad.contains(p.x, p.z);
+      if (this.teleportPad.update(dt, onPad && !menuOpen)) {
+        return { type: 'goto', world: 'hub' };
+      }
     }
 
     return null;
   }
 
   dispose(): void {
+    this.deathOverlay.dispose();
     this.playerHealthBar.dispose();
     this.spellSystem.dispose();
     this.teleportPad.dispose();
