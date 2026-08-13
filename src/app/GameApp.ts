@@ -1,4 +1,4 @@
-import { Engine, Vector3 } from '@babylonjs/core';
+import { Color3, Engine, Scene, StandardMaterial, Vector3 } from '@babylonjs/core';
 import {
   loadCameraState,
   saveCameraState,
@@ -37,6 +37,7 @@ export class GameApp {
   private cameraMode: CameraMode = 'fixed';
   private showFps = true;
   private showGrid = true;
+  private showColliders = false;
 
   private readonly moveInput = new MoveInput();
   private readonly combat = new PlayerCombatController();
@@ -71,6 +72,7 @@ export class GameApp {
     this.cameraMode = settings.cameraMode;
     this.showFps = settings.showFps;
     this.showGrid = settings.showGrid;
+    this.showColliders = settings.showColliders;
 
     const savedCam = loadCameraState();
     const savedWorld = loadWorldState();
@@ -89,6 +91,7 @@ export class GameApp {
       onAfterActivate: (world, meta) => {
         this.settingsPanel.rebind(world.scene);
         this.fpsOverlay.rebind(world.scene);
+        applyCollidersVisibility(world.scene, this.showColliders);
         if (meta.isInitialLoad) {
           this.teleportFlow.rebindScene(world.scene, false);
         }
@@ -111,6 +114,8 @@ export class GameApp {
       onAppearanceChanged: (a) => saveMinionAppearanceState(a),
     });
 
+    applyCollidersVisibility(hub.scene, this.showColliders);
+
     if (this.cameraMode === 'free') {
       hub.attachCamera(this.canvas);
     }
@@ -131,6 +136,12 @@ export class GameApp {
       setShowGrid: (show) => {
         this.showGrid = show;
         this.router.forEach((w) => w.setGridVisible(show));
+        this.persistSettings();
+      },
+      getShowColliders: () => this.showColliders,
+      setShowColliders: (show) => {
+        this.showColliders = show;
+        this.router.forEach((w) => applyCollidersVisibility(w.scene, show));
         this.persistSettings();
       },
       getCameraMode: () => this.cameraMode,
@@ -351,8 +362,41 @@ export class GameApp {
     saveSettingsState({
       showFps: this.showFps,
       showGrid: this.showGrid,
+      showColliders: this.showColliders,
       cameraMode: this.cameraMode,
     });
+  }
+}
+
+function applyCollidersVisibility(scene: Scene, show: boolean): void {
+  for (const mesh of scene.meshes) {
+    if (!mesh) continue;
+    const name = mesh.name;
+    // 真实的 3D 视觉墙 Mesh 永远保持渲染可见
+    if (name.startsWith('RenderWall') || mesh.metadata?.isRenderWall === true) {
+      mesh.isVisible = true;
+      continue;
+    }
+
+    // 独立物理碰撞代理盒 Mesh
+    if (
+      name.startsWith('Phys') ||
+      name.includes('PhysProxy') ||
+      mesh.metadata?.isColliderMesh === true
+    ) {
+      mesh.isVisible = show;
+      if (show) {
+        if (!mesh.material) {
+          const mat = new StandardMaterial(`debug_coll_mat_${name}`, scene);
+          mat.wireframe = true;
+          mat.emissiveColor = Color3.FromHexString('#ff3344');
+          mesh.material = mat;
+        } else if (mesh.material instanceof StandardMaterial) {
+          mesh.material.wireframe = true;
+          mesh.material.emissiveColor = Color3.FromHexString('#ff3344');
+        }
+      }
+    }
   }
 }
 

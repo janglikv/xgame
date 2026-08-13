@@ -5,6 +5,7 @@ import {
   Quaternion,
   StandardMaterial,
   type Scene,
+  Ray,
   ShadowGenerator,
   TransformNode,
   Vector3,
@@ -221,6 +222,8 @@ export class Minion {
   private lastAimTarget: Vector3 | null = null;
   /** 瞄准动画过渡权重（0 = 待机/走路姿态，1 = 完全指向目标） */
   private aimWeight = 0;
+  /** 贴墙防穿模法杖向上抬高避让角度 */
+  private staffRetractPitch = 0;
   private isDeadState = false;
   private deathAnimWeight = 0;
   private readonly defaultStaffQuat = Quaternion.RotationYawPitchRoll(
@@ -962,6 +965,14 @@ export class Minion {
     }
 
     if (this.staffFx) {
+      // 1. 先平滑更新贴墙抬高倾角 (staffRetractPitch)
+      this.updateStaffWallRetraction(dt);
+
+      const qRetract =
+        this.staffRetractPitch > 0.001
+          ? Quaternion.RotationAxis(Vector3.Right(), -this.staffRetractPitch)
+          : null;
+
       const activeAimTarget = this.aimTarget ?? this.lastAimTarget;
       if (this.aimWeight > 0.001 && activeAimTarget) {
         const dx = activeAimTarget.x - this.root.position.x;
@@ -991,13 +1002,17 @@ export class Minion {
                 : Quaternion.RotationAxis(Vector3.Right(), Math.PI);
           }
 
+          if (qRetract) {
+            qAim = qAim.multiply(qRetract);
+          }
+
           const qFinal = Quaternion.Slerp(
             this.defaultStaffQuat,
             qAim,
             this.aimWeight,
           );
           if (!this.staffFx.root.rotationQuaternion) {
-            this.staffFx.root.rotationQuaternion = qFinal;
+            this.staffFx.root.rotationQuaternion = qFinal.clone();
           } else {
             Quaternion.SlerpToRef(
               this.staffFx.root.rotationQuaternion,
@@ -1013,11 +1028,73 @@ export class Minion {
           1 + Math.sin(this.breathPhase * 8) * 0.12 * this.aimWeight;
         this.staffFx.orb.scaling.set(pulse, pulse, pulse);
       } else {
-        this.staffFx.root.rotationQuaternion = this.defaultStaffQuat.clone();
+        let qDefault = this.defaultStaffQuat;
+        if (qRetract) {
+          qDefault = this.defaultStaffQuat.multiply(qRetract);
+        }
+        if (!this.staffFx.root.rotationQuaternion) {
+          this.staffFx.root.rotationQuaternion = qDefault.clone();
+        } else {
+          Quaternion.SlerpToRef(
+            this.staffFx.root.rotationQuaternion,
+            qDefault,
+            Math.min(1, dt * 25),
+            this.staffFx.root.rotationQuaternion,
+          );
+        }
       }
     }
 
     this.applyHitJuice(dt);
+  }
+
+  /**
+   * 贴墙防穿模法杖向上抬高避让 (Staff Obstacle Avoidance / Elevation)
+   * 采用固定的角色身体前向向量 (bodyForward) 探路，彻底消除射线检测与法杖旋转反馈死循环导致的抽搐抖动。
+   */
+  private updateStaffWallRetraction(dt: number): void {
+    if (!this.staffFx) return;
+
+    const scene = this.root.getScene();
+    const yaw = this.root.rotation.y;
+
+    // 从胸口中心 (Y+0.45) 沿固定的身体前向向量探路，不受法杖旋转影响！
+    const chestPos = this.root.position.clone();
+    chestPos.y += 0.45;
+    const bodyForward = new Vector3(Math.sin(yaw), 0, Math.cos(yaw));
+
+    const probeDist = 0.65; // 胸口向前探路 0.65m
+    const ray = new Ray(chestPos, bodyForward, probeDist);
+    const picks = scene.multiPickWithRay(ray, (mesh) => {
+      if (!mesh.isEnabled() || !mesh.isPickable) return false;
+      const name = mesh.name.toLowerCase();
+      if (name.includes('bullet') || name.includes('spell') || mesh.metadata?.minion) return false;
+      if (name.includes('floor') || name.includes('ground') || name.includes('grid')) return false;
+      return name.includes('wall') || name.includes('obstacle') || name.includes('phys') || mesh.metadata?.isColliderMesh;
+    });
+
+    let minDist = Infinity;
+    if (picks) {
+      for (const p of picks) {
+        if (p.hit && p.distance < minDist) {
+          minDist = p.distance;
+        }
+      }
+    }
+
+    const safeMargin = 0.58; // 安全防贴墙临界点 0.58m
+    let targetRetractPitch = 0;
+    if (minDist < safeMargin) {
+      const penetrateAmt = safeMargin - minDist;
+      // 产生平滑向上抬高的避让倾角（最大 55 度）
+      targetRetractPitch = Math.min(Math.PI * 0.3, penetrateAmt * 2.8);
+    }
+
+    // 平滑一阶低通滤波，消除临界点跳变
+    const lerpSpeed = dt * 12;
+    this.staffRetractPitch =
+      this.staffRetractPitch * (1 - Math.min(1, lerpSpeed)) +
+      targetRetractPitch * Math.min(1, lerpSpeed);
   }
 
   /** 受击压扁/闪光，并叠加上出拳时的身体前顶 */

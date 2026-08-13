@@ -354,6 +354,18 @@ export class Level1World implements GameWorld {
   }
 
   activate(opts: WorldActivateOptions): void {
+    // 重新进入关卡：确保玩家处于活着的存活状态、血量补满并隐藏 DeathOverlay
+    this.minion.setDead(false);
+    this.playerHealthBar.setHp(this.playerHealthBar.getMaxHp());
+    this.deathOverlay.hide();
+
+    // 唤醒并重置关卡中活着的敌军 AI，使其立即识别新到的玩家
+    for (const e of this.enemies) {
+      if (!e.ai.isDefeated()) {
+        e.ai.resetForPlayer();
+      }
+    }
+
     if (opts.appearance) {
       this.applyAppearance(opts.appearance);
     }
@@ -421,7 +433,8 @@ export class Level1World implements GameWorld {
     this.minion.update(dt, isMoving);
     this.playerHealthBar.update(dt);
 
-    this.spellSystem.update(dt);
+    const targetMinions = [this.minion, ...allEnemyMinions];
+    this.spellSystem.update(dt, targetMinions);
 
     if (!isMoving && this.wasMoving) {
       this.onPlayerStopped?.();

@@ -28,6 +28,8 @@ export interface SettingsPanelDeps {
   setShowFps: (show: boolean) => void;
   getShowGrid: () => boolean;
   setShowGrid: (show: boolean) => void;
+  getShowColliders: () => boolean;
+  setShowColliders: (show: boolean) => void;
   getCameraMode: () => CameraMode;
   setCameraMode: (mode: CameraMode) => void;
   getCameraInfo: () => SettingsCameraInfo;
@@ -104,43 +106,43 @@ export class SettingsPanel {
     this.tex.addControl(this.panel);
 
     const stack = new StackPanel('settingsStack');
-    stack.width = '100%';
+    stack.width = '520px';
     stack.isVertical = true;
     stack.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
     stack.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
-    stack.paddingTop = '48px';
-    stack.paddingBottom = '48px';
-    stack.paddingLeft = '56px';
-    stack.paddingRight = '56px';
+    stack.paddingTop = '28px';
+    stack.paddingBottom = '28px';
+    stack.paddingLeft = '40px';
+    stack.paddingRight = '40px';
     this.panel.addControl(stack);
 
     stack.addControl(
       this.makeText('title', '设置', {
-        fontSize: 32,
+        fontSize: 26,
         fontWeight: '700',
-        height: 48,
+        height: 36,
         color: 'rgba(255,255,255,0.94)',
       }),
     );
     stack.addControl(
       this.makeText('hint', '按 Esc 关闭', {
-        fontSize: 14,
-        height: 28,
+        fontSize: 13,
+        height: 20,
         color: 'rgba(255,255,255,0.45)',
       }),
     );
 
     // —— 显示 ——
-    stack.addControl(this.spacer(28));
+    stack.addControl(this.spacer(16));
     stack.addControl(
       this.makeText('secDisplay', '显示', {
         fontSize: 13,
-        height: 28,
+        height: 24,
         color: 'rgba(255,255,255,0.45)',
         fontWeight: '600',
       }),
     );
-    stack.addControl(this.spacer(8));
+    stack.addControl(this.spacer(4));
 
     const fpsRow = this.makeToggleRow(
       'fpsRow',
@@ -159,17 +161,25 @@ export class SettingsPanel {
     );
     stack.addControl(gridRow.row);
 
+    const collidersRow = this.makeToggleRow(
+      'collidersRow',
+      '显示隐形盒体（调试）',
+      this.deps.getShowColliders(),
+      (checked) => this.deps.setShowColliders(checked),
+    );
+    stack.addControl(collidersRow.row);
+
     // —— 镜头模式 ——
-    stack.addControl(this.spacer(28));
+    stack.addControl(this.spacer(16));
     stack.addControl(
       this.makeText('secMode', '镜头模式', {
         fontSize: 13,
-        height: 28,
+        height: 24,
         color: 'rgba(255,255,255,0.45)',
         fontWeight: '600',
       }),
     );
-    stack.addControl(this.spacer(8));
+    stack.addControl(this.spacer(4));
 
     const fixedRow = this.makeToggleRow(
       'fixedCamRow',
@@ -201,39 +211,39 @@ export class SettingsPanel {
       'modeHint',
       this.modeHintText(this.deps.getCameraMode()),
       {
-        fontSize: 13,
-        height: 36,
+        fontSize: 12,
+        height: 24,
         color: 'rgba(255,255,255,0.38)',
       },
     );
-    stack.addControl(this.spacer(6));
+    stack.addControl(this.spacer(2));
     stack.addControl(this.camModeHint);
 
     // —— 镜头读数 ——
-    stack.addControl(this.spacer(24));
+    stack.addControl(this.spacer(16));
     stack.addControl(
       this.makeText('secCam', '镜头参数', {
         fontSize: 13,
-        height: 28,
+        height: 24,
         color: 'rgba(255,255,255,0.45)',
         fontWeight: '600',
       }),
     );
-    stack.addControl(this.spacer(8));
+    stack.addControl(this.spacer(4));
 
     this.camAlpha = this.makeMonoLine(stack, 'camAlpha', '方位角 α');
     this.camBeta = this.makeMonoLine(stack, 'camBeta', '仰角 β');
     this.camRadius = this.makeMonoLine(stack, 'camRadius', '距离');
     this.camTarget = this.makeMonoLine(stack, 'camTarget', '注视点');
 
-    stack.addControl(this.spacer(32));
+    stack.addControl(this.spacer(16));
     stack.addControl(
       this.makeText(
         'foot',
-        '俯视：角色居中、略倾看清侧身；自由仅调试可拖拽；WASD 相对镜头移动',
+        '俯视：角色居中，WASD 相对镜头移动；自由：轨道拖拽；Esc 键关闭',
         {
-          fontSize: 14,
-          height: 40,
+          fontSize: 12,
+          height: 28,
           color: 'rgba(255,255,255,0.4)',
         },
       ),
@@ -267,13 +277,13 @@ export class SettingsPanel {
   ): { row: Rectangle; check: Checkbox } {
     const row = new Rectangle(name);
     row.width = '100%';
-    row.height = '48px';
+    row.height = '32px';
     row.thickness = 0;
     row.background = 'transparent';
 
     const fpsLabel = this.makeText(`${name}_label`, label, {
-      fontSize: 18,
-      height: 48,
+      fontSize: 15,
+      height: 32,
       color: 'rgba(255,255,255,0.92)',
     });
     fpsLabel.width = '70%';
@@ -281,8 +291,8 @@ export class SettingsPanel {
     row.addControl(fpsLabel);
 
     const check = new Checkbox(`${name}_check`);
-    check.width = '28px';
-    check.height = '28px';
+    check.width = '20px';
+    check.height = '20px';
     check.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
     check.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
     check.color = '#34d399';
@@ -339,7 +349,7 @@ export class SettingsPanel {
   ): TextBlock {
     const row = new Rectangle(`${name}Row`);
     row.width = '100%';
-    row.height = '40px';
+    row.height = '24px';
     row.thickness = 0;
     row.background = 'transparent';
     parent.addControl(row);
@@ -347,9 +357,9 @@ export class SettingsPanel {
     const keyTb = new TextBlock(`${name}Key`);
     keyTb.text = key;
     keyTb.color = 'rgba(255,255,255,0.45)';
-    keyTb.fontSize = 16;
-    keyTb.width = '160px';
-    keyTb.height = '40px';
+    keyTb.fontSize = 13;
+    keyTb.width = '120px';
+    keyTb.height = '24px';
     keyTb.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
     keyTb.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
     keyTb.textVerticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
@@ -359,9 +369,9 @@ export class SettingsPanel {
     const val = new TextBlock(`${name}Val`);
     val.text = '-';
     val.color = 'rgba(255,255,255,0.92)';
-    val.fontSize = 16;
-    val.height = '40px';
-    val.left = '160px';
+    val.fontSize = 13;
+    val.height = '24px';
+    val.left = '120px';
     val.width = '70%';
     val.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
     val.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;

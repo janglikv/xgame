@@ -213,7 +213,7 @@ export class Floor {
     ];
 
     const wall = createTrapezoidExtrudedWall(
-      'WallClosedLoop',
+      'RenderWall_ClosedLoop',
       { path: loopPath, bottomWidth: t, topWidth: 0.5, height: h, close: true },
       scene,
     );
@@ -233,7 +233,7 @@ export class Floor {
         new Vector3(-cHalf, 0, -cHalf),
       ];
       const centerWall = createTrapezoidExtrudedWall(
-        `WallCenter_${options.centerWallSize}x${options.centerWallSize}`,
+        `RenderWall_Center_${options.centerWallSize}x${options.centerWallSize}`,
         {
           path: centerLoopPath,
           bottomWidth: 0.8,
@@ -249,7 +249,7 @@ export class Floor {
       this.wallMeshes.push(centerWall);
     }
 
-    // 四角 L 型围墙（位于左上、右上、左下、右下四个象限）
+    // 四角 L 型围墙（位于左上、右上、左下、右下四个象限，单条平滑管道）
     if (options.addLWall) {
       const cornerConfigs = [
         { name: 'BR', path: [new Vector3(8, 0, -5), new Vector3(5, 0, -5), new Vector3(5, 0, -8)] },
@@ -260,7 +260,7 @@ export class Floor {
 
       for (const config of cornerConfigs) {
         const lWall = createTrapezoidExtrudedWall(
-          `WallLShaped_${config.name}`,
+          `RenderWall_L_${config.name}`,
           {
             path: config.path,
             bottomWidth: 0.8,
@@ -503,6 +503,7 @@ function createTrapezoidExtrudedWall(
   );
 
   wallMesh.convertToFlatShadedMesh();
+  wallMesh.isPickable = true;
   return wallMesh;
 }
 
@@ -528,50 +529,50 @@ function createWallMaterialForSurface(
 
   switch (surface) {
     case 'tiles':
-      wallMat.diffuseColor = new Color3(0.04, 0.05, 0.06);
-      wallMat.specularColor = new Color3(0.22, 0.24, 0.28);
-      wallMat.ambientColor = new Color3(0.02, 0.02, 0.03);
+      wallMat.diffuseColor = new Color3(0.18, 0.21, 0.25);
+      wallMat.specularColor = new Color3(0.35, 0.40, 0.45);
+      wallMat.emissiveColor = new Color3(0.04, 0.05, 0.06);
       break;
     case 'dirtGrass':
-      wallMat.diffuseColor = new Color3(0.03, 0.05, 0.03);
-      wallMat.specularColor = new Color3(0.18, 0.22, 0.16);
-      wallMat.ambientColor = new Color3(0.015, 0.02, 0.015);
+      wallMat.diffuseColor = new Color3(0.16, 0.22, 0.15);
+      wallMat.specularColor = new Color3(0.28, 0.35, 0.25);
+      wallMat.emissiveColor = new Color3(0.03, 0.05, 0.03);
       break;
     case 'cyberGrid':
-      wallMat.diffuseColor = new Color3(0.02, 0.03, 0.06);
-      wallMat.specularColor = new Color3(0.20, 0.24, 0.35);
-      wallMat.ambientColor = new Color3(0.01, 0.015, 0.03);
+      wallMat.diffuseColor = new Color3(0.14, 0.18, 0.28);
+      wallMat.specularColor = new Color3(0.35, 0.45, 0.65);
+      wallMat.emissiveColor = new Color3(0.04, 0.06, 0.10);
       break;
     case 'checker':
-      wallMat.diffuseColor = new Color3(0.03, 0.03, 0.04);
-      wallMat.specularColor = new Color3(0.20, 0.22, 0.25);
-      wallMat.ambientColor = new Color3(0.015, 0.015, 0.02);
+      wallMat.diffuseColor = new Color3(0.18, 0.18, 0.22);
+      wallMat.specularColor = new Color3(0.35, 0.35, 0.40);
+      wallMat.emissiveColor = new Color3(0.04, 0.04, 0.05);
       break;
     case 'cobblestone':
-      wallMat.diffuseColor = new Color3(0.05, 0.04, 0.03);
-      wallMat.specularColor = new Color3(0.22, 0.19, 0.16);
-      wallMat.ambientColor = new Color3(0.02, 0.02, 0.015);
+      wallMat.diffuseColor = new Color3(0.22, 0.18, 0.15);
+      wallMat.specularColor = new Color3(0.35, 0.30, 0.25);
+      wallMat.emissiveColor = new Color3(0.05, 0.04, 0.03);
       break;
     case 'sand':
-      wallMat.diffuseColor = new Color3(0.06, 0.04, 0.03);
-      wallMat.specularColor = new Color3(0.24, 0.18, 0.13);
-      wallMat.ambientColor = new Color3(0.025, 0.02, 0.015);
+      wallMat.diffuseColor = new Color3(0.25, 0.20, 0.15);
+      wallMat.specularColor = new Color3(0.40, 0.32, 0.24);
+      wallMat.emissiveColor = new Color3(0.06, 0.04, 0.03);
       break;
     case 'marble':
-      wallMat.diffuseColor = new Color3(0.05, 0.06, 0.07);
-      wallMat.specularColor = new Color3(0.25, 0.28, 0.32);
-      wallMat.ambientColor = new Color3(0.02, 0.025, 0.03);
+      wallMat.diffuseColor = new Color3(0.22, 0.24, 0.28);
+      wallMat.specularColor = new Color3(0.45, 0.48, 0.52);
+      wallMat.emissiveColor = new Color3(0.05, 0.06, 0.07);
       break;
     case 'woodPlanks':
-      wallMat.diffuseColor = new Color3(0.05, 0.03, 0.02);
-      wallMat.specularColor = new Color3(0.20, 0.13, 0.09);
-      wallMat.ambientColor = new Color3(0.02, 0.01, 0.01);
+      wallMat.diffuseColor = new Color3(0.22, 0.15, 0.10);
+      wallMat.specularColor = new Color3(0.35, 0.25, 0.18);
+      wallMat.emissiveColor = new Color3(0.05, 0.03, 0.02);
       break;
     default:
     case 'dark':
-      wallMat.diffuseColor = new Color3(0.02, 0.02, 0.025);
-      wallMat.specularColor = new Color3(0.18, 0.20, 0.24);
-      wallMat.ambientColor = new Color3(0.01, 0.01, 0.015);
+      wallMat.diffuseColor = new Color3(0.16, 0.17, 0.20);
+      wallMat.specularColor = new Color3(0.30, 0.32, 0.38);
+      wallMat.emissiveColor = new Color3(0.04, 0.04, 0.05);
       break;
   }
 

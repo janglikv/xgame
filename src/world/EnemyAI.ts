@@ -54,9 +54,6 @@ export class EnemyAI {
   private patrolRadius: number;
   private moveSpeed: number;
   private patrolAxis: 'x' | 'z';
-  private initialAttackRange: number;
-  private retainedAttackRange: number;
-  private forcedPatrolDuration: number;
   private attackCooldown: number;
   private spellStyle: StaffStyle;
   private groupState?: GroupAggroState;
@@ -64,13 +61,8 @@ export class EnemyAI {
   /** 踱步方向：1 表示正向，-1 表示反向 */
   private patrolDir = 1;
   private cooldownTimer = 0;
-  /** 已连续攻击次数 */
-  private attackCount = 0;
-  /** 强制踱步休息计时器（秒） */
-  private forcedPatrolTimer = 0;
-  /** 单体仇恨锁定 */
-  private isAggroLocked = false;
-
+  private windupTimer = 0;
+  private readonly windupDuration = 0.5;
   /** 是否处于击败死亡状态 */
   private isDead = false;
 
@@ -89,9 +81,6 @@ export class EnemyAI {
     this.patrolRadius = options.patrolRadius ?? 3.5;
     this.moveSpeed = options.moveSpeed ?? 1.2;
     this.patrolAxis = options.patrolAxis ?? 'x';
-    this.initialAttackRange = options.initialAttackRange ?? 4.0;
-    this.retainedAttackRange = options.retainedAttackRange ?? 5.0;
-    this.forcedPatrolDuration = options.forcedPatrolDuration ?? 0.5;
     this.attackCooldown = options.attackCooldown ?? 1.8;
     this.spellStyle = options.spellStyle ?? 'flame';
     this.groupState = options.groupState;
@@ -117,8 +106,6 @@ export class EnemyAI {
     // 受击时激怒敌人拉起仇恨
     if (this.groupState) {
       this.groupState.isGroupAggroLocked = true;
-    } else {
-      this.isAggroLocked = true;
     }
 
     if (this.healthBar.isDead()) {
@@ -141,6 +128,13 @@ export class EnemyAI {
     return this.isDead;
   }
 
+  /** 重置 AI 状态，以便玩家重新传送进入场景时立即识别并锁定攻击 */
+  resetForPlayer(): void {
+    if (this.isDead) return;
+    this.cooldownTimer = 0;
+    this.windupTimer = 0;
+  }
+
   /** 每帧更新 AI 逻辑 */
   update(dt: number, targetPlayer: Minion, allEnemies?: Minion[]): void {
     if (this.isDead) return;
@@ -157,90 +151,35 @@ export class EnemyAI {
 
     const dx = pPos.x - ePos.x;
     const dz = pPos.z - ePos.z;
-    const dist = Math.hypot(dx, dz);
-
-    this.cooldownTimer -= dt;
-    this.forcedPatrolTimer -= dt;
-
-    // 1. 如果自己检测到玩家进入 4 米感应区，触发全组连锁仇恨！
-    if (dist <= this.initialAttackRange && this.groupState) {
-      this.groupState.isGroupAggroLocked = true;
+    // 每帧更新冷却
+    if (this.cooldownTimer > 0) {
+      this.cooldownTimer -= dt;
     }
 
-    // 2. 共享仇恨判断：同组内有任何人触发了锁定，则全员共享 5 米保持范围
-    const isAggroActive =
-      (this.groupState && this.groupState.isGroupAggroLocked) ||
-      this.isAggroLocked;
+    // ── 1. 处于抬杖前摇阶段 (Windup, 0.5s) ──────────────────────
+    if (this.cooldownTimer <= 0 && this.windupTimer <= 0) {
+      // 冷却结束：开启 0.5s 抬杖前摇，并随机决定下一次开火后的走位方向
+      this.windupTimer = this.windupDuration;
+      this.patrolDir = Math.random() < 0.5 ? 1 : -1;
+    }
 
-    const activeRange = isAggroActive
-      ? this.retainedAttackRange
-      : this.initialAttackRange;
-
-    const inRange = dist <= activeRange;
-    const canAttack = this.forcedPatrolTimer <= 0 && inRange;
-
-    if (canAttack) {
-      // 成功触发/维持攻击，激活锁定状态
-      this.isAggroLocked = true;
-      if (this.groupState) {
-        this.groupState.isGroupAggroLocked = true;
-      }
-
-      // ── 1. 攻击行为：停下踱步，站立锁定玩家开火 ──────────────
+    if (this.windupTimer > 0) {
+      this.windupTimer -= dt;
+      // 1. 抬杖前摇与发射阶段：停下脚步，转过来死死盯着主角
       this.enemyPhys.setHorizontalVelocity(0, 0);
-
-      // 朝向玩家
       this.enemy.faceToward(dx, dz);
-
-      // 开火前摇瞄准阶段（仅在冷却剩余 <= 0.6s 时举起法杖，发射后立即收起法杖）
-      const aimWindupWindow = 0.6;
-      if (this.cooldownTimer <= aimWindupWindow) {
-        this.enemy.setAimTarget(pPos);
-      } else {
-        this.enemy.setAimTarget(null);
-      }
-
-      // 攻击冷却完毕：发射能量弹
-      if (this.cooldownTimer <= 0) {
-        this.shootAtPlayer(targetPlayer);
-        // 发射完一发子弹后立刻收起法杖
-        this.enemy.setAimTarget(null);
-
-        this.cooldownTimer = this.attackCooldown;
-        this.attackCount++;
-
-        // 每攻击两下，重置攻击计数并触发 0.5 秒随机战术走位踱步
-        if (this.attackCount >= 2) {
-          this.attackCount = 0;
-          this.forcedPatrolTimer = this.forcedPatrolDuration; // 0.5 秒强制踱步
-          this.isAggroLocked = false; // 触发踱步休息
-
-          // 随机选择战术踱步方向（50% 正向，50% 反向战术避让）
-          this.patrolDir = Math.random() < 0.5 ? 1 : -1;
-
-          // 靠近边缘时自动修正为向场内踱步
-          const baseCenter = this.patrolAxis === 'x' ? this.spawnX : this.spawnZ;
-          const currentPos = this.patrolAxis === 'x' ? ePos.x : ePos.z;
-          const minVal = baseCenter - this.patrolRadius;
-          const maxVal = baseCenter + this.patrolRadius;
-
-          if (currentPos >= maxVal - 0.2) {
-            this.patrolDir = -1;
-          } else if (currentPos <= minVal + 0.2) {
-            this.patrolDir = 1;
-          }
-        }
-      }
-
-      // 播放站立待机动画（不迈步）
+      this.enemy.setAimTarget(pPos);
       this.enemy.update(dt, false);
-    } else {
-      // 走出 5 米仇恨保持圈时，解除锁定
-      if (!inRange) {
-        this.isAggroLocked = false;
-      }
 
-      // ── 2. 来回踱步行为：在固定点两侧来回走动 ────────────────
+      if (this.windupTimer <= 0) {
+        // 前摇结束：正式发射子弹！
+        this.shootAtPlayer(targetPlayer);
+        this.enemy.setAimTarget(null);
+        // 进入 1.8 秒冷却间隙
+        this.cooldownTimer = this.attackCooldown;
+      }
+    } else {
+      // 2. 发射间隙阶段 (Cooldown, 1.8s)：收起法杖，面向走位方向自然踱步（包含碰头掉头避让）
       this.doPatrol(dt, ePos, allEnemies);
     }
   }
@@ -248,7 +187,7 @@ export class EnemyAI {
   private doPatrol(dt: number, ePos: Vector3, allEnemies?: Minion[]): void {
     this.enemy.setAimTarget(null);
 
-    // 检查前方同线友军：相向相遇提前 0.75m 掉头，彻底防止卡死硬推
+    // 检查前方同线友军：面对面碰头时提前 0.95m 自动掉头，彻底防止卡死
     this.checkAvoidFriendCollision(allEnemies);
 
     const baseCenter = this.patrolAxis === 'x' ? this.spawnX : this.spawnZ;
@@ -275,7 +214,7 @@ export class EnemyAI {
   }
 
   /**
-   * 检查前方是否有迎面相向踱步的同组友军，相遇时自动优雅掉头防卡死
+   * 检查前方是否有迎面相向踱步的同组友军，相遇碰头时自动优雅掉头防卡死
    */
   private checkAvoidFriendCollision(otherEnemies?: Minion[]): void {
     if (!otherEnemies || otherEnemies.length === 0) return;
@@ -283,26 +222,22 @@ export class EnemyAI {
     const myPos = this.enemy.root.position;
 
     for (const other of otherEnemies) {
-      if (other === this.enemy) continue; // 排除自己
+      if (other === this.enemy || other.isDead()) continue; // 排除自己与已阵亡友军
 
       const otherPos = other.root.position;
-      const dx = Math.abs(otherPos.x - myPos.x);
-      const dz = Math.abs(otherPos.z - myPos.z);
+      const dx = otherPos.x - myPos.x;
+      const dz = otherPos.z - myPos.z;
+      const dist = Math.hypot(dx, dz);
 
-      if (this.patrolAxis === 'x') {
-        // X 轴巡逻：Z 轴差 < 0.45m，且 X 轴近 (< 0.75m)
-        const diffX = otherPos.x - myPos.x;
-        if (dz < 0.45 && dx < 0.75) {
-          if ((this.patrolDir > 0 && diffX > 0) || (this.patrolDir < 0 && diffX < 0)) {
+      // 两小兵面对面相距小于 0.95m 时触发掉头
+      if (dist < 0.95) {
+        if (this.patrolAxis === 'x') {
+          if ((this.patrolDir > 0 && dx > 0) || (this.patrolDir < 0 && dx < 0)) {
             this.patrolDir *= -1;
             break;
           }
-        }
-      } else {
-        // Z 轴巡逻：X 轴差 < 0.45m，且 Z 轴近 (< 0.75m)
-        const diffZ = otherPos.z - myPos.z;
-        if (dx < 0.45 && dz < 0.75) {
-          if ((this.patrolDir > 0 && diffZ > 0) || (this.patrolDir < 0 && diffZ < 0)) {
+        } else {
+          if ((this.patrolDir > 0 && dz > 0) || (this.patrolDir < 0 && dz < 0)) {
             this.patrolDir *= -1;
             break;
           }

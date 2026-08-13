@@ -11,8 +11,13 @@ import {
 const UI_FONT = 'PingFang SC, Microsoft YaHei, Noto Sans SC, Segoe UI, sans-serif';
 
 /**
- * 极简死亡半透明黑场与复活按钮 UI（Babylon GUI 全屏 ADT）。
- * 保持 0.72 半透明黑场遮罩，中央包含「已 阵 亡」提示与【重 生】胶囊磨砂按钮。
+ * 极简死亡半透明黑场与复活转场 UI（Babylon GUI 全屏 ADT）。
+ *
+ * 死亡流程：
+ * 1. 死亡淡入：从 0 平滑过渡到 0.72 半透明黑场，显示「已 阵 亡」与【重 生】按钮。
+ * 2. 点击【重 生】：UI 面板消失，背景在 0.15s 内转为纯黑屏；
+ * 3. 完全纯黑时刻：触发 onRespawnClick（完成传送阵瞬移、满血与起立）；
+ * 4. 逐渐明亮：纯黑遮罩在 0.5s 内平滑淡出（1 -> 0），呈现明亮的传送阵复活画面。
  */
 export class DeathOverlay {
   private tex!: AdvancedDynamicTexture;
@@ -21,7 +26,7 @@ export class DeathOverlay {
   private titleText!: TextBlock;
   private respawnBtn!: Button;
 
-  private fadeState: 'idle' | 'in' | 'out' = 'idle';
+  private fadeState: 'idle' | 'in' | 'to_black' | 'from_black' = 'idle';
   private fadeAlpha = 0;
   private disposed = false;
 
@@ -34,14 +39,24 @@ export class DeathOverlay {
   show(): void {
     if (this.disposed) return;
     this.fadeState = 'in';
+    this.panel.isVisible = true;
+    this.veil.background = 'rgba(0, 0, 0, 0.72)';
     this.veil.isVisible = true;
     this.veil.isPointerBlocker = true;
     this.tex.rootContainer.isHitTestVisible = true;
   }
 
+  /** 点击复活：先变完全纯黑屏，再逐渐明亮 */
+  startRespawnTransition(): void {
+    if (this.disposed) return;
+    this.panel.isVisible = false;
+    this.veil.background = '#000000';
+    this.fadeState = 'to_black';
+  }
+
   hide(): void {
     if (this.disposed) return;
-    this.fadeState = 'out';
+    this.startRespawnTransition();
   }
 
   getIsVisible(): boolean {
@@ -57,14 +72,27 @@ export class DeathOverlay {
       if (this.fadeAlpha >= 1) {
         this.fadeState = 'idle';
       }
-    } else if (this.fadeState === 'out') {
-      this.fadeAlpha = Math.max(0, this.fadeAlpha - dt * 3.2);
+    } else if (this.fadeState === 'to_black') {
+      // 1. 快速变纯黑屏 (约 0.15s)
+      this.fadeAlpha = Math.min(1, this.fadeAlpha + dt * 6.5);
+      this.veil.alpha = this.fadeAlpha;
+      if (this.fadeAlpha >= 1) {
+        // 2. 完全纯黑时刻：触发复活逻辑（瞬移至传送阵、满血 100 HP、立起）
+        this.onRespawnClick?.();
+        // 3. 转入从纯黑逐渐明亮过程
+        this.fadeState = 'from_black';
+      }
+    } else if (this.fadeState === 'from_black') {
+      // 4. 逐渐明亮 (约 0.5s)
+      this.fadeAlpha = Math.max(0, this.fadeAlpha - dt * 2.0);
       this.veil.alpha = this.fadeAlpha;
       if (this.fadeAlpha <= 0) {
         this.fadeState = 'idle';
         this.veil.isVisible = false;
         this.veil.isPointerBlocker = false;
         this.tex.rootContainer.isHitTestVisible = false;
+        this.veil.background = 'rgba(0, 0, 0, 0.72)';
+        this.panel.isVisible = true;
       }
     }
   }
@@ -78,7 +106,7 @@ export class DeathOverlay {
     this.fadeAlpha = keptAlpha;
     this.fadeState = keptState;
     this.veil.alpha = keptAlpha;
-    const on = keptAlpha > 0.01 || keptState === 'in';
+    const on = keptAlpha > 0.01 || keptState !== 'idle';
     this.veil.isVisible = on;
     this.veil.isPointerBlocker = on;
     this.tex.rootContainer.isHitTestVisible = on;
@@ -121,7 +149,7 @@ export class DeathOverlay {
     // 3. 按钮上方的「已 阵 亡」提示文案
     this.titleText = new TextBlock('deathTitle', '已 阵 亡');
     this.titleText.height = '48px';
-    this.titleText.color = '#ff4455'; // 典雅红
+    this.titleText.color = '#ff4455';
     this.titleText.fontSize = 28;
     this.titleText.fontFamily = UI_FONT;
     this.titleText.fontWeight = 'bold';
@@ -145,8 +173,8 @@ export class DeathOverlay {
     this.respawnBtn.fontSize = 17;
     this.respawnBtn.fontFamily = UI_FONT;
     this.respawnBtn.fontWeight = 'bold';
-    this.respawnBtn.background = 'rgba(255, 255, 255, 0.10)'; // 高级半透明磨砂质感
-    this.respawnBtn.cornerRadius = 23; // 胶囊圆角
+    this.respawnBtn.background = 'rgba(255, 255, 255, 0.10)';
+    this.respawnBtn.cornerRadius = 23;
     this.respawnBtn.thickness = 1.2;
     this.respawnBtn.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
 
@@ -162,8 +190,7 @@ export class DeathOverlay {
 
     // 点击事件
     this.respawnBtn.onPointerClickObservable.add(() => {
-      this.hide();
-      this.onRespawnClick?.();
+      this.startRespawnTransition();
     });
 
     this.panel.addControl(this.respawnBtn);

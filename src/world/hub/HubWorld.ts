@@ -434,7 +434,8 @@ export class HubWorld implements GameWorld {
     );
     this.minion.update(dt, isMoving);
     this.playerHealthBar.update(dt);
-    this.spellSystem.update(dt);
+    const targetMinions = [this.minion, ...this.demoLineup.minions];
+    this.spellSystem.update(dt, targetMinions);
     this.demoLineup.update(dt);
     this.floorPickerGallery.update(this.minion.root.position);
 
