@@ -48,6 +48,7 @@ export interface CreateHubWorldOptions {
   spawnX: number;
   spawnZ: number;
   freeCamera?: { alpha: number; beta: number; radius: number };
+  getIsInvincible?: () => boolean;
   onAppearanceChanged?: (appearance: MinionAppearance) => void;
   onRequestLandingWarp?: (
     minion: Minion,
@@ -80,6 +81,7 @@ export class HubWorld implements GameWorld {
   readonly shadowGen: ShadowGenerator;
 
   private readonly onRequestLandingWarp?: CreateHubWorldOptions['onRequestLandingWarp'];
+  private readonly getIsInvincible?: () => boolean;
   private wasMoving = false;
   private onPlayerMoved: (() => void) | null = null;
   private onPlayerStopped: (() => void) | null = null;
@@ -102,6 +104,7 @@ export class HubWorld implements GameWorld {
     demoLineup: DemoLineup,
     shadowGen: ShadowGenerator,
     onRequestLandingWarp?: CreateHubWorldOptions['onRequestLandingWarp'],
+    getIsInvincible?: () => boolean,
   ) {
     this.scene = scene;
     this.camera = camera;
@@ -119,6 +122,7 @@ export class HubWorld implements GameWorld {
     this.demoLineup = demoLineup;
     this.shadowGen = shadowGen;
     this.onRequestLandingWarp = onRequestLandingWarp;
+    this.getIsInvincible = getIsInvincible;
     this.swapRange = RangeRing.DEFAULT_RADIUS;
   }
 
@@ -428,6 +432,9 @@ export class HubWorld implements GameWorld {
       isMoving ? moveWish.wishZ : 0,
     );
     this.minion.update(dt, isMoving);
+    if (this.getIsInvincible?.() && !isDead && this.playerHealthBar.getHp() < this.playerHealthBar.getMaxHp()) {
+      this.playerHealthBar.setHp(this.playerHealthBar.getMaxHp());
+    }
     this.playerHealthBar.update(dt);
     const targetMinions = [this.minion, ...this.demoLineup.minions];
     this.spellSystem.update(dt, targetMinions);

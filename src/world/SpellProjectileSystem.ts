@@ -2,12 +2,15 @@ import {
   type AbstractMesh,
   Color3,
   DynamicTexture,
+  Engine,
   Mesh,
   MeshBuilder,
   Ray,
   type Scene,
   StandardMaterial,
   Vector3,
+  VertexBuffer,
+  VertexData,
 } from '@babylonjs/core';
 import type { Minion } from './Minion';
 import type { StaffStyle } from './minion/staff';
@@ -33,16 +36,19 @@ interface Bullet {
   speed: number;
   shooter?: Minion;
   style: StaffStyle;
+  posBuffer: Float32Array;
 }
 
 /**
- * 极简纯色圆形子弹系统：
- * 采用圆柱体/胶囊体物理扫描 (Ray-to-Cylinder Swept Check) 精准检测 Minion 受击，
- * 配合 3D Ray 墙体遮挡判定，彻底解决子弹穿透、擦过假漏判和高低差判定失真问题。
+ * AAA 级彗星魔法子弹特效系统：
+ * 1. 彗星水滴型自然拖尾贴图 (Teardrop Comet Texture)：二次贝塞尔曲线外廓 + 白热核心 + 软光晕；
+ * 2. 动态面向摄像机 Trail Mesh (0.24m 紧凑高能光束)；
+ * 3. 0 判定漏洞的圆柱体扫掠与防穿墙遮挡扫掠。
  */
 export class SpellProjectileSystem {
   private readonly scene: Scene;
   private readonly matMap = new Map<StaffStyle, StandardMaterial>();
+  private readonly textureMap = new Map<StaffStyle, DynamicTexture>();
   private readonly explosionMatMap = new Map<StaffStyle, StandardMaterial>();
   private readonly bullets: Bullet[] = [];
 
@@ -50,23 +56,150 @@ export class SpellProjectileSystem {
     this.scene = scene;
   }
 
+  /**
+   * 使用 HTML5 Canvas 程序化预生成【彗星水滴型高亮拖尾贴图】
+   * 采用二次贝塞尔曲线 (quadraticCurveTo) 消除直边梯形感，形成优美平滑的彗星彗尾
+   */
+  private getBulletTexture(style: StaffStyle): DynamicTexture {
+    let tex = this.textureMap.get(style);
+    if (tex) return tex;
+
+    const scene = this.scene;
+    const baseColor = STYLE_COLORS[style] ?? STYLE_COLORS.arcane;
+    const r = Math.round(baseColor.r * 255);
+    const g = Math.round(baseColor.g * 255);
+    const b = Math.round(baseColor.b * 255);
+    const rgba = (a: number) => `rgba(${r}, ${g}, ${b}, ${a})`;
+
+    const width = 256;
+    const height = 64;
+    const dynTex = new DynamicTexture(
+      `bulletTex_${style}`,
+      { width, height },
+      scene,
+      false,
+    );
+    const ctx = dynTex.getContext();
+
+    ctx.clearRect(0, 0, width, height);
+
+    // 1. 柔和外晕 (Soft Outer Teardrop Aura)
+    const auraGrad = ctx.createLinearGradient(0, 0, 230, 0);
+    auraGrad.addColorStop(0, rgba(0));
+    auraGrad.addColorStop(0.3, rgba(0.25));
+    auraGrad.addColorStop(0.7, rgba(0.6));
+    auraGrad.addColorStop(1.0, rgba(0));
+
+    ctx.fillStyle = auraGrad;
+    ctx.beginPath();
+    ctx.moveTo(0, 32);
+    ctx.quadraticCurveTo(110, 0, 206, 8);
+    ctx.arc(206, 32, 24, -Math.PI / 2, Math.PI / 2);
+    ctx.quadraticCurveTo(110, 64, 0, 32);
+    ctx.closePath();
+    ctx.fill();
+
+    // 2. 彗星能量主体 (Comet Body)
+    const bodyGrad = ctx.createLinearGradient(0, 0, 206, 0);
+    bodyGrad.addColorStop(0, rgba(0));
+    bodyGrad.addColorStop(0.25, rgba(0.45));
+    bodyGrad.addColorStop(0.75, rgba(0.95));
+    bodyGrad.addColorStop(1.0, '#ffffff');
+
+    ctx.fillStyle = bodyGrad;
+    ctx.beginPath();
+    ctx.moveTo(8, 32);
+    ctx.quadraticCurveTo(115, 10, 204, 18);
+    ctx.arc(204, 32, 14, -Math.PI / 2, Math.PI / 2);
+    ctx.quadraticCurveTo(115, 54, 8, 32);
+    ctx.closePath();
+    ctx.fill();
+
+    // 3. 核心白热能量光束 (White Hot Inner Ray)
+    const coreGrad = ctx.createLinearGradient(30, 0, 204, 0);
+    coreGrad.addColorStop(0, rgba(0));
+    coreGrad.addColorStop(0.35, 'rgba(255, 255, 255, 0.85)');
+    coreGrad.addColorStop(1.0, '#ffffff');
+
+    ctx.strokeStyle = coreGrad;
+    ctx.lineWidth = 8;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(30, 32);
+    ctx.lineTo(204, 32);
+    ctx.stroke();
+
+    // 4. 子弹头部发光圆核 (Glowing Bullet Head Orb) at X=204, Y=32
+    const headGrad = ctx.createRadialGradient(204, 32, 0, 204, 32, 20);
+    headGrad.addColorStop(0, '#ffffff');
+    headGrad.addColorStop(0.45, '#ffffff');
+    headGrad.addColorStop(0.75, rgba(1));
+    headGrad.addColorStop(1.0, rgba(0));
+
+    ctx.fillStyle = headGrad;
+    ctx.beginPath();
+    ctx.arc(204, 32, 20, 0, Math.PI * 2);
+    ctx.fill();
+
+    dynTex.update(false);
+    dynTex.hasAlpha = true;
+
+    this.textureMap.set(style, dynTex);
+    return dynTex;
+  }
+
   private getMaterial(style: StaffStyle): StandardMaterial {
     let m = this.matMap.get(style);
     if (m) return m;
 
+    const tex = this.getBulletTexture(style);
     const col = STYLE_COLORS[style] ?? STYLE_COLORS.arcane;
-    m = new StandardMaterial(`bullet_solid_mat_${style}`, this.scene);
-    m.diffuseColor = col;
-    m.emissiveColor = col;
+
+    m = new StandardMaterial(`bullet_trail_mat_${style}`, this.scene);
+    m.diffuseTexture = tex;
+    m.emissiveTexture = tex;
+    m.emissiveColor = col.scale(2.2);
     m.disableLighting = true;
     m.backFaceCulling = false;
+    m.useAlphaFromDiffuseTexture = true;
+    m.alphaMode = Engine.ALPHA_ADD;
 
     this.matMap.set(style, m);
     return m;
   }
 
   /**
-   * 发射一枚极简纯色圆形子弹
+   * 构建可实时更新顶点的拖尾带 Quad Mesh (4 Vertices, 2 Triangles)
+   */
+  private createTrailMesh(name: string): Mesh {
+    const customMesh = new Mesh(name, this.scene);
+    customMesh.alwaysSelectAsActiveMesh = true;
+
+    const vertexData = new VertexData();
+
+    vertexData.positions = [
+      0, 0, 0, // 0: Tail Left
+      0, 0, 0, // 1: Tail Right
+      0, 0, 0, // 2: Head Left
+      0, 0, 0, // 3: Head Right
+    ];
+
+    vertexData.uvs = [
+      0, 0, // 0: Tail Left
+      0, 1, // 1: Tail Right
+      1, 0, // 2: Head Left
+      1, 1, // 3: Head Right
+    ];
+
+    vertexData.indices = [0, 1, 2, 1, 3, 2];
+    vertexData.normals = [0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0];
+
+    vertexData.applyToMesh(customMesh, true);
+    return customMesh;
+  }
+
+  /**
+   * 发射一枚带彗星拖尾与散逸星火的魔法子弹
    */
   spawnOrb(
     spawnPos: Vector3,
@@ -85,7 +218,7 @@ export class SpellProjectileSystem {
     // 防卡墙穿墙校验：若开火者法杖顶端插进墙内，将子弹出生点自动收回至墙面外侧
     if (shooter && shooter.root) {
       const originPos = shooter.root.position.clone();
-      originPos.y += 0.45; // 射手胸口中心
+      originPos.y += 0.45;
       const toTip = spawnPos.subtract(originPos);
       const tipDist = toTip.length();
       if (tipDist > 1e-4) {
@@ -93,33 +226,78 @@ export class SpellProjectileSystem {
         const checkRay = new Ray(originPos, rayDir, tipDist);
         const wallRes = this.tryHitWallRay(checkRay);
         if (wallRes.hit && wallRes.distance < tipDist) {
-          // 法杖插进了墙内！将子弹出生点安全收回至墙面外侧
           const safeDist = Math.max(0.05, wallRes.distance - 0.05);
           finalSpawnPos = originPos.add(rayDir.scale(safeDist));
         }
       }
     }
 
-    // 面向摄像机的纯色圆形 Disc Mesh (半径 0.04)
-    const disc = MeshBuilder.CreateDisc(
-      'bullet',
-      { radius: 0.04, tessellation: 32 },
-      this.scene,
-    );
-    disc.material = this.getMaterial(style);
-    disc.billboardMode = Mesh.BILLBOARDMODE_ALL;
-    disc.isPickable = false;
-    disc.position.copyFrom(finalSpawnPos);
+    const mesh = this.createTrailMesh(`bullet_${style}`);
+    mesh.material = this.getMaterial(style);
+    mesh.isPickable = false;
+    mesh.renderingGroupId = 1;
 
-    this.bullets.push({
-      mesh: disc,
+    const posBuffer = new Float32Array(12);
+
+    const bullet: Bullet = {
+      mesh,
       position: finalSpawnPos.clone(),
       lastPos: finalSpawnPos.clone(),
       direction: dir,
       speed,
       shooter,
       style,
-    });
+      posBuffer,
+    };
+
+    this.updateTrailMeshVertices(bullet);
+    this.bullets.push(bullet);
+  }
+
+  /**
+   * 根据当前摄像机视线方向与飞行方向计算面向摄像机的 Strip Vertices
+   */
+  private updateTrailMeshVertices(bullet: Bullet): void {
+    const H = bullet.position;
+    const stepDist = Vector3.Distance(bullet.position, bullet.lastPos);
+    const trailLen = Math.max(0.45, stepDist * 1.3);
+
+    const T = H.subtract(bullet.direction.scale(trailLen));
+
+    const fwd = bullet.direction;
+    const cam = this.scene.activeCamera;
+    const camPos = cam ? cam.globalPosition : new Vector3(0, 10, -10);
+    let toCam = camPos.subtract(H);
+    if (toCam.lengthSquared() < 1e-4) {
+      toCam = new Vector3(0, 1, 0);
+    } else {
+      toCam.normalize();
+    }
+
+    let side = Vector3.Cross(fwd, toCam);
+    if (side.lengthSquared() < 1e-4) {
+      side = Vector3.Cross(fwd, Vector3.Up());
+      if (side.lengthSquared() < 1e-4) {
+        side = new Vector3(1, 0, 0);
+      }
+    }
+    side.normalize();
+
+    const width = 0.24; // 0.24m 紧凑高能彗星宽度
+    const halfW = width * 0.5;
+
+    const sideX = side.x * halfW;
+    const sideY = side.y * halfW;
+    const sideZ = side.z * halfW;
+
+    const buf = bullet.posBuffer;
+
+    buf[0] = T.x + sideX;  buf[1] = T.y + sideY;  buf[2] = T.z + sideZ;
+    buf[3] = T.x - sideX;  buf[4] = T.y - sideY;  buf[5] = T.z - sideZ;
+    buf[6] = H.x + sideX;  buf[7] = H.y + sideY;  buf[8] = H.z + sideZ;
+    buf[9] = H.x - sideX;  buf[10] = H.y - sideY; buf[11] = H.z - sideZ;
+
+    bullet.mesh.updateVerticesData(VertexBuffer.PositionKind, buf, true);
   }
 
   update(dt: number, targetMinions?: Minion[]): void {
@@ -134,7 +312,7 @@ export class SpellProjectileSystem {
 
       let wallHitDist = Infinity;
 
-      // 1. 墙体/障碍物遮挡射线检测
+      // 墙体/障碍物遮挡射线检测
       if (moveDist > 1e-4) {
         const rayDir = raySegment.scale(1 / moveDist);
         const sweepRay = new Ray(b.lastPos, rayDir, moveDist + 0.05);
@@ -144,7 +322,7 @@ export class SpellProjectileSystem {
         }
       }
 
-      // 2. 小兵圆柱体扫掠求交检测 (Ray-to-Cylinder Check)
+      // 小兵圆柱体扫掠求交检测
       const minionHit = this.checkMinionCylinderHit(
         b.lastPos,
         nextPos,
@@ -158,7 +336,6 @@ export class SpellProjectileSystem {
       let hitOccurred = false;
       let isWallHit = false;
 
-      // 若在墙体生效前命中了小兵，触发小兵受击与击退；否则若撞墙/越界则吸收销毁
       if (
         minionHit &&
         (wallHitDist === Infinity || Math.sqrt(minionHit.distSq) <= wallHitDist)
@@ -174,7 +351,6 @@ export class SpellProjectileSystem {
       }
 
       if (hitOccurred) {
-        // 在精准的求交命中点触发法术元素爆炸特效
         const impactPos = isWallHit
           ? b.lastPos.add(b.direction.scale(Math.max(0, wallHitDist - 0.08)))
           : nextPos;
@@ -187,7 +363,8 @@ export class SpellProjectileSystem {
 
       b.lastPos.copyFrom(b.position);
       b.position.copyFrom(nextPos);
-      b.mesh.position.copyFrom(b.position);
+
+      this.updateTrailMeshVertices(b);
     }
   }
 
@@ -220,8 +397,7 @@ export class SpellProjectileSystem {
   }
 
   /**
-   * 圆柱体受击精确求交检测：把小兵抽象为半径 0.32m、高 0.85m 的垂直受击圆柱体，
-   * 与子弹一帧内的移动轨迹线段进行精确求交。
+   * 圆柱体受击精确求交检测：把小兵抽象为半径 0.32m、高 0.85m 的垂直受击圆柱体
    */
   private checkMinionCylinderHit(
     p0: Vector3,
@@ -249,13 +425,11 @@ export class SpellProjectileSystem {
       if (target.root && !target.root.isEnabled()) continue;
 
       const pos = target.root.position;
-      const targetHeight = 0.85; // 小兵高度 (含帽子与角)
-      const targetRadius = 0.32; // 受击判定半径 (小兵 0.28m + 子弹 0.04m)
+      const targetHeight = 0.85;
+      const targetRadius = 0.32;
 
-      // 1. 高度 Y 轴覆盖判断
       if (maxY < -0.1 || minY > targetHeight) continue;
 
-      // 2. 2D 水平坐标系线段到圆柱中心的距离判断
       const res = this.distSqToSegment2D(pos.x, pos.z, p0.x, p0.z, p1.x, p1.z);
       if (res.distSq <= targetRadius * targetRadius) {
         const hitX = p0.x + res.t * (p1.x - p0.x);
@@ -298,12 +472,10 @@ export class SpellProjectileSystem {
     if (!mesh.isEnabled() || !mesh.isPickable) return false;
     const name = mesh.name.toLowerCase();
 
-    // 过滤子弹自身与小兵节点
     if (name.includes('bullet') || name.includes('spell') || mesh.metadata?.minion) {
       return false;
     }
 
-    // 过滤纯地面、地形与网格
     if (
       (name.includes('floor') && !name.includes('wall')) ||
       name.includes('ground') ||
@@ -314,7 +486,6 @@ export class SpellProjectileSystem {
       return false;
     }
 
-    // 过滤隐形物理代理盒，优先让子弹扎在 RenderWall 真实视觉模型多边形表面上
     if (name.startsWith('phys') || mesh.metadata?.isColliderMesh === true) {
       return false;
     }
@@ -340,6 +511,8 @@ export class SpellProjectileSystem {
     this.clear();
     for (const m of this.matMap.values()) m.dispose();
     this.matMap.clear();
+    for (const t of this.textureMap.values()) t.dispose();
+    this.textureMap.clear();
     for (const m of this.explosionMatMap.values()) {
       if (m.diffuseTexture) m.diffuseTexture.dispose();
       m.dispose();
@@ -348,14 +521,12 @@ export class SpellProjectileSystem {
   }
 
   /**
-   * 采用程序预渲染发光贴图 (Procedural Pre-rendered Texture) + 最高渲染层级 (renderingGroupId = 2) 置顶快闪。
-   * 永远面向摄像机 Billboard 渲染，彻底消除 3D 几何体遮挡与嵌入问题，实现最佳性能与最饱满视觉体验！
+   * 法术元素爆裂特效
    */
   private triggerExplosionFx(pos: Vector3, style: StaffStyle): void {
     const scene = this.scene;
     const mat = this.getExplosionMaterial(style);
 
-    // 单一 Billboard 贴图面片 (0 GC, 1 Draw Call, 永远面向摄像机)
     const expMesh = MeshBuilder.CreateDisc(
       'expSprite',
       { radius: 0.32, tessellation: 12 },
@@ -365,15 +536,12 @@ export class SpellProjectileSystem {
     expMesh.material = mat;
     expMesh.position.copyFrom(pos);
     expMesh.isPickable = false;
-
-    // 设置最高渲染图层 (2)，确保永远在场景所有墙体与地形最上方置顶无损绘制！
     expMesh.renderingGroupId = 2;
 
-    // 随机 Z 轴角度增添爆裂随机性
     expMesh.rotation.z = Math.random() * Math.PI * 2;
 
     let animTimer = 0;
-    const maxTime = 0.14; // 140ms 极致高频爆裂快闪
+    const maxTime = 0.14;
 
     const observer = scene.onBeforeRenderObservable.add(() => {
       const dt = scene.getEngine().getDeltaTime() / 1000;
@@ -386,16 +554,12 @@ export class SpellProjectileSystem {
         return;
       }
 
-      // 0.14 秒内由 0.4 快速膨胀至 1.6 倍，配合透明度二次方渐隐
       const s = 0.4 + progress * 1.2;
       expMesh.scaling.set(s, s, s);
       expMesh.visibility = 1 - progress * progress;
     });
   }
 
-  /**
-   * 使用 HTML5 Canvas 动态程序预生成高品质发光爆裂星光贴图（首次一次性生成，后续 100% 材质缓存复用）
-   */
   private getExplosionMaterial(style: StaffStyle): StandardMaterial {
     let mat = this.explosionMatMap.get(style);
     if (mat) return mat;
@@ -415,7 +579,6 @@ export class SpellProjectileSystem {
 
     ctx.clearRect(0, 0, size, size);
 
-    // 1. 核心径向高亮光晕
     const grad = ctx.createRadialGradient(64, 64, 0, 64, 64, 60);
     grad.addColorStop(0, '#ffffff');
     grad.addColorStop(0.2, hex);
@@ -427,7 +590,6 @@ export class SpellProjectileSystem {
     ctx.arc(64, 64, 60, 0, Math.PI * 2);
     ctx.fill();
 
-    // 2. 8 方向爆裂放射状星光线条
     ctx.strokeStyle = '#ffffff';
     ctx.lineWidth = 4;
     for (let i = 0; i < 8; i++) {
@@ -452,3 +614,5 @@ export class SpellProjectileSystem {
     return mat;
   }
 }
+
+

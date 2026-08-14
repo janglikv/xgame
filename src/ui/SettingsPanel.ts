@@ -30,6 +30,8 @@ export interface SettingsPanelDeps {
   setShowGrid: (show: boolean) => void;
   getShowColliders: () => boolean;
   setShowColliders: (show: boolean) => void;
+  getIsInvincible: () => boolean;
+  setIsInvincible: (invincible: boolean) => void;
   getCameraMode: () => CameraMode;
   setCameraMode: (mode: CameraMode) => void;
   getCameraInfo: () => SettingsCameraInfo;
@@ -51,6 +53,7 @@ export class SettingsPanel {
   private tex!: AdvancedDynamicTexture;
   private panel!: Rectangle;
   private fpsCheck!: Checkbox;
+  private invincibleCheck!: Checkbox;
   private freeCheck!: Checkbox;
   private fixedCheck!: Checkbox;
   private camAlpha!: TextBlock;
@@ -131,6 +134,27 @@ export class SettingsPanel {
         color: 'rgba(255,255,255,0.45)',
       }),
     );
+
+    // —— 战斗与功能 ——
+    stack.addControl(this.spacer(16));
+    stack.addControl(
+      this.makeText('secGameplay', '战斗与功能', {
+        fontSize: 13,
+        height: 24,
+        color: 'rgba(255,255,255,0.45)',
+        fontWeight: '600',
+      }),
+    );
+    stack.addControl(this.spacer(4));
+
+    const invincibleRow = this.makeToggleRow(
+      'invincibleRow',
+      '角色无敌（不受伤害）',
+      this.deps.getIsInvincible(),
+      (checked) => this.deps.setIsInvincible(checked),
+    );
+    this.invincibleCheck = invincibleRow.check;
+    stack.addControl(invincibleRow.row);
 
     // —— 显示 ——
     stack.addControl(this.spacer(16));
@@ -399,6 +423,7 @@ export class SettingsPanel {
     this.tex.rootContainer.isHitTestVisible = open;
     if (open) {
       this.fpsCheck.isChecked = this.deps.getShowFps();
+      this.invincibleCheck.isChecked = this.deps.getIsInvincible();
       this.syncModeChecks(this.deps.getCameraMode());
       this.camModeHint.text = this.modeHintText(this.deps.getCameraMode());
       this.refreshCamera();

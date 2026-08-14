@@ -30,6 +30,7 @@ export interface WorldRouterContext {
   getCameraMode: () => CameraMode;
   getMenuOpen: () => boolean;
   getShowGrid: () => boolean;
+  getIsInvincible?: () => boolean;
   onLandingWarp: (
     minion: Minion,
     phys: MinionPhysicsProxy,
@@ -122,6 +123,7 @@ export class WorldRouter {
       spawnX: options.spawnX,
       spawnZ: options.spawnZ,
       freeCamera: options.freeCamera,
+      getIsInvincible: this.ctx.getIsInvincible,
       onAppearanceChanged: options.onAppearanceChanged,
       onRequestLandingWarp: this.ctx.onLandingWarp,
     });
@@ -284,6 +286,7 @@ export class WorldRouter {
         cameraMode: this.ctx.getCameraMode(),
         initialX: spawn.x,
         initialZ: spawn.z,
+        getIsInvincible: this.ctx.getIsInvincible,
         onRequestLandingWarp: this.ctx.onLandingWarp,
       });
       this.wireWorld(level1);

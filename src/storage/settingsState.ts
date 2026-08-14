@@ -11,6 +11,8 @@ export interface SettingsStateSnapshot {
   showGrid: boolean;
   /** 是否显示隐形盒体碰撞体（调试） */
   showColliders: boolean;
+  /** 是否开启角色无敌（不扣血） */
+  isInvincible: boolean;
   /** 镜头模式（默认固定略倾俯视） */
   cameraMode: CameraMode;
 }
@@ -39,6 +41,7 @@ const DEFAULTS: SettingsStateSnapshot = {
   showFps: true,
   showGrid: true,
   showColliders: false,
+  isInvincible: false,
   cameraMode: 'fixed',
 };
 
@@ -56,6 +59,7 @@ export function loadSettingsState(): SettingsStateSnapshot {
               typeof old.showFps === 'boolean' ? old.showFps : DEFAULTS.showFps,
             showGrid: DEFAULTS.showGrid,
             showColliders: DEFAULTS.showColliders,
+            isInvincible: DEFAULTS.isInvincible,
             cameraMode: DEFAULTS.cameraMode,
           };
         } catch {
@@ -71,6 +75,7 @@ export function loadSettingsState(): SettingsStateSnapshot {
       showFps: typeof data.showFps === 'boolean' ? data.showFps : DEFAULTS.showFps,
       showGrid: typeof data.showGrid === 'boolean' ? data.showGrid : DEFAULTS.showGrid,
       showColliders: typeof data.showColliders === 'boolean' ? data.showColliders : DEFAULTS.showColliders,
+      isInvincible: typeof data.isInvincible === 'boolean' ? data.isInvincible : DEFAULTS.isInvincible,
       cameraMode: mode === 'free' || mode === 'fixed' ? mode : DEFAULTS.cameraMode,
     };
   } catch {

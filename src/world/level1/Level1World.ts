@@ -48,6 +48,7 @@ export interface CreateLevel1WorldOptions {
   cameraMode: CameraMode;
   initialX?: number;
   initialZ?: number;
+  getIsInvincible?: () => boolean;
   /** 落地动画由外部 WarpLanding 驱动时回调 */
   onRequestLandingWarp?: (
     minion: Minion,
@@ -77,6 +78,7 @@ export class Level1World implements GameWorld {
   readonly teleportPad: TeleportPad;
 
   private readonly onRequestLandingWarp?: CreateLevel1WorldOptions['onRequestLandingWarp'];
+  private readonly getIsInvincible?: () => boolean;
   private wasMoving = false;
   private pendingRespawnToHub = false;
   private onPlayerMoved: (() => void) | null = null;
@@ -95,6 +97,7 @@ export class Level1World implements GameWorld {
     spatialAxesGrid: SpatialAxesGrid,
     teleportPad: TeleportPad,
     onRequestLandingWarp?: CreateLevel1WorldOptions['onRequestLandingWarp'],
+    getIsInvincible?: () => boolean,
   ) {
     this.scene = scene;
     this.camera = camera;
@@ -108,6 +111,7 @@ export class Level1World implements GameWorld {
     this.spatialAxesGrid = spatialAxesGrid;
     this.teleportPad = teleportPad;
     this.onRequestLandingWarp = onRequestLandingWarp;
+    this.getIsInvincible = getIsInvincible;
   }
 
   static async create(
@@ -145,14 +149,12 @@ export class Level1World implements GameWorld {
     });
 
     const teleportPad = new TeleportPad(scene, LEVEL1_PAD_X, LEVEL1_PAD_Z);
+    teleportPad.disarmUntilLeave();
 
-    let spawn = clampLevel1Spawn(
+    const spawn = clampLevel1Spawn(
       options.initialX ?? LEVEL1_LANDING_X,
       options.initialZ ?? LEVEL1_LANDING_Z,
     );
-    if (Math.abs(spawn.x) < 2.2 && Math.abs(spawn.z) < 2.2) {
-      spawn = { x: LEVEL1_LANDING_X, z: LEVEL1_LANDING_Z };
-    }
 
     const appearance = options.appearance;
     const minion = new Minion(scene, spawn.x, spawn.z, {
@@ -261,6 +263,7 @@ export class Level1World implements GameWorld {
       spatialAxesGrid,
       teleportPad,
       options.onRequestLandingWarp,
+      options.getIsInvincible,
     );
 
     deathOverlay.onRespawnClick = () => {
@@ -268,6 +271,7 @@ export class Level1World implements GameWorld {
     };
 
     minion.onTakeDamage = (amount) => {
+      if (options.getIsInvincible?.()) return;
       playerHealthBar.takeDamage(amount);
       if (playerHealthBar.isDead() && !minion.isDead()) {
         minion.setDead(true);
@@ -442,6 +446,9 @@ export class Level1World implements GameWorld {
       isMoving ? moveWish.wishZ : 0,
     );
     this.minion.update(dt, isMoving);
+    if (this.getIsInvincible?.() && !isDead && this.playerHealthBar.getHp() < this.playerHealthBar.getMaxHp()) {
+      this.playerHealthBar.setHp(this.playerHealthBar.getMaxHp());
+    }
     this.playerHealthBar.update(dt);
 
     const targetMinions = [this.minion, ...allEnemyMinions];

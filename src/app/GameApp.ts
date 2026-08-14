@@ -38,6 +38,7 @@ export class GameApp {
   private showFps = true;
   private showGrid = true;
   private showColliders = false;
+  private isInvincible = false;
 
   private readonly moveInput = new MoveInput();
   private readonly combat = new PlayerCombatController();
@@ -73,6 +74,7 @@ export class GameApp {
     this.showFps = settings.showFps;
     this.showGrid = settings.showGrid;
     this.showColliders = settings.showColliders;
+    this.isInvincible = settings.isInvincible;
 
     const savedCam = loadCameraState();
     const savedWorld = loadWorldState();
@@ -83,9 +85,13 @@ export class GameApp {
       getCameraMode: () => this.cameraMode,
       getMenuOpen: () => this.settingsPanel?.isOpen() ?? false,
       getShowGrid: () => this.showGrid,
+      getIsInvincible: () => this.isInvincible,
       onLandingWarp: (m, p, x, z) => this.warpLanding.trigger(m, p, x, z),
       onPlayerMoved: () => this.scheduleSaveMinion(),
-      onPlayerStopped: () => saveMinionState(this.router.snapshotMinion()),
+      onPlayerStopped: () => {
+        saveMinionState(this.router.snapshotMinion());
+        saveWorldState(this.router.activeWorldId);
+      },
       onCameraChanged: () => this.scheduleSaveCamera(),
       cameraFollow: this.cameraFollow,
       onAfterActivate: (world, meta) => {
@@ -144,6 +150,17 @@ export class GameApp {
         this.router.forEach((w) => applyCollidersVisibility(w.scene, show));
         this.persistSettings();
       },
+      getIsInvincible: () => this.isInvincible,
+      setIsInvincible: (invincible) => {
+        this.isInvincible = invincible;
+        if (invincible) {
+          const activeWorld = this.router.active as { playerHealthBar?: { setHp: (hp: number) => void; getMaxHp: () => number } };
+          if (activeWorld.playerHealthBar) {
+            activeWorld.playerHealthBar.setHp(activeWorld.playerHealthBar.getMaxHp());
+          }
+        }
+        this.persistSettings();
+      },
       getCameraMode: () => this.cameraMode,
       setCameraMode: (mode) => this.setCameraMode(mode),
       getCameraInfo: () => {
@@ -162,7 +179,6 @@ export class GameApp {
 
     this.combat.bindCanvas(this.canvas);
     this.bindInput();
-    this.bindLifecycle();
 
     {
       const focus = new Vector3();
@@ -179,6 +195,7 @@ export class GameApp {
       });
     }
 
+    this.bindLifecycle();
     this.engine.runRenderLoop(() => this.tick());
   }
 
@@ -355,6 +372,7 @@ export class GameApp {
     this.minionSaveTimer = setTimeout(() => {
       this.minionSaveTimer = null;
       saveMinionState(this.router.snapshotMinion());
+      saveWorldState(this.router.activeWorldId);
     }, 200);
   }
 
@@ -363,6 +381,7 @@ export class GameApp {
       showFps: this.showFps,
       showGrid: this.showGrid,
       showColliders: this.showColliders,
+      isInvincible: this.isInvincible,
       cameraMode: this.cameraMode,
     });
   }
