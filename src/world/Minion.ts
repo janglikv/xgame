@@ -693,9 +693,14 @@ export class Minion {
     hand.position.set(x, y, z);
   }
 
+  /** 当前这一拳是否为右手（连击偶数拳为右） */
+  isRightHandPunch(): boolean {
+    return this.punchCombo === 0;
+  }
+
   /** 获取当前出拳手（拳头落点）的世界坐标 */
   getAttackingHandWorldPos(): Vector3 {
-    const isRight = this.punchCombo === 0;
+    const isRight = this.isRightHandPunch();
     const hand = isRight ? this.rightHand : this.leftHand;
     hand.computeWorldMatrix(true);
     return hand.absolutePosition.clone();

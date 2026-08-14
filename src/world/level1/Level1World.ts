@@ -9,6 +9,7 @@ import type {
 import { EnemyAI } from '../EnemyAI';
 import { Floor } from '../Floor';
 import { HealthBar } from '../HealthBar';
+import { HealthPackSystem } from '../HealthPackSystem';
 import { Minion, type MinionAppearance } from '../Minion';
 import {
   buildArenaColliders,
@@ -73,6 +74,7 @@ export class Level1World implements GameWorld {
   readonly deathOverlay: DeathOverlay;
   readonly enemies: Level1Enemy[];
   readonly spellSystem: SpellProjectileSystem;
+  readonly healthPackSystem: HealthPackSystem;
   readonly floor: Floor;
   readonly spatialAxesGrid: SpatialAxesGrid;
   readonly teleportPad: TeleportPad;
@@ -93,6 +95,7 @@ export class Level1World implements GameWorld {
     deathOverlay: DeathOverlay,
     enemies: Level1Enemy[],
     spellSystem: SpellProjectileSystem,
+    healthPackSystem: HealthPackSystem,
     floor: Floor,
     spatialAxesGrid: SpatialAxesGrid,
     teleportPad: TeleportPad,
@@ -107,6 +110,7 @@ export class Level1World implements GameWorld {
     this.deathOverlay = deathOverlay;
     this.enemies = enemies;
     this.spellSystem = spellSystem;
+    this.healthPackSystem = healthPackSystem;
     this.floor = floor;
     this.spatialAxesGrid = spatialAxesGrid;
     this.teleportPad = teleportPad;
@@ -185,22 +189,19 @@ export class Level1World implements GameWorld {
     minionPhys.teleportToTarget();
 
     const spellSystem = new SpellProjectileSystem(scene);
-    const leftGroupState = { isGroupAggroLocked: false };
-    const rightGroupState = { isGroupAggroLocked: false };
+    const wizardGroupState = { isGroupAggroLocked: false };
 
-    // 敌军分布在地图左右两侧，沿 Z 轴纵向踱步巡逻 (初始朝向 Math.PI 迎面面向玩家)
+    // 敌军分布：2 名远程法术敌军 (共享组仇恨)，4 名近战肉搏敌军 (仇恨独立，不共享)
     const enemyConfigs = [
-      // 左侧组 (Left Side)
-      { spawnX: -6.0, spawnZ: 3.5, groupState: leftGroupState, rotY: Math.PI },
-      { spawnX: -6.0, spawnZ: -1.5, groupState: leftGroupState, rotY: Math.PI },
-      { spawnX: -4.0, spawnZ: 4.5, groupState: leftGroupState, rotY: Math.PI },
-      { spawnX: -4.0, spawnZ: -0.5, groupState: leftGroupState, rotY: Math.PI },
+      // 1. 远程法术敌军 (共 2 名，左右各 1 名)
+      { spawnX: -5.5, spawnZ: 3.0, groupState: wizardGroupState, rotY: Math.PI, staff: 'flame' as StaffStyle | null },
+      { spawnX: 5.5, spawnZ: 3.0, groupState: wizardGroupState, rotY: Math.PI, staff: 'flame' as StaffStyle | null },
 
-      // 右侧组 (Right Side)
-      { spawnX: 6.0, spawnZ: 3.5, groupState: rightGroupState, rotY: Math.PI },
-      { spawnX: 6.0, spawnZ: -1.5, groupState: rightGroupState, rotY: Math.PI },
-      { spawnX: 4.0, spawnZ: 4.5, groupState: rightGroupState, rotY: Math.PI },
-      { spawnX: 4.0, spawnZ: -0.5, groupState: rightGroupState, rotY: Math.PI },
+      // 2. 近战肉搏敌军 (共 4 名，无法杖，每个敌人仇恨独立，不共享)
+      { spawnX: -2.5, spawnZ: 1.8, groupState: undefined, rotY: Math.PI, staff: null },
+      { spawnX: 2.5, spawnZ: 1.8, groupState: undefined, rotY: Math.PI, staff: null },
+      { spawnX: -1.8, spawnZ: 5.5, groupState: undefined, rotY: Math.PI, staff: null },
+      { spawnX: 1.8, spawnZ: 5.5, groupState: undefined, rotY: Math.PI, staff: null },
     ];
 
     const enemies: Level1Enemy[] = enemyConfigs.map((cfg) => {
@@ -209,8 +210,8 @@ export class Level1World implements GameWorld {
         shadowGenerator: shadowGen,
         face: 'fierce',
         bodyColor: 0x6e1b2b,
-        hat: 'horns',
-        staff: 'flame',
+        hat: null,
+        staff: cfg.staff,
         formation: null,
         combatTeam: 'enemy',
       });
@@ -229,11 +230,12 @@ export class Level1World implements GameWorld {
         spawnZ: cfg.spawnZ,
         patrolRadius: 2.0,
         moveSpeed: 1.2,
+        chaseSpeed: 2.2,
         patrolAxis: 'z',
-        initialAttackRange: 4.0,
-        retainedAttackRange: 5.0,
+        initialAttackRange: 2.8,
+        retainedAttackRange: 4.0,
         forcedPatrolDuration: 0.5,
-        attackCooldown: 1.8,
+        attackCooldown: cfg.staff ? 1.8 : 0.9,
         spellStyle: 'flame',
         groupState: cfg.groupState,
       });
@@ -249,6 +251,7 @@ export class Level1World implements GameWorld {
     });
 
     const deathOverlay = new DeathOverlay(scene);
+    const healthPackSystem = new HealthPackSystem(scene);
 
     const level1World = new Level1World(
       scene,
@@ -259,6 +262,7 @@ export class Level1World implements GameWorld {
       deathOverlay,
       enemies,
       spellSystem,
+      healthPackSystem,
       floor,
       spatialAxesGrid,
       teleportPad,
@@ -368,7 +372,8 @@ export class Level1World implements GameWorld {
   }
 
   activate(opts: WorldActivateOptions): void {
-    // 重新进入关卡：确保玩家处于活着的存活状态、血量补满并隐藏 DeathOverlay
+    // 重新进入关卡：确保存活、满血。hide() 必须立即关 UI，不可走重生转场，
+    // 否则首屏恢复时 TeleportFlow 空闲，会把人传回大厅。
     this.minion.setDead(false);
     this.playerHealthBar.setHp(this.playerHealthBar.getMaxHp());
     this.deathOverlay.hide();
@@ -453,6 +458,7 @@ export class Level1World implements GameWorld {
 
     const targetMinions = [this.minion, ...allEnemyMinions];
     this.spellSystem.update(dt, targetMinions);
+    this.healthPackSystem.update(dt, this.minion, this.playerHealthBar);
 
     if (!isMoving && this.wasMoving) {
       this.onPlayerStopped?.();
@@ -479,6 +485,7 @@ export class Level1World implements GameWorld {
     this.deathOverlay.dispose();
     this.playerHealthBar.dispose();
     this.spellSystem.dispose();
+    this.healthPackSystem.dispose();
     this.teleportPad.dispose();
     this.minionPhys.dispose();
     for (const e of this.enemies) {

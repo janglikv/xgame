@@ -29,6 +29,8 @@ export class DeathOverlay {
   private fadeState: 'idle' | 'in' | 'to_black' | 'from_black' = 'idle';
   private fadeAlpha = 0;
   private disposed = false;
+  /** 仅 show() 后允许触发 onRespawnClick，避免 activate/hide 误重生 */
+  private awaitingRespawn = false;
 
   public onRespawnClick?: () => void;
 
@@ -38,6 +40,7 @@ export class DeathOverlay {
 
   show(): void {
     if (this.disposed) return;
+    this.awaitingRespawn = true;
     this.fadeState = 'in';
     this.panel.isVisible = true;
     this.veil.background = 'rgba(0, 0, 0, 0.72)';
@@ -54,9 +57,18 @@ export class DeathOverlay {
     this.fadeState = 'to_black';
   }
 
+  /** 立即关闭死亡 UI，不触发重生回调（进关 / 切场景重置用） */
   hide(): void {
     if (this.disposed) return;
-    this.startRespawnTransition();
+    this.awaitingRespawn = false;
+    this.fadeState = 'idle';
+    this.fadeAlpha = 0;
+    this.veil.alpha = 0;
+    this.veil.background = 'rgba(0, 0, 0, 0.72)';
+    this.veil.isVisible = false;
+    this.veil.isPointerBlocker = false;
+    this.tex.rootContainer.isHitTestVisible = false;
+    this.panel.isVisible = true;
   }
 
   getIsVisible(): boolean {
@@ -77,8 +89,11 @@ export class DeathOverlay {
       this.fadeAlpha = Math.min(1, this.fadeAlpha + dt * 6.5);
       this.veil.alpha = this.fadeAlpha;
       if (this.fadeAlpha >= 1) {
-        // 2. 完全纯黑时刻：触发复活逻辑（瞬移至传送阵、满血 100 HP、立起）
-        this.onRespawnClick?.();
+        // 2. 完全纯黑时刻：仅在阵亡 show() 后触发重生
+        if (this.awaitingRespawn) {
+          this.awaitingRespawn = false;
+          this.onRespawnClick?.();
+        }
         // 3. 转入从纯黑逐渐明亮过程
         this.fadeState = 'from_black';
       }
@@ -101,10 +116,12 @@ export class DeathOverlay {
     if (this.disposed) return;
     const keptAlpha = this.fadeAlpha;
     const keptState = this.fadeState;
+    const keptAwaiting = this.awaitingRespawn;
     this.tex.dispose();
     this.buildUi(scene);
     this.fadeAlpha = keptAlpha;
     this.fadeState = keptState;
+    this.awaitingRespawn = keptAwaiting;
     this.veil.alpha = keptAlpha;
     const on = keptAlpha > 0.01 || keptState !== 'idle';
     this.veil.isVisible = on;

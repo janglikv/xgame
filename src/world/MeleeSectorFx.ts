@@ -1,9 +1,14 @@
 import {
   Color3,
+  DynamicTexture,
+  Engine,
   Mesh,
   MeshBuilder,
+  type Observer,
   type Scene,
   StandardMaterial,
+  Texture,
+  TransformNode,
   Vector3,
 } from '@babylonjs/core';
 
@@ -23,6 +28,7 @@ export function spawnPunchImpactFx(
   impactPos: Vector3,
   radius = 0.5,
   style: 'gold' | 'cyan' = 'gold',
+  isRightHand = true,
 ): void {
   const DURATION = 0.15;
   const disc = MeshBuilder.CreateDisc(
@@ -34,8 +40,12 @@ export function spawnPunchImpactFx(
   const mat = new StandardMaterial('punchImpactMat', scene);
   const glowColor =
     style === 'cyan'
-      ? new Color3(0.1, 0.9, 1.0)
-      : new Color3(1.0, 0.85, 0.25);
+      ? isRightHand
+        ? new Color3(0.12, 0.82, 1.0)
+        : new Color3(0.68, 0.96, 1.0)
+      : isRightHand
+        ? new Color3(1.0, 0.58, 0.06)
+        : new Color3(0.45, 0.86, 1.0);
 
   mat.diffuseColor = glowColor;
   mat.emissiveColor = glowColor;
@@ -222,3 +232,5 @@ export function spawnHitSparkFx(
     }
   });
 }
+
+
