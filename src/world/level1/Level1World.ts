@@ -34,6 +34,7 @@ import {
   LEVEL1_PAD_X,
   LEVEL1_PAD_Z,
   clampLevel1Position,
+  clampLevel1Spawn,
 } from './config';
 
 export interface Level1Enemy {
@@ -146,7 +147,7 @@ export class Level1World implements GameWorld {
 
     const teleportPad = new TeleportPad(scene, LEVEL1_PAD_X, LEVEL1_PAD_Z);
 
-    let spawn = clampLevel1Position(
+    let spawn = clampLevel1Spawn(
       options.initialX ?? LEVEL1_LANDING_X,
       options.initialZ ?? LEVEL1_LANDING_Z,
     );
@@ -206,6 +207,7 @@ export class Level1World implements GameWorld {
         hat: 'horns',
         staff: 'flame',
         formation: null,
+        combatTeam: 'enemy',
       });
       eMinion.root.rotation.y = cfg.rotY;
 
@@ -351,8 +353,11 @@ export class Level1World implements GameWorld {
   }
 
   getDefaultLandingXZ(yaw?: number): { x: number; z: number } {
+    if (yaw === undefined) {
+      return { x: LEVEL1_LANDING_X, z: LEVEL1_LANDING_Z };
+    }
     const p = this.teleportPad.getLandingXZ(yaw);
-    return clampLevel1Position(p.x, p.z);
+    return clampLevel1Spawn(p.x, p.z);
   }
 
   activate(opts: WorldActivateOptions): void {
@@ -377,9 +382,13 @@ export class Level1World implements GameWorld {
       this.minion.setRotationY(opts.spawnYaw);
     }
 
-    // 默认落在阵前方一点，避免 activate 时仍站在阵心
-    const raw = opts.spawn ?? this.teleportPad.getLandingXZ(opts.spawnYaw);
-    const spawn = clampLevel1Position(raw.x, raw.z);
+    // 默认落在 3×3 方围开口内侧，避免站上阵心或卡进南墙
+    const raw =
+      opts.spawn ??
+      (opts.spawnYaw !== undefined
+        ? this.teleportPad.getLandingXZ(opts.spawnYaw)
+        : { x: LEVEL1_LANDING_X, z: LEVEL1_LANDING_Z });
+    const spawn = clampLevel1Spawn(raw.x, raw.z);
 
     if (opts.playLandingWarp && this.onRequestLandingWarp) {
       this.onRequestLandingWarp(

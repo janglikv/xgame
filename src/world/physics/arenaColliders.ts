@@ -22,7 +22,7 @@ export interface ArenaColliderOptions {
   centerWallSize?: number;
   /** 是否生成右下角 L 型围墙物理碰撞 */
   addLWall?: boolean;
-  /** 是否生成传送阵前方掩护墙物理碰撞 */
+  /** 是否生成传送阵朝场地内侧开口方围的物理碰撞 */
   addPadCoverWall?: boolean;
 }
 
@@ -85,6 +85,7 @@ export function createCollidersFromExtrudePath(
       scene,
     );
 
+    collider.parent = parent;
     collider.position = new Vector3(finalCenter.x, wallY, finalCenter.z);
 
     // 自动计算三维旋转朝向（旋转 Y 轴对齐线段 dir 向量）
@@ -94,7 +95,7 @@ export function createCollidersFromExtrudePath(
     collider.isVisible = false;
     collider.isPickable = true;
     collider.metadata = { isColliderMesh: true };
-    collider.parent = parent;
+    collider.computeWorldMatrix(true);
 
     new PhysicsAggregate(
       collider,
@@ -123,7 +124,8 @@ export function buildArenaColliders(
 
   const outerThickness = Floor.WALL_THICKNESS; // 1.0m
   const innerThickness = 0.8;                  // 0.8m
-  const h = options.wallHeight ?? Floor.WALL_HEIGHT;
+  // 视觉墙高 0.5m；物理加高，避免胶囊卡墙后被顶到墙头再迈过去
+  const h = options.wallHeight ?? 1.2;
   const floorThick = Floor.FLOOR_THICKNESS;
   const sizeX = halfX * 2;
   const sizeZ = halfZ * 2;
@@ -212,7 +214,7 @@ export function buildArenaColliders(
   if (options.addPadCoverWall) {
     createCollidersFromExtrudePath(
       'PhysWall_SpawnCover',
-      [new Vector3(5, 0, -2.5), new Vector3(5, 0, 2.5)],
+      Floor.SPAWN_COVER_PATH.map((p) => p.clone()),
       innerThickness,
       h,
       false,

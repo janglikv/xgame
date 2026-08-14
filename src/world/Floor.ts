@@ -130,7 +130,7 @@ export interface FloorOptions {
    */
   addLWall?: boolean;
   /**
-   * 是否在 +X 传送阵前方（朝向场地内侧）加一道掩护墙，挡住出生点正面。
+   * 是否用朝屏幕下方（+X，固定镜头所在一侧）开口的方围把传送阵围起来。
    */
   addPadCoverWall?: boolean;
 }
@@ -151,6 +151,15 @@ export class Floor {
   static readonly GROUND_SIZE = 4000;
   static readonly FLOOR_THICKNESS = 0.05;
   static readonly GROUND_Y = -0.08;
+  /**
+   * 传送阵方围：3×3，西墙与右侧 L 内沿对齐（x=5），+X 边开口至 x=8。
+   */
+  static readonly SPAWN_COVER_PATH = [
+    new Vector3(8, 0, 1.5),
+    new Vector3(5, 0, 1.5),
+    new Vector3(5, 0, -1.5),
+    new Vector3(8, 0, -1.5),
+  ];
 
   readonly root: TransformNode;
   readonly scene: Scene;
@@ -282,12 +291,12 @@ export class Floor {
       }
     }
 
-    // 传送阵前方掩护墙：与右侧 L 墙内沿对齐（x=5），两侧留口可绕行
+    // 传送阵方围：三面墙、+X（屏幕下）开口
     if (options.addPadCoverWall) {
       const padCover = createTrapezoidExtrudedWall(
         'RenderWall_SpawnCover',
         {
-          path: [new Vector3(5, 0, -2.5), new Vector3(5, 0, 2.5)],
+          path: Floor.SPAWN_COVER_PATH,
           bottomWidth: 0.8,
           topWidth: 0.4,
           height: h,

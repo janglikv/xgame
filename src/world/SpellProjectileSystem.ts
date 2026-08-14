@@ -31,8 +31,6 @@ interface Bullet {
   lastPos: Vector3;
   direction: Vector3;
   speed: number;
-  age: number;
-  maxAge: number;
   shooter?: Minion;
   style: StaffStyle;
 }
@@ -119,8 +117,6 @@ export class SpellProjectileSystem {
       lastPos: finalSpawnPos.clone(),
       direction: dir,
       speed,
-      age: 0,
-      maxAge: 2.8,
       shooter,
       style,
     });
@@ -129,7 +125,6 @@ export class SpellProjectileSystem {
   update(dt: number, targetMinions?: Minion[]): void {
     for (let i = this.bullets.length - 1; i >= 0; i--) {
       const b = this.bullets[i]!;
-      b.age += dt;
 
       const moveStep = b.direction.scale(b.speed * dt);
       const nextPos = b.position.add(moveStep);
@@ -193,11 +188,6 @@ export class SpellProjectileSystem {
       b.lastPos.copyFrom(b.position);
       b.position.copyFrom(nextPos);
       b.mesh.position.copyFrom(b.position);
-
-      if (b.age >= b.maxAge) {
-        b.mesh.dispose();
-        this.bullets.splice(i, 1);
-      }
     }
   }
 
@@ -249,6 +239,13 @@ export class SpellProjectileSystem {
 
     for (const target of candidates) {
       if (!target || target === shooter || target.isDead()) continue;
+      if (
+        shooter?.combatTeam &&
+        target.combatTeam &&
+        shooter.combatTeam === target.combatTeam
+      ) {
+        continue;
+      }
       if (target.root && !target.root.isEnabled()) continue;
 
       const pos = target.root.position;

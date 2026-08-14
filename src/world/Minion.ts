@@ -107,6 +107,11 @@ export interface MinionOptions {
   blinkIdle?: boolean;
   /** 是否播放微弱呼吸（默认 true） */
   breathIdle?: boolean;
+  /**
+   * 战斗阵营。同阵营子弹互不造成伤害（穿过）。
+   * 未设则不参与友伤过滤。
+   */
+  combatTeam?: string;
 }
 
 /** 从创建选项解析完整外观 */
@@ -205,6 +210,9 @@ export class Minion {
   /** 绑定的物理代理 */
   public physicsProxy?: MinionPhysicsProxy;
 
+  /** 战斗阵营，同阵营子弹互不造成伤害 */
+  readonly combatTeam?: string;
+
   /** 当前完整外观 */
   private appearance: MinionAppearance;
   /**
@@ -270,6 +278,7 @@ export class Minion {
 
     this.scene = scene;
     this.shadowGen = shadowGen;
+    this.combatTeam = options.combatTeam;
     this.appearance = { ...appearance };
     this.partialSlots = options.partialSlots ? [...options.partialSlots] : null;
     this.blinkEnabled = options.blinkIdle ?? true;
