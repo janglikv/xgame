@@ -130,7 +130,6 @@ export class Level1World implements GameWorld {
       extend: LEVEL1_FLOOR_EXTEND,
       centerWallSize: 3,
       addLWall: true,
-      addPadCoverWall: true,
     });
     buildArenaColliders(scene, {
       includeFloor: true,
@@ -138,7 +137,6 @@ export class Level1World implements GameWorld {
       halfZ: half,
       centerWallSize: 3,
       addLWall: true,
-      addPadCoverWall: true,
     });
     const spatialAxesGrid = new SpatialAxesGrid(scene, {
       extentX: half,
@@ -157,7 +155,7 @@ export class Level1World implements GameWorld {
 
     const appearance = options.appearance;
     const minion = new Minion(scene, spawn.x, spawn.z, {
-      facePositiveX: true,
+      facePositiveX: false,
       shadowGenerator: shadowGen,
       face: appearance.face,
       mosaicFace: appearance.mosaicFace,
@@ -184,18 +182,22 @@ export class Level1World implements GameWorld {
     minionPhys.teleportToTarget();
 
     const spellSystem = new SpellProjectileSystem(scene);
-    const topGroupState = { isGroupAggroLocked: false };
-    const bottomGroupState = { isGroupAggroLocked: false };
+    const leftGroupState = { isGroupAggroLocked: false };
+    const rightGroupState = { isGroupAggroLocked: false };
 
+    // 敌军分布在地图左右两侧，沿 Z 轴纵向踱步巡逻 (X 保持不变)
     const enemyConfigs = [
-      { spawnX: -2.4, spawnZ: 7.0, groupState: topGroupState, rotY: Math.PI },
-      { spawnX: -0.8, spawnZ: 7.0, groupState: topGroupState, rotY: Math.PI },
-      { spawnX: 0.8, spawnZ: 7.0, groupState: topGroupState, rotY: Math.PI },
-      { spawnX: 2.4, spawnZ: 7.0, groupState: topGroupState, rotY: Math.PI },
-      { spawnX: -2.4, spawnZ: -7.0, groupState: bottomGroupState, rotY: 0 },
-      { spawnX: -0.8, spawnZ: -7.0, groupState: bottomGroupState, rotY: 0 },
-      { spawnX: 0.8, spawnZ: -7.0, groupState: bottomGroupState, rotY: 0 },
-      { spawnX: 2.4, spawnZ: -7.0, groupState: bottomGroupState, rotY: 0 },
+      // 左侧组 (Left Side)
+      { spawnX: -6.0, spawnZ: 3.5, groupState: leftGroupState, rotY: 0 },
+      { spawnX: -6.0, spawnZ: -1.5, groupState: leftGroupState, rotY: 0 },
+      { spawnX: -4.0, spawnZ: 4.5, groupState: leftGroupState, rotY: 0 },
+      { spawnX: -4.0, spawnZ: -0.5, groupState: leftGroupState, rotY: 0 },
+
+      // 右侧组 (Right Side)
+      { spawnX: 6.0, spawnZ: 3.5, groupState: rightGroupState, rotY: 0 },
+      { spawnX: 6.0, spawnZ: -1.5, groupState: rightGroupState, rotY: 0 },
+      { spawnX: 4.0, spawnZ: 4.5, groupState: rightGroupState, rotY: 0 },
+      { spawnX: 4.0, spawnZ: -0.5, groupState: rightGroupState, rotY: 0 },
     ];
 
     const enemies: Level1Enemy[] = enemyConfigs.map((cfg) => {
@@ -222,9 +224,9 @@ export class Level1World implements GameWorld {
       const eAI = new EnemyAI(eMinion, ePhys, spellSystem, {
         spawnX: cfg.spawnX,
         spawnZ: cfg.spawnZ,
-        patrolRadius: 1.0,
+        patrolRadius: 2.0,
         moveSpeed: 1.2,
-        patrolAxis: 'x',
+        patrolAxis: 'z',
         initialAttackRange: 4.0,
         retainedAttackRange: 5.0,
         forcedPatrolDuration: 0.5,
@@ -378,16 +380,13 @@ export class Level1World implements GameWorld {
     }
     this.setGridVisible(opts.showGrid);
 
-    if (opts.spawnYaw !== undefined) {
-      this.minion.setRotationY(opts.spawnYaw);
-    }
+    const spawnYaw = opts.spawnYaw ?? Math.PI;
+    this.minion.setRotationY(spawnYaw);
 
-    // 默认落在 3×3 方围开口内侧，避免站上阵心或卡进南墙
+    // 默认落在 3×3 方围开口内侧，避免站上阵心或卡进墙
     const raw =
       opts.spawn ??
-      (opts.spawnYaw !== undefined
-        ? this.teleportPad.getLandingXZ(opts.spawnYaw)
-        : { x: LEVEL1_LANDING_X, z: LEVEL1_LANDING_Z });
+      this.teleportPad.getLandingXZ(spawnYaw);
     const spawn = clampLevel1Spawn(raw.x, raw.z);
 
     if (opts.playLandingWarp && this.onRequestLandingWarp) {

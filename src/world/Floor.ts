@@ -152,13 +152,13 @@ export class Floor {
   static readonly FLOOR_THICKNESS = 0.05;
   static readonly GROUND_Y = -0.08;
   /**
-   * 传送阵方围：3×3，西墙与右侧 L 内沿对齐（x=5），+X 边开口至 x=8。
+   * 传送阵方围：3×3，围绕 (0, -7)，在 +Z 北侧（z=-5.5）开出口。
    */
   static readonly SPAWN_COVER_PATH = [
-    new Vector3(8, 0, 1.5),
-    new Vector3(5, 0, 1.5),
-    new Vector3(5, 0, -1.5),
-    new Vector3(8, 0, -1.5),
+    new Vector3(-1.5, 0, -5.5),
+    new Vector3(-1.5, 0, -8.5),
+    new Vector3(1.5, 0, -8.5),
+    new Vector3(1.5, 0, -5.5),
   ];
 
   readonly root: TransformNode;

@@ -15,16 +15,16 @@ import {
  */
 export class TeleportPad {
   /** 默认放置 X */
-  static readonly DEFAULT_X = 15;
-  static readonly DEFAULT_Z = 0;
+  static readonly DEFAULT_X = 0;
+  static readonly DEFAULT_Z = -7;
   /**
    * 传送落地相对阵心偏移距离（米）。
    * 必须大于 RADIUS(0.725)，落在阵外避免一落地又站上触发。
    */
   static readonly LANDING_DISTANCE = 1.6;
-  /** 默认备用固定偏移（未提供 yaw 时使用，面向 -Z 方向） */
+  /** 默认备用固定偏移（未提供 yaw 时使用，面向 +Z 竞技场中心方向） */
   static readonly LANDING_OFFSET_X = 0;
-  static readonly LANDING_OFFSET_Z = -1.6;
+  static readonly LANDING_OFFSET_Z = 1.6;
 
   /**
    * 传送成功后的落地点。

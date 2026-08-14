@@ -65,7 +65,7 @@ export class WorldRouter {
 
   /** 各世界上次离开时的站位（存档同步） */
   private readonly spawns: Record<WorldId, { x: number; z: number }> = {
-    hub: { x: 1, z: 0 },
+    hub: { x: 0, z: -5.4 },
     level1: { x: LEVEL1_LANDING_X, z: LEVEL1_LANDING_Z },
   };
 

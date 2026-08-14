@@ -8,23 +8,22 @@ export const LEVEL1_FLOOR_EXTEND = 10;
  * 回程传送阵位置（须在 20×20 地图内）。
  * 距 +X 边约 3m，与枢纽「边侧放置」风格一致。
  */
-export const LEVEL1_PAD_X = 7;
-export const LEVEL1_PAD_Z = 0;
+export const LEVEL1_PAD_X = 0;
+export const LEVEL1_PAD_Z = -7;
 
 /**
- * 进关/回关落地点：3×3 方围内、阵西侧（阵外、不贴墙）。
- * 开口在 x=8，旧的 +X 1.2 / −Z 1.6 都会卡进墙体。
+ * 进关/回关落地点：3×3 方围内、阵北侧开口（阵外、不贴墙）。
  */
-export const LEVEL1_LANDING_OFFSET_X = -0.85;
-export const LEVEL1_LANDING_OFFSET_Z = 0;
+export const LEVEL1_LANDING_OFFSET_X = 0;
+export const LEVEL1_LANDING_OFFSET_Z = 1.6;
 export const LEVEL1_LANDING_X = LEVEL1_PAD_X + LEVEL1_LANDING_OFFSET_X;
 export const LEVEL1_LANDING_Z = LEVEL1_PAD_Z + LEVEL1_LANDING_OFFSET_Z;
 
-/** 传送阵方围中心线（与 Floor.SPAWN_COVER_PATH 一致） */
-const COVER_X0 = 5;
-const COVER_X1 = 8;
-const COVER_Z0 = -1.5;
-const COVER_Z1 = 1.5;
+/** 传送阵方围中心线（与 Floor.SPAWN_COVER_PATH 一致，围绕 x=0, z=-7） */
+const COVER_X0 = -1.5;
+const COVER_X1 = 1.5;
+const COVER_Z0 = -8.5;
+const COVER_Z1 = -5.5;
 const COVER_HALF_T = 0.4;
 
 /** 将坐标钳到第一关可站立区域（留半米边距） */
@@ -40,31 +39,12 @@ export function clampLevel1Position(
   };
 }
 
-/** 出生点再避开方围墙体，防止卡墙被物理顶飞穿墙 */
+/** 确保出生点在地图有效范围内 */
 export function clampLevel1Spawn(
   x: number,
   z: number,
 ): { x: number; z: number } {
-  const c = clampLevel1Position(x, z);
-  const inNorth =
-    c.x >= COVER_X0 - COVER_HALF_T &&
-    c.x <= COVER_X1 + COVER_HALF_T &&
-    c.z >= COVER_Z1 - COVER_HALF_T &&
-    c.z <= COVER_Z1 + COVER_HALF_T;
-  const inSouth =
-    c.x >= COVER_X0 - COVER_HALF_T &&
-    c.x <= COVER_X1 + COVER_HALF_T &&
-    c.z >= COVER_Z0 - COVER_HALF_T &&
-    c.z <= COVER_Z0 + COVER_HALF_T;
-  const inWest =
-    c.x >= COVER_X0 - COVER_HALF_T &&
-    c.x <= COVER_X0 + COVER_HALF_T &&
-    c.z >= COVER_Z0 - COVER_HALF_T &&
-    c.z <= COVER_Z1 + COVER_HALF_T;
-  if (inNorth || inSouth || inWest) {
-    return { x: LEVEL1_LANDING_X, z: LEVEL1_LANDING_Z };
-  }
-  return c;
+  return clampLevel1Position(x, z);
 }
 
 /** @deprecated 使用 LEVEL1_*；保留别名以免外部漏改 */

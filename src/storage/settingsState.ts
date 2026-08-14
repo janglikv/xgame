@@ -1,5 +1,5 @@
 /** localStorage 键；改字段结构时递增版本 */
-const STORAGE_KEY = 'luolu.settings.v2';
+const STORAGE_KEY = 'luolu.settings.v3';
 
 /** 镜头模式：自由轨道（调试）/ 略倾俯视固定 */
 export type CameraMode = 'free' | 'fixed';
@@ -19,25 +19,20 @@ export interface SettingsStateSnapshot {
 export const FREE_CAMERA_FOV = 0.8;
 
 /**
- * 固定镜头：角色始终居中；略倾俯视 + 窄 FOV 弱透视（接近 MOBA 观感）。
- * - beta：与 Y 轴夹角，0=正上方，π/2=水平。约 0.75≈43°，可读侧身。
- * - alpha：屏幕「上」对应的水平方位（WASD 相对此方向）
- * - fov：收窄压近大远小；radius 按「约保持角色屏幕大小」相对默认 0.8FOV/r12 拉远
- *   （R_new ≈ 12 * 0.8 / fov）
- * 注视点由跟随逻辑写角色中心，不在此锁定。
+ * 固定镜头：参照用户提供的参考图参数进行设定。
+ * - alpha：方位角约 269.0° (4.695 rad)
+ * - beta：俯角/仰角约 32.5° (0.568 rad)
+ * - radius：距离约 12.39
  */
 export const FIXED_CAMERA = {
-  /** 方位回正：屏幕「上」对齐世界 +Z 前方（WASD 相对此方向） */
-  alpha: 0,
-  /** 略倾俯视（可调：0.55 更俯 / 0.95 更侧） */
-  beta: 0.75,
-  /**
-   * 窄垂直 FOV（约 28.6°）：长焦压缩透视。
-   * 更扁可试 0.42；仍偏透视可试 0.55。
-   */
-  fov: 0.5,
-  /** 与窄 FOV 配对的跟拍距离（角色体量接近旧 r=12 @ fov0.8） */
-  radius: 19.2,
+  /** 方位角 α：269.0° (4.695 rad) */
+  alpha: 4.695,
+  /** 仰/俯角 β：32.5° (0.568 rad) */
+  beta: 0.568,
+  /** 垂直 FOV */
+  fov: 0.6,
+  /** 跟拍距离：12.39 */
+  radius: 12.39,
 } as const;
 
 const DEFAULTS: SettingsStateSnapshot = {

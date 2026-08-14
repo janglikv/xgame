@@ -202,6 +202,13 @@ export class EnemyAI {
       this.patrolDir = 1;
     }
 
+    // 保持设定的固定轴坐标不变（纵向行走时锁死 X 坐标，横向行走时锁死 Z 坐标）
+    if (this.patrolAxis === 'z') {
+      ePos.x = this.spawnX;
+    } else {
+      ePos.z = this.spawnZ;
+    }
+
     const moveSpeedVal = this.patrolDir * this.moveSpeed;
     const vx = this.patrolAxis === 'x' ? moveSpeedVal : 0;
     const vz = this.patrolAxis === 'z' ? moveSpeedVal : 0;

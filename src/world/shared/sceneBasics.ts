@@ -101,9 +101,9 @@ export function createFollowCamera(
   opts: FollowCameraOptions,
 ): ArcRotateCamera {
   const free = opts.free ?? {
-    alpha: -Math.PI / 4,
-    beta: Math.PI / 3,
-    radius: 17,
+    alpha: 4.695,
+    beta: 0.568,
+    radius: 12.39,
   };
   const alpha = opts.mode === 'fixed' ? FIXED_CAMERA.alpha : free.alpha;
   const beta = opts.mode === 'fixed' ? FIXED_CAMERA.beta : free.beta;

@@ -115,17 +115,18 @@ export const DEMO_ROWS: readonly DemoRow[] = [
 ] as const;
 
 export interface DemoLineupConfig {
-  /** 第一排的 X（沿 +X 逐排展开） */
-  x0?: number;
-  /** 排与排之间的 X 间距（固定） */
+  /** 第一排的 Z（沿 +Z 逐排展开） */
+  z0?: number;
+  /** 排与排之间的 Z 间距 */
   rowGap?: number;
-  /**
-   * 每排右端对齐的 Z（该排最后一个角色的 Z）。
-   * 同排内第 i 个（共 n 个）：z = zEnd - (n - 1 - i) * colGap
-   */
-  zEnd?: number;
-  /** 同排内相邻角色固定间距 */
+  /** 同排内相邻角色 X 间距 */
   colGap?: number;
+  /** 第一排的 X（仅非横排模式有效） */
+  x0?: number;
+  /** 每排右端对齐的 Z（仅非横排模式有效） */
+  zEnd?: number;
+  /** 是否为横排展示（每排沿 X 水平展开，居中；排沿 Z 推进） */
+  horizontal?: boolean;
   facePositiveX?: boolean;
   /**
    * 是否为每个展示小兵挂物理胶囊（默认 true）。
@@ -146,7 +147,8 @@ export interface DemoLineup {
 }
 
 /**
- * 生成多排展示副本（每排同类），右对齐固定间距。
+ * 生成多排展示副本（每排同类）。
+ * 默认横向模式：每排沿 X 居中展开，沿 +Z 逐排陈列。
  * 每单位带 partialSlots，供悬停后 E 部分替换 / R 全量替换。
  */
 export function spawnMinionDemoLineup(
@@ -154,11 +156,14 @@ export function spawnMinionDemoLineup(
   shadowGenerator?: ShadowGenerator,
   config: DemoLineupConfig = {},
 ): DemoLineup {
+  const isHorizontal = config.horizontal ?? true;
+  const z0 = config.z0 ?? -2.0;
+  const rowGap = config.rowGap ?? 1.4;
+  const colGap = config.colGap ?? 1.2;
+
   const x0 = config.x0 ?? 1;
-  const rowGap = config.rowGap ?? 1.6;
   const zEnd = config.zEnd ?? 5;
-  const colGap = config.colGap ?? 1.1;
-  const facePositiveX = config.facePositiveX ?? true;
+  const facePositiveX = config.facePositiveX ?? false;
   const usePhysics = config.physics ?? true;
   const physicsRadius = config.physicsRadius ?? 0.16;
   const physicsHeight = config.physicsHeight ?? 0.55;
@@ -168,12 +173,21 @@ export function spawnMinionDemoLineup(
   const healthBars: HealthBar[] = [];
 
   DEMO_ROWS.forEach((row, rowIndex) => {
-    const x = x0 + rowIndex * rowGap;
     const n = row.presets.length;
     const partialSlots = CATEGORY_PARTIAL_SLOTS[row.category] ?? [];
     row.presets.forEach((preset, colIndex) => {
-      // 右对齐：每排最后一个落在 zEnd，向前按固定 colGap 排布
-      const z = zEnd - (n - 1 - colIndex) * colGap;
+      let x: number;
+      let z: number;
+      if (isHorizontal) {
+        // 横排模式：同排沿 X 轴居中平铺，沿 Z 轴逐排向前延伸
+        x = (colIndex - (n - 1) / 2) * colGap;
+        z = z0 + rowIndex * rowGap;
+      } else {
+        // 纵排模式：同排沿 Z 轴纵向排布，沿 X 轴逐排向右延伸
+        x = x0 + rowIndex * rowGap;
+        z = zEnd - (n - 1 - colIndex) * colGap;
+      }
+
       const minion = new Minion(scene, x, z, {
         facePositiveX,
         shadowGenerator,
@@ -182,6 +196,7 @@ export function spawnMinionDemoLineup(
         formation: preset.formation ?? null,
         partialSlots,
       });
+      minion.setRotationY(Math.PI);
       minions.push(minion);
 
       const scaleMul = preset.options.scaleMultiplier ?? 1;

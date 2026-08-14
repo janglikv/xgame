@@ -137,14 +137,9 @@ export class HubWorld implements GameWorld {
     const initialFloorSurface = loadFloorSurfaceState();
     const floor = new Floor(scene, shadowGen, {
       surface: initialFloorSurface,
-      centerWallSize: 3,
-      addLWall: true,
     });
     const floorPickerGallery = new FloorPickerGallery(scene, floor);
-    buildArenaColliders(scene, {
-      centerWallSize: 3,
-      addLWall: true,
-    });
+    buildArenaColliders(scene, {});
     const spatialAxesGrid = new SpatialAxesGrid(scene);
 
     const teleportPad = new TeleportPad(
@@ -157,11 +152,11 @@ export class HubWorld implements GameWorld {
     let spawnZ = options.spawnZ;
     if (Math.abs(spawnX) < 2.2 && Math.abs(spawnZ) < 2.2) {
       spawnX = 0;
-      spawnZ = -4;
+      spawnZ = -5.4;
     }
 
     const minion = new Minion(scene, spawnX, spawnZ, {
-      facePositiveX: true,
+      facePositiveX: false,
       shadowGenerator: shadowGen,
       allBlack: true,
       face: 'fierce',
@@ -194,10 +189,11 @@ export class HubWorld implements GameWorld {
     minionPhys.teleportToTarget();
 
     const demoLineup = spawnMinionDemoLineup(scene, shadowGen, {
-      x0: 1,
-      rowGap: 1.6,
-      zEnd: 5,
-      colGap: 1.1,
+      horizontal: true,
+      z0: -2.0,
+      rowGap: 1.4,
+      colGap: 1.2,
+      facePositiveX: false,
       physics: true,
     });
 
@@ -378,11 +374,10 @@ export class HubWorld implements GameWorld {
     }
     this.setGridVisible(opts.showGrid);
 
-    if (opts.spawnYaw !== undefined) {
-      this.minion.setRotationY(opts.spawnYaw);
-    }
+    const spawnYaw = opts.spawnYaw ?? Math.PI;
+    this.minion.setRotationY(spawnYaw);
 
-    const spawn = opts.spawn ?? this.teleportPad.getLandingXZ(opts.spawnYaw);
+    const spawn = opts.spawn ?? this.teleportPad.getLandingXZ(spawnYaw);
 
     if (opts.playLandingWarp && this.onRequestLandingWarp) {
       this.onRequestLandingWarp(
