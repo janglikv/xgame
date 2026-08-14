@@ -167,6 +167,16 @@ export class WorldRouter {
 
       from?.deactivate();
 
+      // 如果是从 level1 死亡重置回 hub (restorePosition === false)
+      if (fromId === 'level1' && target === 'hub' && opts.restorePosition === false) {
+        this.spawns.level1 = { x: LEVEL1_LANDING_X, z: LEVEL1_LANDING_Z };
+        const oldLevel1 = this.worlds.get('level1');
+        if (oldLevel1) {
+          this.worlds.delete('level1');
+          oldLevel1.dispose();
+        }
+      }
+
       const activateOpts: WorldActivateOptions = {
         canvas: this.ctx.canvas,
         cameraMode: this.ctx.getCameraMode(),

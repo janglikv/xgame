@@ -33,7 +33,13 @@ export function cast(mesh: Mesh, shadowGen?: ShadowGenerator): void {
 
 export function mat(scene: Scene, name: string, hex: number): StandardMaterial {
   const m = new StandardMaterial(name, scene);
-  m.diffuseColor = colorFromHex(hex);
+  const c = colorFromHex(hex);
+  m.diffuseColor = c;
+  m.ambientColor = new Color3(
+    Math.max(0.25, c.r * 0.6),
+    Math.max(0.25, c.g * 0.6),
+    Math.max(0.28, c.b * 0.6),
+  );
   m.specularColor = Color3.Black();
   return m;
 }

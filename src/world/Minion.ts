@@ -292,7 +292,7 @@ export class Minion {
     this.root = new TransformNode(`Minion_${x}_${z}`, scene);
     this.root.position = new Vector3(x, 0, z);
     this.root.scaling = new Vector3(scale, scale, scale);
-    this.root.rotation.y = facePositiveX ? Math.PI / 2 : -Math.PI / 2;
+    this.root.rotation.y = facePositiveX ? Math.PI / 2 : Math.PI;
     this.targetYaw = this.root.rotation.y;
 
     this.bodyRoot = new TransformNode('bodyRoot', scene);

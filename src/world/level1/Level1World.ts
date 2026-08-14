@@ -78,6 +78,7 @@ export class Level1World implements GameWorld {
 
   private readonly onRequestLandingWarp?: CreateLevel1WorldOptions['onRequestLandingWarp'];
   private wasMoving = false;
+  private pendingRespawnToHub = false;
   private onPlayerMoved: (() => void) | null = null;
   private onPlayerStopped: (() => void) | null = null;
 
@@ -185,19 +186,19 @@ export class Level1World implements GameWorld {
     const leftGroupState = { isGroupAggroLocked: false };
     const rightGroupState = { isGroupAggroLocked: false };
 
-    // 敌军分布在地图左右两侧，沿 Z 轴纵向踱步巡逻 (X 保持不变)
+    // 敌军分布在地图左右两侧，沿 Z 轴纵向踱步巡逻 (初始朝向 Math.PI 迎面面向玩家)
     const enemyConfigs = [
       // 左侧组 (Left Side)
-      { spawnX: -6.0, spawnZ: 3.5, groupState: leftGroupState, rotY: 0 },
-      { spawnX: -6.0, spawnZ: -1.5, groupState: leftGroupState, rotY: 0 },
-      { spawnX: -4.0, spawnZ: 4.5, groupState: leftGroupState, rotY: 0 },
-      { spawnX: -4.0, spawnZ: -0.5, groupState: leftGroupState, rotY: 0 },
+      { spawnX: -6.0, spawnZ: 3.5, groupState: leftGroupState, rotY: Math.PI },
+      { spawnX: -6.0, spawnZ: -1.5, groupState: leftGroupState, rotY: Math.PI },
+      { spawnX: -4.0, spawnZ: 4.5, groupState: leftGroupState, rotY: Math.PI },
+      { spawnX: -4.0, spawnZ: -0.5, groupState: leftGroupState, rotY: Math.PI },
 
       // 右侧组 (Right Side)
-      { spawnX: 6.0, spawnZ: 3.5, groupState: rightGroupState, rotY: 0 },
-      { spawnX: 6.0, spawnZ: -1.5, groupState: rightGroupState, rotY: 0 },
-      { spawnX: 4.0, spawnZ: 4.5, groupState: rightGroupState, rotY: 0 },
-      { spawnX: 4.0, spawnZ: -0.5, groupState: rightGroupState, rotY: 0 },
+      { spawnX: 6.0, spawnZ: 3.5, groupState: rightGroupState, rotY: Math.PI },
+      { spawnX: 6.0, spawnZ: -1.5, groupState: rightGroupState, rotY: Math.PI },
+      { spawnX: 4.0, spawnZ: 4.5, groupState: rightGroupState, rotY: Math.PI },
+      { spawnX: 4.0, spawnZ: -0.5, groupState: rightGroupState, rotY: Math.PI },
     ];
 
     const enemies: Level1Enemy[] = enemyConfigs.map((cfg) => {
@@ -205,13 +206,13 @@ export class Level1World implements GameWorld {
         facePositiveX: false,
         shadowGenerator: shadowGen,
         face: 'fierce',
-        bodyColor: 0x28262a,
+        bodyColor: 0x6e1b2b,
         hat: 'horns',
         staff: 'flame',
         formation: null,
         combatTeam: 'enemy',
       });
-      eMinion.root.rotation.y = cfg.rotY;
+      eMinion.setRotationY(cfg.rotY);
 
       const ePhys = new MinionPhysicsProxy(scene, eMinion.root, {
         mode: 'pushable',
@@ -263,7 +264,7 @@ export class Level1World implements GameWorld {
     );
 
     deathOverlay.onRespawnClick = () => {
-      level1World.respawnNearPad();
+      level1World.pendingRespawnToHub = true;
     };
 
     minion.onTakeDamage = (amount) => {
@@ -450,6 +451,11 @@ export class Level1World implements GameWorld {
       this.onPlayerStopped?.();
     }
     this.wasMoving = isMoving;
+
+    if (this.pendingRespawnToHub) {
+      this.pendingRespawnToHub = false;
+      return { type: 'goto', world: 'hub', restorePosition: false };
+    }
 
     if (!isDead) {
       const p = this.minion.root.position;

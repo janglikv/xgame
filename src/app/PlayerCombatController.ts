@@ -6,7 +6,7 @@ import type { CameraFollow } from './CameraFollow';
 
 /**
  * 玩家战斗控制器：
- * 1. 有法杖：瞄准 + 远程发射法术；
+ * 1. 有法杖：瞄准 + 当法杖方向与【角色中心点 -> 指针位置】逻辑线平行时，沿法杖前向发射子弹；
  * 2. 空手（无法杖）：按住/点击鼠标触发近战空手挥拳动画与拳头落点打击。
  */
 export class PlayerCombatController {
@@ -108,19 +108,31 @@ export class PlayerCombatController {
 
     const aimPoint = ray.origin.add(ray.direction.scale(t));
 
-    // 有法杖：走原有的远程法术瞄准与射击逻辑
+    // 有法杖：计算法杖方向与【角色中心点 -> 指针位置】逻辑线是否平行
     if (player.hasStaff()) {
       player.setAimTarget(aimPoint);
-      if (this.shootCooldown > 0 || !player.isStaffHorizontal()) return;
+
+      // 计算角色中心点到指针位置的向量与法杖朝向向量
+      const lineVec = aimPoint.subtract(player.root.position);
+      lineVec.y = 0;
+      let isParallel = false;
+      if (lineVec.lengthSquared() > 1e-6) {
+        const lineDir = lineVec.normalize();
+        const staffDir = player.getStaffForwardVector();
+        const dot = Vector3.Dot(staffDir, lineDir);
+        // 点积 >= 0.992 （夹角约 <= 7.2°），判定为法杖朝向与【中心->指针】逻辑线平行
+        isParallel = dot >= 0.992;
+      }
+
+      // 法杖方向必须与逻辑线平行，且法杖举平，且冷却完毕方可发射
+      if (this.shootCooldown > 0 || !player.isStaffHorizontal() || !isParallel) {
+        return;
+      }
 
       this.shootCooldown = this.shootInterval;
       const tipPos = player.getStaffTipWorldPos();
-      const aimVec = aimPoint.subtract(tipPos);
-      aimVec.y = 0;
-      const shootDir =
-        aimVec.lengthSquared() > 1e-6
-          ? aimVec.normalize()
-          : player.getStaffForwardVector();
+      // 子弹方向沿用法杖前向向量向前发射
+      const shootDir = player.getStaffForwardVector();
 
       const style = player.getStaffStyle() ?? 'arcane';
       spellSystem.spawnOrb(tipPos, shootDir, style, player);
@@ -215,4 +227,6 @@ export class PlayerCombatController {
     }
   }
 }
+
+
 

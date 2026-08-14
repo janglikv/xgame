@@ -10,6 +10,14 @@ export type FaceStyle = 'cute' | 'fierce' | 'dumb' | 'sad' | 'blank';
 const faceTextureCache = new Map<string, DynamicTexture>();
 const FACE_TEX_VERSION = 21;
 
+function isTextureDisposed(tex: DynamicTexture): boolean {
+  if (!tex) return true;
+  const d = (tex as unknown as { isDisposed?: boolean | (() => boolean) }).isDisposed;
+  if (typeof d === 'function') return d();
+  if (typeof d === 'boolean') return d;
+  return !tex.getScene();
+}
+
 export function getFaceTexture(
   scene: Scene,
   bodyColor: number,
@@ -18,12 +26,15 @@ export function getFaceTexture(
   /** 闭眼帧（眨眼待机） */
   eyesClosed = false,
 ): DynamicTexture {
-  const key = `${bodyColor.toString(16)}_${style}_m${mosaic ? 1 : 0}_c${eyesClosed ? 1 : 0}`;
+  const sceneId = (scene as Scene & { uid?: string }).uid ?? 'sc';
+  const key = `${sceneId}_${bodyColor.toString(16)}_${style}_m${mosaic ? 1 : 0}_c${eyesClosed ? 1 : 0}`;
   const cached = faceTextureCache.get(key);
-  if (cached) {
+  if (cached && !isTextureDisposed(cached) && cached.getScene() === scene) {
     const v = (cached as DynamicTexture & { _faceVer?: number })._faceVer;
     if (v === FACE_TEX_VERSION) return cached;
     cached.dispose();
+    faceTextureCache.delete(key);
+  } else if (cached) {
     faceTextureCache.delete(key);
   }
   let tex: DynamicTexture;
@@ -446,48 +457,49 @@ function createFierceFaceTexture(
       // 外轮廓（略扁圆、带锐角感）
       ctx.beginPath();
       ctx.ellipse(ex, eyeY, eyeRx, eyeRy, side * 0.08, 0, Math.PI * 2);
-      ctx.fillStyle = '#0f0a0b';
+      ctx.fillStyle = '#1a0508';
       ctx.fill();
 
-      // 眼白偏少，深色虹膜大
+      // 鲜明威严的凶悍赤红虹膜，不再漆黑死寂
       const scleraG = ctx.createRadialGradient(
         ex,
         eyeY,
-        eyeRx * 0.2,
+        eyeRx * 0.15,
         ex,
         eyeY,
         eyeRx,
       );
-      scleraG.addColorStop(0, '#3a2228');
-      scleraG.addColorStop(0.55, '#1a1014');
-      scleraG.addColorStop(1, '#0a0607');
+      scleraG.addColorStop(0, '#ff4433');
+      scleraG.addColorStop(0.45, '#cc1122');
+      scleraG.addColorStop(0.85, '#550812');
+      scleraG.addColorStop(1, '#1a0508');
       ctx.fillStyle = scleraG;
       ctx.beginPath();
       ctx.ellipse(ex, eyeY, eyeRx * 0.97, eyeRy * 0.97, side * 0.08, 0, Math.PI * 2);
       ctx.fill();
 
-      // 巨大瞳孔
-      ctx.fillStyle = '#050304';
+      // 凶猛竖瞳/深黑瞳孔
+      ctx.fillStyle = '#080203';
       ctx.beginPath();
       ctx.ellipse(
         ex + side * eyeRx * 0.04,
-        eyeY + eyeRy * 0.06,
-        eyeRx * 0.62,
-        eyeRy * 0.7,
+        eyeY + eyeRy * 0.04,
+        eyeRx * 0.48,
+        eyeRy * 0.72,
         0,
         0,
         Math.PI * 2,
       );
       ctx.fill();
 
-      // 锐利高光（小而凶）
-      ctx.fillStyle = 'rgba(255,255,255,0.92)';
+      // 锐利白亮高光（醒目）
+      ctx.fillStyle = '#ffffff';
       ctx.beginPath();
       ctx.ellipse(
         ex - side * eyeRx * 0.22,
         eyeY - eyeRy * 0.28,
-        eyeRx * 0.18,
-        eyeRy * 0.22,
+        eyeRx * 0.22,
+        eyeRy * 0.26,
         -Math.PI / 5,
         0,
         Math.PI * 2,
@@ -497,8 +509,8 @@ function createFierceFaceTexture(
       ctx.ellipse(
         ex + side * eyeRx * 0.28,
         eyeY + eyeRy * 0.22,
-        eyeRx * 0.08,
-        eyeRy * 0.09,
+        eyeRx * 0.1,
+        eyeRy * 0.11,
         0,
         0,
         Math.PI * 2,
@@ -506,7 +518,7 @@ function createFierceFaceTexture(
       ctx.fill();
 
       // 上眼睑厚阴影（压低视线）
-      ctx.fillStyle = 'rgba(10,6,8,0.55)';
+      ctx.fillStyle = 'rgba(20,5,8,0.65)';
       ctx.beginPath();
       ctx.ellipse(
         ex,
