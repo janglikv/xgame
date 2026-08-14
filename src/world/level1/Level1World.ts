@@ -129,6 +129,7 @@ export class Level1World implements GameWorld {
       extend: LEVEL1_FLOOR_EXTEND,
       centerWallSize: 3,
       addLWall: true,
+      addPadCoverWall: true,
     });
     buildArenaColliders(scene, {
       includeFloor: true,
@@ -136,6 +137,7 @@ export class Level1World implements GameWorld {
       halfZ: half,
       centerWallSize: 3,
       addLWall: true,
+      addPadCoverWall: true,
     });
     const spatialAxesGrid = new SpatialAxesGrid(scene, {
       extentX: half,

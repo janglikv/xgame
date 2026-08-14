@@ -22,6 +22,8 @@ export interface ArenaColliderOptions {
   centerWallSize?: number;
   /** 是否生成右下角 L 型围墙物理碰撞 */
   addLWall?: boolean;
+  /** 是否生成传送阵前方掩护墙物理碰撞 */
+  addPadCoverWall?: boolean;
 }
 
 /**
@@ -205,6 +207,18 @@ export function buildArenaColliders(
         root,
       );
     }
+  }
+
+  if (options.addPadCoverWall) {
+    createCollidersFromExtrudePath(
+      'PhysWall_SpawnCover',
+      [new Vector3(5, 0, -2.5), new Vector3(5, 0, 2.5)],
+      innerThickness,
+      h,
+      false,
+      scene,
+      root,
+    );
   }
 
   return root;

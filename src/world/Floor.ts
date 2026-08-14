@@ -129,6 +129,10 @@ export interface FloorOptions {
    * 是否在右下角 (5, -5) 生成 L 型梯形围墙。
    */
   addLWall?: boolean;
+  /**
+   * 是否在 +X 传送阵前方（朝向场地内侧）加一道掩护墙，挡住出生点正面。
+   */
+  addPadCoverWall?: boolean;
 }
 
 const OFFICIAL_TEX_BASE =
@@ -276,6 +280,25 @@ export class Floor {
         shadowGenerator?.addShadowCaster(lWall);
         this.wallMeshes.push(lWall);
       }
+    }
+
+    // 传送阵前方掩护墙：与右侧 L 墙内沿对齐（x=5），两侧留口可绕行
+    if (options.addPadCoverWall) {
+      const padCover = createTrapezoidExtrudedWall(
+        'RenderWall_SpawnCover',
+        {
+          path: [new Vector3(5, 0, -2.5), new Vector3(5, 0, 2.5)],
+          bottomWidth: 0.8,
+          topWidth: 0.4,
+          height: h,
+          close: false,
+        },
+        scene,
+      );
+      padCover.receiveShadows = true;
+      padCover.parent = this.root;
+      shadowGenerator?.addShadowCaster(padCover);
+      this.wallMeshes.push(padCover);
     }
 
     // 初始化应用当前 Surface
