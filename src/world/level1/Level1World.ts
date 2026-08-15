@@ -1,4 +1,5 @@
 import { Vector3, type ArcRotateCamera, type Engine, type Scene } from '@babylonjs/core';
+import { playSfx } from '../../audio/Sfx';
 import type { CameraMode } from '../../storage/settingsState';
 import type {
   GameWorld,
@@ -10,7 +11,8 @@ import { EnemyAI } from '../EnemyAI';
 import { Floor } from '../Floor';
 import { HealthBar } from '../HealthBar';
 import { HealthPackSystem } from '../HealthPackSystem';
-import { Minion, type MinionAppearance } from '../Minion';
+import { Minion, type MinionAppearance, type StaffStyle } from '../Minion';
+import type { FormationStyle } from '../FootRingBuff';
 import {
   buildArenaColliders,
   initPhysics,
@@ -32,6 +34,10 @@ import {
   LEVEL1_LANDING_X,
   LEVEL1_LANDING_Z,
   LEVEL1_MAP_HALF,
+  LEVEL1_X_MAX,
+  LEVEL1_X_MIN,
+  LEVEL1_Z_MAX,
+  LEVEL1_Z_MIN,
   LEVEL1_PAD_X,
   LEVEL1_PAD_Z,
   clampLevel1Position,
@@ -60,7 +66,7 @@ export interface CreateLevel1WorldOptions {
 }
 
 /**
- * 第一关：20×20 场地 + 双小队敌军 + 回程传送阵。
+ * 第一关：20×20 场地，+Z 再扩 10m Boss 区 + 双小队敌军 + 回程传送阵。
  * 实现 GameWorld，由 GameApp 统一驱动。
  */
 export class Level1World implements GameWorld {
@@ -126,7 +132,8 @@ export class Level1World implements GameWorld {
     await initPhysics(scene);
 
     const half = LEVEL1_MAP_HALF;
-    const shadowHalf = half + LEVEL1_FLOOR_EXTEND + 4;
+    const shadowHalf =
+      Math.max(LEVEL1_X_MAX, LEVEL1_Z_MAX) + LEVEL1_FLOOR_EXTEND + 4;
     const { shadowGen } = addStandardLighting(scene, {
       half: shadowHalf,
       mapSize: 1024,
@@ -136,6 +143,10 @@ export class Level1World implements GameWorld {
       surface: 'cyberGrid',
       halfX: half,
       halfZ: half,
+      minX: LEVEL1_X_MIN,
+      maxX: LEVEL1_X_MAX,
+      minZ: LEVEL1_Z_MIN,
+      maxZ: LEVEL1_Z_MAX,
       extend: LEVEL1_FLOOR_EXTEND,
       centerWallSize: 3,
       addLWall: true,
@@ -144,12 +155,16 @@ export class Level1World implements GameWorld {
       includeFloor: true,
       halfX: half,
       halfZ: half,
+      minX: LEVEL1_X_MIN,
+      maxX: LEVEL1_X_MAX,
+      minZ: LEVEL1_Z_MIN,
+      maxZ: LEVEL1_Z_MAX,
       centerWallSize: 3,
       addLWall: true,
     });
     const spatialAxesGrid = new SpatialAxesGrid(scene, {
       extentX: half,
-      extentZ: half,
+      extentZ: LEVEL1_Z_MAX,
     });
 
     const teleportPad = new TeleportPad(scene, LEVEL1_PAD_X, LEVEL1_PAD_Z);
@@ -189,22 +204,77 @@ export class Level1World implements GameWorld {
     minionPhys.teleportToTarget();
 
     const spellSystem = new SpellProjectileSystem(scene);
+    spellSystem.setBounds({
+      minX: LEVEL1_X_MIN,
+      maxX: LEVEL1_X_MAX,
+      minZ: LEVEL1_Z_MIN,
+      maxZ: LEVEL1_Z_MAX,
+    });
     const wizardGroupState = { isGroupAggroLocked: false };
 
     // 敌军分布：2 名远程法术敌军 (共享组仇恨)，4 名近战肉搏敌军 (仇恨独立，不共享)
-    const enemyConfigs = [
+    const enemyConfigs: {
+      spawnX: number;
+      spawnZ: number;
+      groupState?: { isGroupAggroLocked: boolean };
+      rotY: number;
+      staff: StaffStyle | null;
+      scale?: number;
+      formation?: FormationStyle | null;
+      maxHp?: number;
+      patrolRadius?: number;
+      patrolAxis?: 'x' | 'z';
+      attackRange?: number;
+      burstCount?: number;
+    }[] = [
       // 1. 远程法术敌军 (共 2 名，左右各 1 名)
-      { spawnX: -5.5, spawnZ: 3.0, groupState: wizardGroupState, rotY: Math.PI, staff: 'flame' as StaffStyle | null },
-      { spawnX: 5.5, spawnZ: 3.0, groupState: wizardGroupState, rotY: Math.PI, staff: 'flame' as StaffStyle | null },
+      { spawnX: -5.5, spawnZ: 3.0, groupState: wizardGroupState, rotY: Math.PI, staff: 'flame' },
+      { spawnX: 5.5, spawnZ: 3.0, groupState: wizardGroupState, rotY: Math.PI, staff: 'flame' },
 
       // 2. 近战肉搏敌军 (共 4 名，无法杖，每个敌人仇恨独立，不共享)
       { spawnX: -2.5, spawnZ: 1.8, groupState: undefined, rotY: Math.PI, staff: null },
       { spawnX: 2.5, spawnZ: 1.8, groupState: undefined, rotY: Math.PI, staff: null },
       { spawnX: -1.8, spawnZ: 5.5, groupState: undefined, rotY: Math.PI, staff: null },
       { spawnX: 1.8, spawnZ: 5.5, groupState: undefined, rotY: Math.PI, staff: null },
+
+      // 3. Boss：+Z 区，远程造型，体型 ×2 + 阵法
+      {
+        spawnX: 0,
+        spawnZ: 15,
+        rotY: Math.PI,
+        staff: 'flame',
+        scale: 2,
+        formation: 'void',
+        maxHp: 400,
+        patrolRadius: 1.6,
+        patrolAxis: 'x',
+        attackRange: 10,
+        burstCount: 3,
+      },
     ];
 
+    // 4. Boss 周围一圈 12 名缩小远程小兵
+    {
+      const ringR = 3.4;
+      const addScale = 0.55;
+      for (let i = 0; i < 12; i++) {
+        const ang = (i * Math.PI) / 6;
+        enemyConfigs.push({
+          spawnX: Math.sin(ang) * ringR,
+          spawnZ: 15 + Math.cos(ang) * ringR,
+          rotY: Math.PI,
+          staff: 'flame',
+          scale: addScale,
+          maxHp: 60,
+          patrolRadius: 0.35,
+          patrolAxis: 'x',
+          attackRange: 8,
+        });
+      }
+    }
+
     const enemies: Level1Enemy[] = enemyConfigs.map((cfg) => {
+      const scale = cfg.scale ?? 1;
       const eMinion = new Minion(scene, cfg.spawnX, cfg.spawnZ, {
         facePositiveX: false,
         shadowGenerator: shadowGen,
@@ -212,32 +282,36 @@ export class Level1World implements GameWorld {
         bodyColor: 0x6e1b2b,
         hat: null,
         staff: cfg.staff,
-        formation: null,
+        formation: cfg.formation ?? null,
+        scaleMultiplier: scale,
         combatTeam: 'enemy',
       });
       eMinion.setRotationY(cfg.rotY);
 
       const ePhys = new MinionPhysicsProxy(scene, eMinion.root, {
         mode: 'pushable',
-        radius: 0.14,
-        height: 0.42,
-        mass: 3.0,
+        radius: 0.14 * scale,
+        height: 0.42 * scale,
+        mass: 3.0 * scale,
       });
       ePhys.teleportToTarget();
 
       const eAI = new EnemyAI(eMinion, ePhys, spellSystem, {
         spawnX: cfg.spawnX,
         spawnZ: cfg.spawnZ,
-        patrolRadius: 2.0,
+        patrolRadius: cfg.patrolRadius ?? 2.0,
         moveSpeed: 1.2,
         chaseSpeed: 2.2,
-        patrolAxis: 'z',
-        initialAttackRange: 2.8,
-        retainedAttackRange: 4.0,
+        patrolAxis: cfg.patrolAxis ?? 'z',
+        initialAttackRange: cfg.attackRange ?? 2.8,
+        retainedAttackRange: cfg.attackRange ? cfg.attackRange + 2 : 4.0,
         forcedPatrolDuration: 0.5,
         attackCooldown: cfg.staff ? 1.8 : 0.9,
         spellStyle: 'flame',
         groupState: cfg.groupState,
+        maxHp: cfg.maxHp,
+        healthBarOffsetY: 1.55 * scale,
+        burstCount: cfg.burstCount,
       });
 
       return { minion: eMinion, phys: ePhys, ai: eAI };
@@ -274,7 +348,11 @@ export class Level1World implements GameWorld {
       level1World.pendingRespawnToHub = true;
     };
 
+    minion.onFootstep = () => {
+      playSfx('/audio/player_walk.mp3', 0.16, 80);
+    };
     minion.onTakeDamage = (amount) => {
+      playSfx('/audio/player_hit.mp3', 0.55);
       if (options.getIsInvincible?.()) return;
       playerHealthBar.takeDamage(amount);
       if (playerHealthBar.isDead() && !minion.isDead()) {
@@ -457,7 +535,7 @@ export class Level1World implements GameWorld {
     this.playerHealthBar.update(dt);
 
     const targetMinions = [this.minion, ...allEnemyMinions];
-    this.spellSystem.update(dt, targetMinions);
+    this.spellSystem.update(dt, targetMinions, this.minion);
     this.healthPackSystem.update(dt, this.minion, this.playerHealthBar);
 
     if (!isMoving && this.wasMoving) {

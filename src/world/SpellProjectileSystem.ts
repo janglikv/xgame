@@ -12,6 +12,7 @@ import {
   VertexBuffer,
   VertexData,
 } from '@babylonjs/core';
+import { playSfx } from '../audio/Sfx';
 import type { Minion } from './Minion';
 import type { StaffStyle } from './minion/staff';
 
@@ -28,6 +29,13 @@ const STYLE_COLORS: Record<StaffStyle, Color3> = {
   holy: Color3.FromHexString('#ffcc00'),   // 圣光黄
 };
 
+const BASE_BULLET_DAMAGE = 25;
+const BASE_TRAIL_WIDTH = 0.24;
+const BASE_TRAIL_LEN = 0.45;
+const BASE_EXPLOSION_R = 0.32;
+/** 弹道飞行高度上限：须低于视觉围墙（0.5m），避免大体型杖尖从墙顶穿过 */
+const MAX_SHOT_Y = 0.38;
+
 interface Bullet {
   mesh: Mesh;
   position: Vector3;
@@ -37,6 +45,8 @@ interface Bullet {
   shooter?: Minion;
   style: StaffStyle;
   posBuffer: Float32Array;
+  powerScale: number;
+  damage: number;
 }
 
 /**
@@ -51,9 +61,25 @@ export class SpellProjectileSystem {
   private readonly textureMap = new Map<StaffStyle, DynamicTexture>();
   private readonly explosionMatMap = new Map<StaffStyle, StandardMaterial>();
   private readonly bullets: Bullet[] = [];
+  private bounds = { minX: -19.8, maxX: 19.8, minZ: -19.8, maxZ: 19.8 };
 
   constructor(scene: Scene) {
     this.scene = scene;
+  }
+
+  setBounds(bounds: {
+    minX: number;
+    maxX: number;
+    minZ: number;
+    maxZ: number;
+  }): void {
+    const m = 0.2;
+    this.bounds = {
+      minX: bounds.minX + m,
+      maxX: bounds.maxX - m,
+      minZ: bounds.minZ + m,
+      maxZ: bounds.maxZ - m,
+    };
   }
 
   /**
@@ -208,17 +234,23 @@ export class SpellProjectileSystem {
     shooter?: Minion,
     speed = 9.0,
   ): void {
-    const dir =
+    const dirRaw =
       direction.lengthSquared() > 1e-6
-        ? direction.normalizeToNew()
+        ? direction.clone()
+        : new Vector3(0, 0, 1);
+    dirRaw.y = 0;
+    const dir =
+      dirRaw.lengthSquared() > 1e-6
+        ? dirRaw.normalizeToNew()
         : new Vector3(0, 0, 1);
 
     let finalSpawnPos = spawnPos.clone();
+    finalSpawnPos.y = Math.min(finalSpawnPos.y, MAX_SHOT_Y);
 
     // 防卡墙穿墙校验：若开火者法杖顶端插进墙内，将子弹出生点自动收回至墙面外侧
     if (shooter && shooter.root) {
       const originPos = shooter.root.position.clone();
-      originPos.y += 0.45;
+      originPos.y = Math.min(originPos.y + 0.35, MAX_SHOT_Y);
       const toTip = spawnPos.subtract(originPos);
       const tipDist = toTip.length();
       if (tipDist > 1e-4) {
@@ -231,6 +263,8 @@ export class SpellProjectileSystem {
         }
       }
     }
+
+    const powerScale = Math.max(0.2, shooter?.getStaffPowerScale() ?? 1);
 
     const mesh = this.createTrailMesh(`bullet_${style}`);
     mesh.material = this.getMaterial(style);
@@ -248,6 +282,8 @@ export class SpellProjectileSystem {
       shooter,
       style,
       posBuffer,
+      powerScale,
+      damage: Math.round(BASE_BULLET_DAMAGE * powerScale),
     };
 
     this.updateTrailMeshVertices(bullet);
@@ -260,7 +296,10 @@ export class SpellProjectileSystem {
   private updateTrailMeshVertices(bullet: Bullet): void {
     const H = bullet.position;
     const stepDist = Vector3.Distance(bullet.position, bullet.lastPos);
-    const trailLen = Math.max(0.45, stepDist * 1.3);
+    const trailLen = Math.max(
+      BASE_TRAIL_LEN * bullet.powerScale,
+      stepDist * 1.3,
+    );
 
     const T = H.subtract(bullet.direction.scale(trailLen));
 
@@ -283,7 +322,7 @@ export class SpellProjectileSystem {
     }
     side.normalize();
 
-    const width = 0.24; // 0.24m 紧凑高能彗星宽度
+    const width = BASE_TRAIL_WIDTH * bullet.powerScale;
     const halfW = width * 0.5;
 
     const sideX = side.x * halfW;
@@ -300,7 +339,7 @@ export class SpellProjectileSystem {
     bullet.mesh.updateVerticesData(VertexBuffer.PositionKind, buf, true);
   }
 
-  update(dt: number, targetMinions?: Minion[]): void {
+  update(dt: number, targetMinions?: Minion[], player?: Minion): void {
     for (let i = this.bullets.length - 1; i >= 0; i--) {
       const b = this.bullets[i]!;
 
@@ -330,32 +369,32 @@ export class SpellProjectileSystem {
         targetMinions,
       );
 
+      const { minX, maxX, minZ, maxZ } = this.bounds;
       const outOfBounds =
-        Math.abs(nextPos.x) >= 19.8 || Math.abs(nextPos.z) >= 19.8;
+        nextPos.x <= minX ||
+        nextPos.x >= maxX ||
+        nextPos.z <= minZ ||
+        nextPos.z >= maxZ;
 
-      let hitOccurred = false;
-      let isWallHit = false;
-
-      if (
+      const hitMinion =
         minionHit &&
-        (wallHitDist === Infinity || Math.sqrt(minionHit.distSq) <= wallHitDist)
-      ) {
-        hitOccurred = true;
+        (wallHitDist === Infinity || Math.sqrt(minionHit.distSq) <= wallHitDist);
+
+      if (hitMinion && minionHit) {
         if (minionHit.hitMinion.physicsProxy) {
           minionHit.hitMinion.physicsProxy.applyHitKnockback(b.direction, 2.0);
         }
-        minionHit.hitMinion.takeDamage(25, b.direction);
-      } else if (wallHitDist !== Infinity || outOfBounds) {
-        hitOccurred = true;
-        if (wallHitDist !== Infinity) isWallHit = true;
+        minionHit.hitMinion.takeDamage(b.damage, b.direction);
+        if (!(player && minionHit.hitMinion === player)) {
+          playSfx('/audio/bullet_hit.mp3', 0.55);
+        }
+        this.triggerExplosionFx(nextPos, b.style, b.powerScale);
+        b.mesh.dispose();
+        this.bullets.splice(i, 1);
+        continue;
       }
 
-      if (hitOccurred) {
-        const impactPos = isWallHit
-          ? b.lastPos.add(b.direction.scale(Math.max(0, wallHitDist - 0.08)))
-          : nextPos;
-        this.triggerExplosionFx(impactPos, b.style);
-
+      if (wallHitDist !== Infinity || outOfBounds) {
         b.mesh.dispose();
         this.bullets.splice(i, 1);
         continue;
@@ -425,8 +464,9 @@ export class SpellProjectileSystem {
       if (target.root && !target.root.isEnabled()) continue;
 
       const pos = target.root.position;
-      const targetHeight = 0.85;
-      const targetRadius = 0.32;
+      const targetScale = target.getStaffPowerScale();
+      const targetHeight = 0.85 * targetScale;
+      const targetRadius = 0.32 * targetScale;
 
       if (maxY < -0.1 || minY > targetHeight) continue;
 
@@ -523,13 +563,17 @@ export class SpellProjectileSystem {
   /**
    * 法术元素爆裂特效
    */
-  private triggerExplosionFx(pos: Vector3, style: StaffStyle): void {
+  private triggerExplosionFx(
+    pos: Vector3,
+    style: StaffStyle,
+    powerScale = 1,
+  ): void {
     const scene = this.scene;
     const mat = this.getExplosionMaterial(style);
 
     const expMesh = MeshBuilder.CreateDisc(
       'expSprite',
-      { radius: 0.32, tessellation: 12 },
+      { radius: BASE_EXPLOSION_R * powerScale, tessellation: 12 },
       scene,
     );
     expMesh.billboardMode = Mesh.BILLBOARDMODE_ALL;

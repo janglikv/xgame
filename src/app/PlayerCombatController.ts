@@ -1,4 +1,5 @@
 import { Matrix, Vector3, type ArcRotateCamera, type Scene } from '@babylonjs/core';
+import { playSfx } from '../audio/Sfx';
 import type { Minion } from '../world/Minion';
 import { spawnHitSparkFx } from '../world/MeleeSectorFx';
 import type { SpellProjectileSystem } from '../world/SpellProjectileSystem';
@@ -135,6 +136,12 @@ export class PlayerCombatController {
       const shootDir = player.getStaffForwardVector();
 
       const style = player.getStaffStyle() ?? 'arcane';
+      playSfx(
+        style === 'storm'
+          ? '/audio/staff_storm_fire.mp3'
+          : '/audio/bullet_fire.mp3',
+        0.5,
+      );
       spellSystem.spawnOrb(tipPos, shootDir, style, player);
       player.triggerStaffShootFx();
       return;

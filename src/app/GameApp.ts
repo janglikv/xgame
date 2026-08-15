@@ -21,6 +21,7 @@ import { MoveInput } from './MoveInput';
 import { PlayerCombatController } from './PlayerCombatController';
 import { TeleportFlow } from './TeleportFlow';
 import { WarpLanding } from './WarpLanding';
+import { BgmPlayer } from '../audio/BgmPlayer';
 import { WorldRouter } from './WorldRouter';
 
 const MOVE_SPEED = 2;
@@ -39,6 +40,8 @@ export class GameApp {
   private showGrid = true;
   private showColliders = false;
   private isInvincible = false;
+  private bgmEnabled = true;
+  private readonly bgm = new BgmPlayer();
 
   private readonly moveInput = new MoveInput();
   private readonly combat = new PlayerCombatController();
@@ -75,6 +78,9 @@ export class GameApp {
     this.showGrid = settings.showGrid;
     this.showColliders = settings.showColliders;
     this.isInvincible = settings.isInvincible;
+    this.bgmEnabled = settings.bgmEnabled;
+    this.bgm.setEnabled(this.bgmEnabled);
+    this.bgm.armUnlock();
 
     const savedCam = loadCameraState();
     const savedWorld = loadWorldState();
@@ -159,6 +165,12 @@ export class GameApp {
             activeWorld.playerHealthBar.setHp(activeWorld.playerHealthBar.getMaxHp());
           }
         }
+        this.persistSettings();
+      },
+      getBgmEnabled: () => this.bgmEnabled,
+      setBgmEnabled: (enabled) => {
+        this.bgmEnabled = enabled;
+        this.bgm.setEnabled(enabled);
         this.persistSettings();
       },
       getCameraMode: () => this.cameraMode,
@@ -383,6 +395,7 @@ export class GameApp {
       showColliders: this.showColliders,
       isInvincible: this.isInvincible,
       cameraMode: this.cameraMode,
+      bgmEnabled: this.bgmEnabled,
     });
   }
 }

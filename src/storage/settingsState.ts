@@ -1,5 +1,5 @@
 /** localStorage 键；改字段结构时递增版本 */
-const STORAGE_KEY = 'luolu.settings.v3';
+const STORAGE_KEY = 'luolu.settings.v4';
 
 /** 镜头模式：自由轨道（调试）/ 略倾俯视固定 */
 export type CameraMode = 'free' | 'fixed';
@@ -15,6 +15,8 @@ export interface SettingsStateSnapshot {
   isInvincible: boolean;
   /** 镜头模式（默认固定略倾俯视） */
   cameraMode: CameraMode;
+  /** 是否播放背景音乐 */
+  bgmEnabled: boolean;
 }
 
 /** 自由/调试镜头默认垂直 FOV（Babylon 默认约 0.8） */
@@ -43,31 +45,16 @@ const DEFAULTS: SettingsStateSnapshot = {
   showColliders: false,
   isInvincible: false,
   cameraMode: 'fixed',
+  bgmEnabled: true,
 };
 
 export function loadSettingsState(): SettingsStateSnapshot {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    // 兼容 v1
-    if (!raw) {
-      const legacy = localStorage.getItem('luolu.settings.v1');
-      if (legacy) {
-        try {
-          const old = JSON.parse(legacy) as Partial<SettingsStateSnapshot>;
-          return {
-            showFps:
-              typeof old.showFps === 'boolean' ? old.showFps : DEFAULTS.showFps,
-            showGrid: DEFAULTS.showGrid,
-            showColliders: DEFAULTS.showColliders,
-            isInvincible: DEFAULTS.isInvincible,
-            cameraMode: DEFAULTS.cameraMode,
-          };
-        } catch {
-          return { ...DEFAULTS };
-        }
-      }
-      return { ...DEFAULTS };
-    }
+    const raw =
+      localStorage.getItem(STORAGE_KEY) ??
+      localStorage.getItem('luolu.settings.v3') ??
+      localStorage.getItem('luolu.settings.v1');
+    if (!raw) return { ...DEFAULTS };
 
     const data = JSON.parse(raw) as Partial<SettingsStateSnapshot>;
     const mode = data.cameraMode;
@@ -77,6 +64,7 @@ export function loadSettingsState(): SettingsStateSnapshot {
       showColliders: typeof data.showColliders === 'boolean' ? data.showColliders : DEFAULTS.showColliders,
       isInvincible: typeof data.isInvincible === 'boolean' ? data.isInvincible : DEFAULTS.isInvincible,
       cameraMode: mode === 'free' || mode === 'fixed' ? mode : DEFAULTS.cameraMode,
+      bgmEnabled: typeof data.bgmEnabled === 'boolean' ? data.bgmEnabled : DEFAULTS.bgmEnabled,
     };
   } catch {
     return { ...DEFAULTS };

@@ -8,6 +8,7 @@ import {
   Vector3,
   type Scene,
 } from '@babylonjs/core';
+import { LoopSfx } from '../audio/Sfx';
 
 /**
  * 地面传送阵：贴地魔法阵 + 小光柱。
@@ -96,6 +97,7 @@ export class TeleportPad {
    * 避免出生在阵上立刻又传回去。
    */
   private requireLeave = false;
+  private readonly occupySfx = new LoopSfx('/audio/teleport.mp3', 0.55);
 
   constructor(
     scene: Scene,
@@ -238,6 +240,10 @@ export class TeleportPad {
       this.charge = 0;
     }
 
+    const shouldHum = occupied && !this.requireLeave && !triggered;
+    if (shouldHum) this.occupySfx.start();
+    else this.occupySfx.stop();
+
     // 离阵平滑归位：若视觉蓄力大于逻辑蓄力，按 4x 速率快速衰减缩回归位（约 0.25s），避免闪现
     // 触发传送当帧不衰减，保证遮罩能接到 100% 全黑
     if (triggered) {
@@ -277,6 +283,7 @@ export class TeleportPad {
   }
 
   dispose(): void {
+    this.occupySfx.stop();
     for (const layer of this.groundLayers) {
       layer.mesh.dispose();
     }

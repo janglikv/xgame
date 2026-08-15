@@ -32,6 +32,8 @@ export interface SettingsPanelDeps {
   setShowColliders: (show: boolean) => void;
   getIsInvincible: () => boolean;
   setIsInvincible: (invincible: boolean) => void;
+  getBgmEnabled: () => boolean;
+  setBgmEnabled: (enabled: boolean) => void;
   getCameraMode: () => CameraMode;
   setCameraMode: (mode: CameraMode) => void;
   getCameraInfo: () => SettingsCameraInfo;
@@ -53,6 +55,7 @@ export class SettingsPanel {
   private tex!: AdvancedDynamicTexture;
   private panel!: Rectangle;
   private fpsCheck!: Checkbox;
+  private bgmCheck!: Checkbox;
   private invincibleCheck!: Checkbox;
   private freeCheck!: Checkbox;
   private fixedCheck!: Checkbox;
@@ -155,6 +158,15 @@ export class SettingsPanel {
     );
     this.invincibleCheck = invincibleRow.check;
     stack.addControl(invincibleRow.row);
+
+    const bgmRow = this.makeToggleRow(
+      'bgmRow',
+      '背景音乐',
+      this.deps.getBgmEnabled(),
+      (checked) => this.deps.setBgmEnabled(checked),
+    );
+    this.bgmCheck = bgmRow.check;
+    stack.addControl(bgmRow.row);
 
     // —— 显示 ——
     stack.addControl(this.spacer(16));
@@ -423,6 +435,7 @@ export class SettingsPanel {
     this.tex.rootContainer.isHitTestVisible = open;
     if (open) {
       this.fpsCheck.isChecked = this.deps.getShowFps();
+      this.bgmCheck.isChecked = this.deps.getBgmEnabled();
       this.invincibleCheck.isChecked = this.deps.getIsInvincible();
       this.syncModeChecks(this.deps.getCameraMode());
       this.camModeHint.text = this.modeHintText(this.deps.getCameraMode());

@@ -18,6 +18,10 @@ export interface ArenaColliderOptions {
   halfX?: number;
   /** 场地半深（Z）；默认 Floor.HALF_Z */
   halfZ?: number;
+  minX?: number;
+  maxX?: number;
+  minZ?: number;
+  maxZ?: number;
   /** 是否生成中心围墙物理碰撞（指定边长米数，如 3 表示 3×3 米围墙） */
   centerWallSize?: number;
   /** 是否生成右下角 L 型围墙物理碰撞 */
@@ -121,14 +125,20 @@ export function buildArenaColliders(
   const root = new TransformNode('ArenaColliders', scene);
   const halfX = options.halfX ?? Floor.HALF_X;
   const halfZ = options.halfZ ?? Floor.HALF_Z;
+  const minX = options.minX ?? -halfX;
+  const maxX = options.maxX ?? halfX;
+  const minZ = options.minZ ?? -halfZ;
+  const maxZ = options.maxZ ?? halfZ;
 
   const outerThickness = Floor.WALL_THICKNESS; // 1.0m
   const innerThickness = 0.8;                  // 0.8m
   // 视觉墙高 0.5m；物理加高，避免胶囊卡墙后被顶到墙头再迈过去
   const h = options.wallHeight ?? 1.2;
   const floorThick = Floor.FLOOR_THICKNESS;
-  const sizeX = halfX * 2;
-  const sizeZ = halfZ * 2;
+  const sizeX = maxX - minX;
+  const sizeZ = maxZ - minZ;
+  const centerX = (minX + maxX) / 2;
+  const centerZ = (minZ + maxZ) / 2;
 
   // 主场地地面
   if (includeFloor) {
@@ -137,7 +147,9 @@ export function buildArenaColliders(
       { width: sizeX, height: floorThick, depth: sizeZ },
       scene,
     );
+    floor.position.x = centerX;
     floor.position.y = -floorThick / 2;
+    floor.position.z = centerZ;
     floor.isVisible = false;
     floor.isPickable = false;
     floor.metadata = { isColliderMesh: true };
@@ -152,11 +164,11 @@ export function buildArenaColliders(
 
   // 1. 四周外围墙：算法自动根据四周围线路径解析生成
   const loopPath = [
-    new Vector3(-halfX - outerThickness / 2, 0, -halfZ - outerThickness / 2),
-    new Vector3(halfX + outerThickness / 2, 0, -halfZ - outerThickness / 2),
-    new Vector3(halfX + outerThickness / 2, 0, halfZ + outerThickness / 2),
-    new Vector3(-halfX - outerThickness / 2, 0, halfZ + outerThickness / 2),
-    new Vector3(-halfX - outerThickness / 2, 0, -halfZ - outerThickness / 2),
+    new Vector3(minX - outerThickness / 2, 0, minZ - outerThickness / 2),
+    new Vector3(maxX + outerThickness / 2, 0, minZ - outerThickness / 2),
+    new Vector3(maxX + outerThickness / 2, 0, maxZ + outerThickness / 2),
+    new Vector3(minX - outerThickness / 2, 0, maxZ + outerThickness / 2),
+    new Vector3(minX - outerThickness / 2, 0, minZ - outerThickness / 2),
   ];
   createCollidersFromExtrudePath(
     'PhysWall_Outer',

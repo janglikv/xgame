@@ -79,6 +79,7 @@ export class FootRingBuff {
     scene: Scene,
     hostRoot: TransformNode,
     style: FormationStyle = 'crimson',
+    worldScale = 1,
   ) {
     this.style = style;
     const def = STYLE_DEFS[style];
@@ -86,9 +87,9 @@ export class FootRingBuff {
     this.root = new TransformNode(`Formation_${style}`, scene);
     this.root.parent = hostRoot;
     this.root.position = new Vector3(0, FootRingBuff.Y_OFFSET, 0);
-    // 抵消宿主缩放，保持世界直径稳定
+    // 抵消宿主缩放后再乘 worldScale，可让 Boss 阵法随体型放大
     const s = Math.max(hostRoot.scaling.x, 1e-6);
-    this.baseScale = 1 / s;
+    this.baseScale = worldScale / s;
     this.root.scaling = new Vector3(this.baseScale, this.baseScale, this.baseScale);
     this.pulse = def.pulse ?? 0;
 

@@ -7,6 +7,7 @@ import {
   TransformNode,
   Vector3,
 } from '@babylonjs/core';
+import { playSfx } from '../audio/Sfx';
 import type { Minion } from './Minion';
 import type { HealthBar } from './HealthBar';
 
@@ -184,7 +185,7 @@ export class HealthPackSystem {
           const newHp = Math.min(maxHp, currentHp + HEAL_AMOUNT);
           playerHealthBar.setHp(newHp);
 
-          // 触发拾取治疗特效
+          playSfx('/audio/heal.mp3', 0.55);
           this.triggerHealFx(playerPos);
 
           // 消耗血包，进入刷新倒计时

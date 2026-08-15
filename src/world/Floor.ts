@@ -116,6 +116,14 @@ export interface FloorOptions {
   halfX?: number;
   /** 场地半深（Z 轴，米）；默认 {@link Floor.HALF_Z}。围墙与可玩边界以此为准 */
   halfZ?: number;
+  /** 可玩区最小 X（优先于 ±halfX） */
+  minX?: number;
+  /** 可玩区最大 X */
+  maxX?: number;
+  /** 可玩区最小 Z（优先于 ±halfZ） */
+  minZ?: number;
+  /** 可玩区最大 Z */
+  maxZ?: number;
   /**
    * 可视地板相对围墙四边外延的格数（1 格 = 1 米）。
    * 仅扩大主场地贴图平面，不移动围墙；用于避免地图外纯黑空洞。
@@ -167,6 +175,10 @@ export class Floor {
   readonly halfX: number;
   /** 本实例可玩区半深（Z，围墙位置） */
   readonly halfZ: number;
+  readonly minX: number;
+  readonly maxX: number;
+  readonly minZ: number;
+  readonly maxZ: number;
   /** 可视地板相对围墙的外延（米） */
   readonly extend: number;
   private currentSurface: FloorSurface;
@@ -184,13 +196,19 @@ export class Floor {
     this.currentSurface = options.surface ?? 'tiles';
     this.halfX = options.halfX ?? Floor.HALF_X;
     this.halfZ = options.halfZ ?? Floor.HALF_Z;
+    this.minX = options.minX ?? -this.halfX;
+    this.maxX = options.maxX ?? this.halfX;
+    this.minZ = options.minZ ?? -this.halfZ;
+    this.maxZ = options.maxZ ?? this.halfZ;
     this.extend = Math.max(0, options.extend ?? 0);
 
     // 围墙按可玩区；主地板可外延，避免墙外一片黑
-    const floorHalfX = this.halfX + this.extend;
-    const floorHalfZ = this.halfZ + this.extend;
-    const floorSizeX = floorHalfX * 2;
-    const floorSizeZ = floorHalfZ * 2;
+    const floorMinX = this.minX - this.extend;
+    const floorMaxX = this.maxX + this.extend;
+    const floorMinZ = this.minZ - this.extend;
+    const floorMaxZ = this.maxZ + this.extend;
+    const floorSizeX = floorMaxX - floorMinX;
+    const floorSizeZ = floorMaxZ - floorMinZ;
     const t = Floor.WALL_THICKNESS;
     const h = Floor.WALL_HEIGHT;
 
@@ -210,20 +228,24 @@ export class Floor {
       { width: floorSizeX, height: floorSizeZ, subdivisions: 1 },
       scene,
     );
+    this.floorMesh.position.x = (floorMinX + floorMaxX) / 2;
     this.floorMesh.position.y = 0;
+    this.floorMesh.position.z = (floorMinZ + floorMaxZ) / 2;
     this.floorMesh.receiveShadows = true;
     this.floorMesh.parent = this.root;
 
-    const halfX = this.halfX;
-    const halfZ = this.halfZ;
+    const minX = this.minX;
+    const maxX = this.maxX;
+    const minZ = this.minZ;
+    const maxZ = this.maxZ;
 
     // 单条首尾闭合路径：绕场地四周一整圈，4点梯形截面 Extrude 挤压无缝连贯
     const loopPath = [
-      new Vector3(-halfX - t / 2, 0, -halfZ - t / 2),
-      new Vector3(halfX + t / 2, 0, -halfZ - t / 2),
-      new Vector3(halfX + t / 2, 0, halfZ + t / 2),
-      new Vector3(-halfX - t / 2, 0, halfZ + t / 2),
-      new Vector3(-halfX - t / 2, 0, -halfZ - t / 2),
+      new Vector3(minX - t / 2, 0, minZ - t / 2),
+      new Vector3(maxX + t / 2, 0, minZ - t / 2),
+      new Vector3(maxX + t / 2, 0, maxZ + t / 2),
+      new Vector3(minX - t / 2, 0, maxZ + t / 2),
+      new Vector3(minX - t / 2, 0, minZ - t / 2),
     ];
 
     const wall = createTrapezoidExtrudedWall(
@@ -326,8 +348,8 @@ export class Floor {
 
   private applySurface(surface: FloorSurface): void {
     // 贴图预设按默认 40m 场地校准；按可视地板边长等比缩放以保持米级对齐
-    const visualSizeX = (this.halfX + this.extend) * 2;
-    const visualSizeZ = (this.halfZ + this.extend) * 2;
+    const visualSizeX = this.maxX - this.minX + this.extend * 2;
+    const visualSizeZ = this.maxZ - this.minZ + this.extend * 2;
     const uMul = visualSizeX / (Floor.HALF_X * 2);
     const vMul = visualSizeZ / (Floor.HALF_Z * 2);
     const { floorMat, wallMat, fallbackMat } = createMaterials(

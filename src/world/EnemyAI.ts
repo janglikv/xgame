@@ -1,4 +1,5 @@
 import { Ray, Vector3 } from '@babylonjs/core';
+import { playSfx } from '../audio/Sfx';
 import type { Minion } from './Minion';
 import type { MinionPhysicsProxy } from './physics/MinionPhysicsProxy';
 import type { SpellProjectileSystem } from './SpellProjectileSystem';
@@ -41,6 +42,12 @@ export interface EnemyAIOptions {
   meleeRange?: number;
   /** 近战挥拳单次伤害（默认 20） */
   meleeDamage?: number;
+  /** 血条相对脚底高度（默认 1.55） */
+  healthBarOffsetY?: number;
+  /** 远程单次攻击连发数（默认 1） */
+  burstCount?: number;
+  /** 连发间隔（秒，默认 0.16） */
+  burstInterval?: number;
 }
 
 /**
@@ -69,6 +76,10 @@ export class EnemyAI {
   private attackCooldown: number;
   private spellStyle: StaffStyle;
   private groupState?: GroupAggroState;
+  private readonly burstCount: number;
+  private readonly burstInterval: number;
+  private burstLeft = 0;
+  private burstTimer = 0;
 
   /** 踱步方向：1 表示正向，-1 表示反向 */
   private patrolDir = 1;
@@ -103,14 +114,19 @@ export class EnemyAI {
       options.attackCooldown ?? (enemy.hasStaff() ? 1.8 : 1.0);
     this.spellStyle = options.spellStyle ?? 'flame';
     this.groupState = options.groupState;
+    this.burstCount = Math.max(1, Math.floor(options.burstCount ?? 1));
+    this.burstInterval = options.burstInterval ?? 0.16;
 
     // 随机错开首次攻击，增强自然感
     this.cooldownTimer = 0.4 + Math.random() * 0.4;
 
     // 创建 3D 悬浮血条 (头顶 Y+1.55)
+    const hpScale = options.healthBarOffsetY ? options.healthBarOffsetY / 1.55 : 1;
     this.healthBar = new HealthBar(enemy.root.getScene(), enemy.root, {
       maxHp: options.maxHp ?? 100,
-      offsetY: 1.55,
+      offsetY: options.healthBarOffsetY ?? 1.55,
+      width: 0.68 * Math.max(1, hpScale),
+      height: 0.11 * Math.max(1, Math.sqrt(hpScale)),
     });
 
     // 绑定 Minion 受击事件
@@ -265,6 +281,25 @@ export class EnemyAI {
       this.patrolDir = Math.random() < 0.5 ? 1 : -1;
     }
 
+    if (this.burstLeft > 0) {
+      this.enemyPhys.setHorizontalVelocity(0, 0);
+      this.enemy.faceToward(dx, dz);
+      this.enemy.setAimTarget(pPos);
+      this.enemy.update(dt, false);
+      this.burstTimer -= dt;
+      if (this.burstTimer <= 0) {
+        this.shootAtPlayer(targetPlayer);
+        this.burstLeft -= 1;
+        if (this.burstLeft > 0) {
+          this.burstTimer = this.burstInterval;
+        } else {
+          this.enemy.setAimTarget(null);
+          this.cooldownTimer = this.attackCooldown + Math.random() * 0.35;
+        }
+      }
+      return;
+    }
+
     if (this.windupTimer > 0) {
       this.windupTimer -= dt;
       this.enemyPhys.setHorizontalVelocity(0, 0);
@@ -274,8 +309,13 @@ export class EnemyAI {
 
       if (this.windupTimer <= 0) {
         this.shootAtPlayer(targetPlayer);
-        this.enemy.setAimTarget(null);
-        this.cooldownTimer = this.attackCooldown;
+        if (this.burstCount > 1) {
+          this.burstLeft = this.burstCount - 1;
+          this.burstTimer = this.burstInterval;
+        } else {
+          this.enemy.setAimTarget(null);
+          this.cooldownTimer = this.attackCooldown + Math.random() * 0.35;
+        }
       }
     } else {
       this.doPatrol(dt, ePos, allEnemies);
@@ -420,6 +460,7 @@ export class EnemyAI {
         ? aimVec.normalize()
         : this.enemy.getStaffForwardVector();
 
+    playSfx('/audio/enemy_bullet_fire.mp3', 0.5, 90);
     this.spellSystem.spawnOrb(tipPos, shootDir, this.spellStyle, this.enemy, 4.5);
     this.enemy.triggerStaffShootFx();
   }

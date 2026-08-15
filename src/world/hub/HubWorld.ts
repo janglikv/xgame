@@ -5,6 +5,7 @@ import type {
   ShadowGenerator,
 } from '@babylonjs/core';
 import { Vector3 } from '@babylonjs/core';
+import { playSfx } from '../../audio/Sfx';
 import {
   loadCameraState,
   type CameraStateSnapshot,
@@ -239,7 +240,11 @@ export class HubWorld implements GameWorld {
       hubWorld.respawnNearPad();
     };
 
+    minion.onFootstep = () => {
+      playSfx('/audio/player_walk.mp3', 0.16, 80);
+    };
     minion.onTakeDamage = (amount) => {
+      playSfx('/audio/player_hit.mp3', 0.55);
       playerHealthBar.takeDamage(amount);
       if (playerHealthBar.isDead() && !minion.isDead()) {
         minion.setDead(true);
@@ -437,7 +442,7 @@ export class HubWorld implements GameWorld {
     }
     this.playerHealthBar.update(dt);
     const targetMinions = [this.minion, ...this.demoLineup.minions];
-    this.spellSystem.update(dt, targetMinions);
+    this.spellSystem.update(dt, targetMinions, this.minion);
     this.demoLineup.update(dt);
     this.floorPickerGallery.update(this.minion.root.position);
 
