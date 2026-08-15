@@ -136,7 +136,7 @@ export class Level1World implements GameWorld {
       Math.max(LEVEL1_X_MAX, LEVEL1_Z_MAX) + LEVEL1_FLOOR_EXTEND + 4;
     const { shadowGen } = addStandardLighting(scene, {
       half: shadowHalf,
-      mapSize: 1024,
+      mapSize: 512,
     });
 
     const floor = new Floor(scene, shadowGen, {
@@ -277,7 +277,7 @@ export class Level1World implements GameWorld {
       const scale = cfg.scale ?? 1;
       const eMinion = new Minion(scene, cfg.spawnX, cfg.spawnZ, {
         facePositiveX: false,
-        shadowGenerator: shadowGen,
+        shadowGenerator: scale >= 2 ? shadowGen : undefined,
         face: 'fierce',
         bodyColor: 0x6e1b2b,
         hat: null,
@@ -285,6 +285,10 @@ export class Level1World implements GameWorld {
         formation: cfg.formation ?? null,
         scaleMultiplier: scale,
         combatTeam: 'enemy',
+        blinkIdle: false,
+        breathIdle: scale >= 2,
+        liteStaffFx: scale < 2,
+        lowPolyFlat: scale < 1,
       });
       eMinion.setRotationY(cfg.rotY);
 
@@ -303,8 +307,12 @@ export class Level1World implements GameWorld {
         moveSpeed: 1.2,
         chaseSpeed: 2.2,
         patrolAxis: cfg.patrolAxis ?? 'z',
-        initialAttackRange: cfg.attackRange ?? 2.8,
-        retainedAttackRange: cfg.attackRange ? cfg.attackRange + 2 : 4.0,
+        initialAttackRange: cfg.attackRange ?? (cfg.staff ? 12 : 2.8),
+        retainedAttackRange: cfg.attackRange
+          ? cfg.attackRange + 2
+          : cfg.staff
+            ? 16
+            : 4.0,
         forcedPatrolDuration: 0.5,
         attackCooldown: cfg.staff ? 1.8 : 0.9,
         spellStyle: 'flame',
@@ -312,6 +320,7 @@ export class Level1World implements GameWorld {
         maxHp: cfg.maxHp,
         healthBarOffsetY: 1.55 * scale,
         burstCount: cfg.burstCount,
+        hideHealthUntilHit: scale < 1,
       });
 
       return { minion: eMinion, phys: ePhys, ai: eAI };

@@ -334,6 +334,11 @@ export class Floor {
 
     // 初始化应用当前 Surface
     this.applySurface(this.currentSurface);
+    this.floorMesh?.freezeWorldMatrix();
+    this.groundMesh?.freezeWorldMatrix();
+    for (const wall of this.wallMeshes) {
+      wall.freezeWorldMatrix();
+    }
   }
 
   public getSurface(): FloorSurface {

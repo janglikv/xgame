@@ -1,8 +1,34 @@
 const lastPlayAt = new Map<string, number>();
+const pools = new Map<string, HTMLAudioElement[]>();
+const POOL_SIZE = 4;
+
+function acquireVoice(src: string): HTMLAudioElement {
+  let pool = pools.get(src);
+  if (!pool) {
+    pool = [];
+    pools.set(src, pool);
+  }
+  for (let i = 0; i < pool.length; i++) {
+    const a = pool[i]!;
+    if (a.paused || a.ended) return a;
+  }
+  if (pool.length < POOL_SIZE) {
+    const created = new Audio(src);
+    created.preload = 'auto';
+    pool.push(created);
+    return created;
+  }
+  // 池满则打断最早的一条，避免无上限 new Audio
+  const steal = pool[0]!;
+  pool.push(pool.shift()!);
+  steal.pause();
+  steal.currentTime = 0;
+  return steal;
+}
 
 /**
- * 短音效：每次新建 Audio 以便连发可重叠。
- * debounceMs > 0 时，同一路径在窗口内只播一次（避免双远程同帧叠音）。
+ * 短音效：按路径复用 Audio 池，避免每发新建解码。
+ * debounceMs > 0 时，同一路径在窗口内只播一次。
  */
 export function playSfx(src: string, volume = 0.45, debounceMs = 0): void {
   if (debounceMs > 0) {
@@ -12,8 +38,9 @@ export function playSfx(src: string, volume = 0.45, debounceMs = 0): void {
     lastPlayAt.set(src, now);
   }
 
-  const audio = new Audio(src);
+  const audio = acquireVoice(src);
   audio.volume = volume;
+  audio.currentTime = 0;
   void audio.play().catch(() => {
     // 未与页面交互时浏览器会拦截，忽略
   });

@@ -27,8 +27,12 @@ export function applyFlatShading(mesh: Mesh): void {
 }
 
 export function cast(mesh: Mesh, shadowGen?: ShadowGenerator): void {
-  mesh.receiveShadows = true;
-  shadowGen?.addShadowCaster(mesh);
+  if (shadowGen) {
+    mesh.receiveShadows = true;
+    shadowGen.addShadowCaster(mesh);
+  } else {
+    mesh.receiveShadows = false;
+  }
 }
 
 export function mat(scene: Scene, name: string, hex: number): StandardMaterial {

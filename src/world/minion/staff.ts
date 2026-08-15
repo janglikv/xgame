@@ -93,7 +93,9 @@ export function attachStaff(
   rightHand: Mesh,
   style: StaffStyle,
   shadowGen?: ShadowGenerator,
+  lite = false,
 ): StaffFx {
+  if (lite) return attachLiteStaff(scene, rightHand, style);
   switch (style) {
     case 'flame':
       return attachFlameStaff(scene, rightHand, shadowGen);
@@ -111,6 +113,73 @@ export function attachStaff(
     default:
       return attachArcaneStaff(scene, rightHand, shadowGen);
   }
+}
+
+/** 敌军简化杖：仅杖杆+宝珠，少网格、无阴影、材质按款式缓存 */
+const liteStaffCache = new Map<string, { shaft: StandardMaterial; orb: StandardMaterial }>();
+
+function attachLiteStaff(
+  scene: Scene,
+  rightHand: Mesh,
+  style: StaffStyle,
+): StaffFx {
+  const col = {
+    flame: 0xff5500,
+    frost: 0x00c8ff,
+    nature: 0x20e040,
+    void: 0x8811ee,
+    storm: 0x00e5ff,
+    holy: 0xffcc00,
+    arcane: 0xb545ff,
+  }[style];
+
+  let mats = liteStaffCache.get(style);
+  if (!mats) {
+    mats = {
+      shaft: mat(scene, `liteStaffShaft_${style}`, 0x2a1c14),
+      orb: emissiveMat(scene, `liteStaffOrb_${style}`, col, 1.15),
+    };
+    liteStaffCache.set(style, mats);
+  }
+
+  const root = gripRoot(scene, `liteStaff_${style}`, rightHand);
+  const shaft = MeshBuilder.CreateCylinder(
+    `liteShaft_${style}`,
+    { height: 1.05, diameterTop: 0.035, diameterBottom: 0.055, tessellation: 6 },
+    scene,
+  );
+  shaft.position.y = 0.28;
+  shaft.material = mats.shaft;
+  shaft.parent = root;
+  shaft.receiveShadows = false;
+  shaft.isPickable = false;
+
+  const orb = MeshBuilder.CreateSphere(
+    `liteOrb_${style}`,
+    { diameter: 0.2, segments: 8 },
+    scene,
+  );
+  orb.position.y = 0.92;
+  orb.material = mats.orb;
+  orb.parent = root;
+  orb.receiveShadows = false;
+  orb.isPickable = false;
+
+  return {
+    style,
+    root,
+    orb,
+    orbMat: mats.orb,
+    core: null,
+    coreMat: null,
+    halos: [],
+    aura: null,
+    auraMat: null,
+    crown: null,
+    sparks: [],
+    extras: [],
+    t: 0,
+  };
 }
 
 /** 兼容旧名 */
@@ -1631,9 +1700,16 @@ function attachHolyStaff(
 // ═══════════════════════════════════════════════════════════
 // 动效：按款式驱动脉动 / 轨道 / 冠旋转
 // ═══════════════════════════════════════════════════════════
-export function updateStaffFx(fx: StaffFx, dt: number): void {
+export function updateStaffFx(fx: StaffFx, dt: number, lite = false): void {
   fx.t += dt;
   const t = fx.t;
+
+  if (lite) {
+    const pulse = 0.75 + 0.25 * Math.sin(t * 4);
+    fx.orbMat.emissiveColor.set(pulse, pulse * 0.35, pulse * 0.08);
+    fx.orb.scaling.setAll(0.96 + 0.08 * Math.sin(t * 3));
+    return;
+  }
 
   switch (fx.style) {
     case 'flame':

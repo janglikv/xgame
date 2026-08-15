@@ -107,6 +107,8 @@ export interface MinionOptions {
   blinkIdle?: boolean;
   /** 是否播放微弱呼吸（默认 true） */
   breathIdle?: boolean;
+  /** 法杖特效降级（敌军小兵跳过火星/光晕逐帧动画） */
+  liteStaffFx?: boolean;
   /**
    * 战斗阵营。同阵营子弹互不造成伤害（穿过）。
    * 未设则不参与友伤过滤。
@@ -224,6 +226,7 @@ export class Minion {
   private hatRoot: TransformNode | null = null;
   private staffFx: StaffFx | null = null;
   private formationBuff: FootRingBuff | null = null;
+  private liteStaffFx = false;
 
   /** 鼠标按住时的 3D 瞄准目标点（用于法杖实时指向） */
   private aimTarget: Vector3 | null = null;
@@ -284,6 +287,7 @@ export class Minion {
     this.partialSlots = options.partialSlots ? [...options.partialSlots] : null;
     this.blinkEnabled = options.blinkIdle ?? true;
     this.breathEnabled = options.breathIdle ?? true;
+    this.liteStaffFx = options.liteStaffFx === true;
     this.breathPhase = Math.random() * Math.PI * 2;
     // 错开各实例首次眨眼，避免阵列齐眨眼
     this.blinkTimer =
@@ -399,7 +403,8 @@ export class Minion {
         scene,
         this.rightHand,
         appearance.staff,
-        shadowGen,
+        this.liteStaffFx ? undefined : shadowGen,
+        this.liteStaffFx,
       );
     }
     if (appearance.formation) {
@@ -409,6 +414,10 @@ export class Minion {
         appearance.formation,
         appearance.scaleMultiplier,
       );
+    }
+    if (this.staffFx && this.liteStaffFx) {
+      for (const spark of this.staffFx.sparks) spark.setEnabled(false);
+      this.staffFx.aura?.setEnabled(false);
     }
   }
 
@@ -886,7 +895,7 @@ export class Minion {
 
     this.applyTurn(dt);
 
-    if (this.staffFx) updateStaffFx(this.staffFx, dt);
+    if (this.staffFx) updateStaffFx(this.staffFx, dt, this.liteStaffFx);
     this.formationBuff?.update(dt);
     // 待机眨眼（行走时也保留，更自然）
     this.updateBlink(dt);

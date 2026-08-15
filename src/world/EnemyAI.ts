@@ -48,6 +48,8 @@ export interface EnemyAIOptions {
   burstCount?: number;
   /** 连发间隔（秒，默认 0.16） */
   burstInterval?: number;
+  /** 满血时隐藏血条，受击后再显示 */
+  hideHealthUntilHit?: boolean;
 }
 
 /**
@@ -129,6 +131,10 @@ export class EnemyAI {
       height: 0.11 * Math.max(1, Math.sqrt(hpScale)),
     });
 
+    if (options.hideHealthUntilHit) {
+      this.healthBar.setVisible(false);
+    }
+
     // 绑定 Minion 受击事件
     this.enemy.onTakeDamage = (amount) => this.takeDamage(amount);
   }
@@ -136,6 +142,7 @@ export class EnemyAI {
   takeDamage(amount: number): void {
     if (this.isDead) return;
 
+    this.healthBar.setVisible(true);
     this.healthBar.takeDamage(amount);
 
     // 受击时激怒敌人拉起仇恨
@@ -273,10 +280,16 @@ export class EnemyAI {
     }
 
     // ── 分支 2：远程施法敌军 (有法杖) ──────────────────────────────
-    // 远程敌军永远锁定主角！
+    if (!isAggro) {
+      this.windupTimer = 0;
+      this.burstLeft = 0;
+      this.doPatrol(dt, ePos, allEnemies);
+      return;
+    }
+
     this.isAggroLocked = true;
 
-    if (this.cooldownTimer <= 0 && this.windupTimer <= 0) {
+    if (this.cooldownTimer <= 0 && this.windupTimer <= 0 && this.burstLeft <= 0) {
       this.windupTimer = this.windupDuration;
       this.patrolDir = Math.random() < 0.5 ? 1 : -1;
     }

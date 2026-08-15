@@ -62,7 +62,6 @@ export class SpatialAxesGrid {
 
     createAxisLines(scene, this.root, extents);
     createTickMarks(scene, this.root, extents, step);
-    createTickPoints(scene, this.root, extents, step);
     createAxisLabels(scene, this.root, extents);
     createMeterLabels(scene, this.root, extents, step, majorEvery);
 

@@ -69,9 +69,11 @@ export function addStandardLighting(
 
   const shadowGen = new ShadowGenerator(shadow.mapSize ?? 1024, dir);
   shadowGen.usePercentageCloserFiltering = true;
-  shadowGen.filteringQuality = ShadowGenerator.QUALITY_MEDIUM;
+  shadowGen.filteringQuality = ShadowGenerator.QUALITY_LOW;
   shadowGen.bias = 0.0005;
   shadowGen.normalBias = 0.01;
+  const shadowMap = shadowGen.getShadowMap();
+  if (shadowMap) shadowMap.refreshRate = 4;
 
   dir.autoUpdateExtends = false;
   const h = shadow.half;
