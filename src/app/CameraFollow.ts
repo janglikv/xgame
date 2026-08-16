@@ -1,6 +1,6 @@
 import { Vector3, type ArcRotateCamera } from '@babylonjs/core';
 import { lockFixedOrbit } from '../world/shared/sceneBasics';
-import type { CameraMode } from '../storage/settingsState';
+import { FIXED_CAMERA, type CameraMode } from '../storage/settingsState';
 
 /** 镜头注视点平滑跟随角色 */
 export class CameraFollow {
@@ -25,8 +25,9 @@ export class CameraFollow {
   }
 
   /** 切换世界或重置时，避免注视点跳变 */
-  snapTo(getFocus: (out: Vector3) => void): void {
+  snapTo(getFocus: (out: Vector3) => void, cameraMode: CameraMode = 'fixed'): void {
     getFocus(this.focusPoint);
+    this.applyFixedFocus(cameraMode);
     this.camFollowTarget.copyFrom(this.focusPoint);
   }
 
@@ -37,6 +38,7 @@ export class CameraFollow {
     cameraMode: CameraMode,
   ): void {
     getFocus(this.focusPoint);
+    this.applyFixedFocus(cameraMode);
     const jumpX = this.focusPoint.x - this.camFollowTarget.x;
     const jumpZ = this.focusPoint.z - this.camFollowTarget.z;
     // 复活/切场景瞬移：直接咬住，避免镜头先拽回死亡点再慢慢跟过去
@@ -61,5 +63,11 @@ export class CameraFollow {
     if (cameraMode === 'fixed') {
       lockFixedOrbit(camera);
     }
+  }
+
+  /** 固定镜头把注视点从胸口压向小腿，避免脚被裁出画面 */
+  private applyFixedFocus(cameraMode: CameraMode): void {
+    if (cameraMode !== 'fixed') return;
+    this.focusPoint.y *= FIXED_CAMERA.focusHeightScale;
   }
 }

@@ -9,9 +9,11 @@ import {
   Vector3,
   type Engine,
 } from '@babylonjs/core';
+import { getGraphicsPreset } from '../../storage/graphicsQuality';
 import {
   FIXED_CAMERA,
   FREE_CAMERA_FOV,
+  loadSettingsState,
   type CameraMode,
 } from '../../storage/settingsState';
 import { Minion } from '../Minion';
@@ -67,13 +69,17 @@ export function addStandardLighting(
   dir.position = new Vector3(12, 22, 14);
   dir.intensity = 1.25;
 
-  const shadowGen = new ShadowGenerator(shadow.mapSize ?? 1024, dir);
+  const gfx = getGraphicsPreset(loadSettingsState().graphicsQuality);
+  const shadowGen = new ShadowGenerator(
+    shadow.mapSize ?? gfx.shadowMapSize,
+    dir,
+  );
   shadowGen.usePercentageCloserFiltering = true;
-  shadowGen.filteringQuality = ShadowGenerator.QUALITY_LOW;
+  shadowGen.filteringQuality = gfx.shadowQuality;
   shadowGen.bias = 0.0005;
   shadowGen.normalBias = 0.01;
   const shadowMap = shadowGen.getShadowMap();
-  if (shadowMap) shadowMap.refreshRate = 4;
+  if (shadowMap) shadowMap.refreshRate = gfx.shadowRefresh;
 
   dir.autoUpdateExtends = false;
   const h = shadow.half;

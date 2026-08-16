@@ -20,6 +20,8 @@ import {
   LEVEL1_LANDING_Z,
   clampLevel1Position,
 } from '../world/level1/config';
+import { Level2World } from '../world/level2/Level2World';
+import { LEVEL2_LANDING_X, LEVEL2_LANDING_Z } from '../world/level2/config';
 import type { Minion, MinionAppearance } from '../world/Minion';
 import type { MinionPhysicsProxy } from '../world/physics/MinionPhysicsProxy';
 import type { CameraFollow } from './CameraFollow';
@@ -68,9 +70,19 @@ export class WorldRouter {
   private readonly spawns: Record<WorldId, { x: number; z: number }> = {
     hub: { x: 0, z: -5.4 },
     level1: { x: LEVEL1_LANDING_X, z: LEVEL1_LANDING_Z },
+    level2: { x: LEVEL2_LANDING_X, z: LEVEL2_LANDING_Z },
   };
 
   constructor(private readonly ctx: WorldRouterContext) {}
+
+  /** 丢掉未激活世界，下次进入会按当前画质重建 */
+  dropInactive(): void {
+    for (const [id, world] of this.worlds) {
+      if (id === this.activeId) continue;
+      this.worlds.delete(id);
+      world.dispose();
+    }
+  }
 
   get active(): GameWorld {
     const w = this.worlds.get(this.activeId);
@@ -276,6 +288,24 @@ export class WorldRouter {
       throw new Error('WorldRouter: hub must be created via bootstrapHub');
     }
 
+    if (id === 'level2') {
+      const hub = this.getHub();
+      const app =
+        appearance ?? hub?.getAppearance() ?? defaultAppearanceFallback();
+      const spawn = this.spawns.level2;
+      const level2 = await Level2World.create(this.ctx.engine, {
+        appearance: app,
+        cameraMode: this.ctx.getCameraMode(),
+        initialX: spawn.x,
+        initialZ: spawn.z,
+        getIsInvincible: this.ctx.getIsInvincible,
+        onRequestLandingWarp: this.ctx.onLandingWarp,
+      });
+      this.wireWorld(level2);
+      this.worlds.set('level2', level2);
+      return level2;
+    }
+
     if (id === 'level1') {
       const hub = this.getHub();
       const app =
@@ -298,7 +328,11 @@ export class WorldRouter {
   }
 
   private wireWorld(world: GameWorld): void {
-    if (world instanceof HubWorld || world instanceof Level1World) {
+    if (
+      world instanceof HubWorld ||
+      world instanceof Level1World ||
+      world instanceof Level2World
+    ) {
       world.setMovePersistenceHandlers({
         onMoved: this.ctx.onPlayerMoved,
         onStopped: this.ctx.onPlayerStopped,
@@ -313,8 +347,9 @@ export class WorldRouter {
     const focus = new Vector3();
     world.getPlayer().getFocusPoint(focus);
     world.camera.setTarget(focus);
-    this.ctx.cameraFollow.snapTo((out) =>
-      world.getPlayer().getFocusPoint(out),
+    this.ctx.cameraFollow.snapTo(
+      (out) => world.getPlayer().getFocusPoint(out),
+      this.ctx.getCameraMode(),
     );
   }
 }

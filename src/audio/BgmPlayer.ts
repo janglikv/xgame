@@ -1,5 +1,7 @@
-/** 公共目录下的背景乐 */
-const TRACKS = ['/audio/Final_Coin_Drop.mp3'] as const;
+/** 大厅 / 关卡背景乐 */
+export const HUB_BGM = '/audio/Waiting_at_the_Gateway.mp3';
+export const LEVEL1_BGM = '/audio/Final_Coin_Drop.mp3';
+export const LEVEL2_BGM = '/audio/One_More_Jump.mp3';
 
 const DEFAULT_VOLUME = 0.35;
 
@@ -12,6 +14,7 @@ export class BgmPlayer {
   private enabled = true;
   private unlocked = false;
   private unlockBound = false;
+  private src = HUB_BGM;
 
   constructor() {
     this.audio.preload = 'auto';
@@ -37,6 +40,12 @@ export class BgmPlayer {
     return this.enabled;
   }
 
+  setTrack(src: string): void {
+    if (this.src === src) return;
+    this.src = src;
+    if (this.enabled && this.unlocked) void this.playCurrent(true);
+  }
+
   setEnabled(enabled: boolean): void {
     this.enabled = enabled;
     if (!enabled) {
@@ -52,9 +61,9 @@ export class BgmPlayer {
     this.audio.load();
   }
 
-  private async playCurrent(): Promise<void> {
-    const src = TRACKS[0];
-    if (!this.audio.src.endsWith(src)) {
+  private async playCurrent(forceReload = false): Promise<void> {
+    const src = this.src;
+    if (forceReload || !this.audio.src.endsWith(src)) {
       this.audio.src = src;
     }
     try {

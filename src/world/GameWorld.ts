@@ -6,7 +6,7 @@ import type { MinionPhysicsProxy } from './physics/MinionPhysicsProxy';
 import type { SpellProjectileSystem } from './SpellProjectileSystem';
 
 /** 可切换的世界 ID（存档兼容旧值 `blank` → `level1`） */
-export type WorldId = 'hub' | 'level1';
+export type WorldId = 'hub' | 'level1' | 'level2';
 
 /** 世界切换请求（由世界 update 返回，由 GameApp 执行） */
 export type WorldTransition =

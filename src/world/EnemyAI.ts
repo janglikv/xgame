@@ -50,6 +50,10 @@ export interface EnemyAIOptions {
   burstInterval?: number;
   /** 满血时隐藏血条，受击后再显示 */
   hideHealthUntilHit?: boolean;
+  /** 远程子弹基准速度（最终还会按体型反比；默认 4.5） */
+  projectileSpeed?: number;
+  /** 击败时回调（Boss 开门等） */
+  onDefeated?: () => void;
 }
 
 /**
@@ -78,6 +82,7 @@ export class EnemyAI {
   private attackCooldown: number;
   private spellStyle: StaffStyle;
   private groupState?: GroupAggroState;
+  private readonly projectileSpeed: number;
   private readonly burstCount: number;
   private readonly burstInterval: number;
   private burstLeft = 0;
@@ -91,6 +96,7 @@ export class EnemyAI {
   private isAggroLocked = false;
   /** 是否处于击败死亡状态 */
   private isDead = false;
+  private readonly onDefeated?: () => void;
 
   constructor(
     enemy: Minion,
@@ -116,6 +122,8 @@ export class EnemyAI {
       options.attackCooldown ?? (enemy.hasStaff() ? 1.8 : 1.0);
     this.spellStyle = options.spellStyle ?? 'flame';
     this.groupState = options.groupState;
+    this.projectileSpeed = options.projectileSpeed ?? 4.5;
+    this.onDefeated = options.onDefeated;
     this.burstCount = Math.max(1, Math.floor(options.burstCount ?? 1));
     this.burstInterval = options.burstInterval ?? 0.16;
 
@@ -164,6 +172,7 @@ export class EnemyAI {
     this.enemyPhys.setHorizontalVelocity(0, 0);
     // 关掉物理胶囊，避免隐形尸体继续挡路
     this.enemyPhys.dispose();
+    this.onDefeated?.();
   }
 
   /** 是否已被击败（死后不再刷新） */
@@ -474,7 +483,13 @@ export class EnemyAI {
         : this.enemy.getStaffForwardVector();
 
     playSfx('/audio/enemy_bullet_fire.mp3', 0.5, 90);
-    this.spellSystem.spawnOrb(tipPos, shootDir, this.spellStyle, this.enemy, 4.5);
+    this.spellSystem.spawnOrb(
+      tipPos,
+      shootDir,
+      this.spellStyle,
+      this.enemy,
+      this.projectileSpeed,
+    );
     this.enemy.triggerStaffShootFx();
   }
 

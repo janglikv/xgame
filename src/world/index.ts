@@ -21,3 +21,4 @@ export {
   LEVEL1_PAD_Z,
   clampLevel1Position,
 } from './level1/config';
+export { Level2World } from './level2/Level2World';

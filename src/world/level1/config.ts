@@ -17,6 +17,9 @@ export const LEVEL1_FLOOR_EXTEND = 10;
  */
 export const LEVEL1_PAD_X = 0;
 export const LEVEL1_PAD_Z = -7;
+/** Boss 死后出现的通往第二关传送阵（Boss 落点北侧） */
+export const LEVEL1_BOSS_EXIT_PAD_X = 0;
+export const LEVEL1_BOSS_EXIT_PAD_Z = 17;
 
 /**
  * 进关/回关落地点：3×3 方围内、阵北侧开口（阵外、不贴墙）。

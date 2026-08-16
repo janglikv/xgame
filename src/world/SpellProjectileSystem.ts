@@ -325,7 +325,7 @@ export class SpellProjectileSystem {
       position: finalSpawnPos.clone(),
       lastPos: finalSpawnPos.clone(),
       direction: dir,
-      speed,
+      speed: speed / Math.max(0.4, powerScale),
       shooter,
       style,
       posBuffer,

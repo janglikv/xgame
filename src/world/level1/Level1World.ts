@@ -1,6 +1,7 @@
 import { Vector3, type ArcRotateCamera, type Engine, type Scene } from '@babylonjs/core';
 import { playSfx } from '../../audio/Sfx';
-import type { CameraMode } from '../../storage/settingsState';
+import { getGraphicsPreset } from '../../storage/graphicsQuality';
+import { loadSettingsState, type CameraMode } from '../../storage/settingsState';
 import type {
   GameWorld,
   WorldActivateOptions,
@@ -38,6 +39,8 @@ import {
   LEVEL1_X_MIN,
   LEVEL1_Z_MAX,
   LEVEL1_Z_MIN,
+  LEVEL1_BOSS_EXIT_PAD_X,
+  LEVEL1_BOSS_EXIT_PAD_Z,
   LEVEL1_PAD_X,
   LEVEL1_PAD_Z,
   clampLevel1Position,
@@ -84,6 +87,7 @@ export class Level1World implements GameWorld {
   readonly floor: Floor;
   readonly spatialAxesGrid: SpatialAxesGrid;
   readonly teleportPad: TeleportPad;
+  readonly bossExitPad: TeleportPad;
 
   private readonly onRequestLandingWarp?: CreateLevel1WorldOptions['onRequestLandingWarp'];
   private readonly getIsInvincible?: () => boolean;
@@ -105,6 +109,7 @@ export class Level1World implements GameWorld {
     floor: Floor,
     spatialAxesGrid: SpatialAxesGrid,
     teleportPad: TeleportPad,
+    bossExitPad: TeleportPad,
     onRequestLandingWarp?: CreateLevel1WorldOptions['onRequestLandingWarp'],
     getIsInvincible?: () => boolean,
   ) {
@@ -120,6 +125,7 @@ export class Level1World implements GameWorld {
     this.floor = floor;
     this.spatialAxesGrid = spatialAxesGrid;
     this.teleportPad = teleportPad;
+    this.bossExitPad = bossExitPad;
     this.onRequestLandingWarp = onRequestLandingWarp;
     this.getIsInvincible = getIsInvincible;
   }
@@ -134,9 +140,10 @@ export class Level1World implements GameWorld {
     const half = LEVEL1_MAP_HALF;
     const shadowHalf =
       Math.max(LEVEL1_X_MAX, LEVEL1_Z_MAX) + LEVEL1_FLOOR_EXTEND + 4;
+    const gfx = getGraphicsPreset(loadSettingsState().graphicsQuality);
     const { shadowGen } = addStandardLighting(scene, {
       half: shadowHalf,
-      mapSize: 512,
+      mapSize: gfx.shadowMapSize,
     });
 
     const floor = new Floor(scene, shadowGen, {
@@ -169,6 +176,13 @@ export class Level1World implements GameWorld {
 
     const teleportPad = new TeleportPad(scene, LEVEL1_PAD_X, LEVEL1_PAD_Z);
     teleportPad.disarmUntilLeave();
+
+    const bossExitPad = new TeleportPad(
+      scene,
+      LEVEL1_BOSS_EXIT_PAD_X,
+      LEVEL1_BOSS_EXIT_PAD_Z,
+    );
+    bossExitPad.setVisible(false);
 
     const spawn = clampLevel1Spawn(
       options.initialX ?? LEVEL1_LANDING_X,
@@ -226,6 +240,8 @@ export class Level1World implements GameWorld {
       patrolAxis?: 'x' | 'z';
       attackRange?: number;
       burstCount?: number;
+      projectileSpeed?: number;
+      isBoss?: boolean;
     }[] = [
       // 1. 远程法术敌军 (共 2 名，左右各 1 名)
       { spawnX: -5.5, spawnZ: 3.0, groupState: wizardGroupState, rotY: Math.PI, staff: 'flame' },
@@ -250,15 +266,17 @@ export class Level1World implements GameWorld {
         patrolAxis: 'x',
         attackRange: 10,
         burstCount: 3,
+        projectileSpeed: 7,
+        isBoss: true,
       },
     ];
 
-    // 4. Boss 周围一圈 12 名缩小远程小兵
+    // 4. Boss 两侧各 1 名缩小远程小兵
     {
       const ringR = 3.4;
-      const addScale = 0.55;
-      for (let i = 0; i < 12; i++) {
-        const ang = (i * Math.PI) / 6;
+      const addScale = 1.1;
+      for (let i = 0; i < 2; i++) {
+        const ang = Math.PI / 2 + i * Math.PI;
         enemyConfigs.push({
           spawnX: Math.sin(ang) * ringR,
           spawnZ: 15 + Math.cos(ang) * ringR,
@@ -275,9 +293,18 @@ export class Level1World implements GameWorld {
 
     const enemies: Level1Enemy[] = enemyConfigs.map((cfg) => {
       const scale = cfg.scale ?? 1;
+      const wantShadow =
+        gfx.enemyShadows === 'all' ||
+        (gfx.enemyShadows === 'boss' && scale >= 2);
+      const liteStaff =
+        gfx.liteStaff === 'nonBoss'
+          ? scale < 2
+          : gfx.liteStaff === 'small'
+            ? scale < 1
+            : false;
       const eMinion = new Minion(scene, cfg.spawnX, cfg.spawnZ, {
         facePositiveX: false,
-        shadowGenerator: scale >= 2 ? shadowGen : undefined,
+        shadowGenerator: wantShadow ? shadowGen : undefined,
         face: 'fierce',
         bodyColor: 0x6e1b2b,
         hat: null,
@@ -285,10 +312,10 @@ export class Level1World implements GameWorld {
         formation: cfg.formation ?? null,
         scaleMultiplier: scale,
         combatTeam: 'enemy',
-        blinkIdle: false,
-        breathIdle: scale >= 2,
-        liteStaffFx: scale < 2,
-        lowPolyFlat: scale < 1,
+        blinkIdle: gfx.liteStaff === 'none',
+        breathIdle: !liteStaff,
+        liteStaffFx: liteStaff,
+        lowPolyFlat: gfx.smallLowPoly && scale < 1,
       });
       eMinion.setRotationY(cfg.rotY);
 
@@ -320,7 +347,13 @@ export class Level1World implements GameWorld {
         maxHp: cfg.maxHp,
         healthBarOffsetY: 1.55 * scale,
         burstCount: cfg.burstCount,
-        hideHealthUntilHit: scale < 1,
+        projectileSpeed: cfg.projectileSpeed,
+        hideHealthUntilHit: gfx.hideHealthUntilHit && scale < 1,
+        onDefeated: cfg.isBoss
+          ? () => {
+              bossExitPad.setVisible(true);
+            }
+          : undefined,
       });
 
       return { minion: eMinion, phys: ePhys, ai: eAI };
@@ -349,6 +382,7 @@ export class Level1World implements GameWorld {
       floor,
       spatialAxesGrid,
       teleportPad,
+      bossExitPad,
       options.onRequestLandingWarp,
       options.getIsInvincible,
     );
@@ -357,9 +391,6 @@ export class Level1World implements GameWorld {
       level1World.pendingRespawnToHub = true;
     };
 
-    minion.onFootstep = () => {
-      playSfx('/audio/player_walk.mp3', 0.16, 80);
-    };
     minion.onTakeDamage = (amount) => {
       playSfx('/audio/player_hit.mp3', 0.55);
       if (options.getIsInvincible?.()) return;
@@ -447,7 +478,11 @@ export class Level1World implements GameWorld {
   }
 
   getTeleportCharge01(): number {
-    return this.teleportPad.getVisualCharge01();
+    const hub = this.teleportPad.getVisualCharge01();
+    const boss = this.bossExitPad.isVisible()
+      ? this.bossExitPad.getVisualCharge01()
+      : 0;
+    return Math.max(hub, boss);
   }
 
   getDefaultLandingXZ(yaw?: number): { x: number; z: number } {
@@ -505,11 +540,13 @@ export class Level1World implements GameWorld {
     }
     // 出生在阵上：须先离开再站上才重新蓄力
     this.teleportPad.disarmUntilLeave();
+    if (this.bossExitPad.isVisible()) this.bossExitPad.disarmUntilLeave();
   }
 
   deactivate(): void {
     this.detachCamera();
     this.teleportPad.resetCharge();
+    this.bossExitPad.resetCharge();
   }
 
   update(ctx: WorldFrameContext): WorldTransition {
@@ -559,9 +596,15 @@ export class Level1World implements GameWorld {
 
     if (!isDead) {
       const p = this.minion.root.position;
-      const onPad = this.teleportPad.contains(p.x, p.z);
-      if (this.teleportPad.update(dt, onPad && !menuOpen)) {
+      const onHubPad = this.teleportPad.contains(p.x, p.z);
+      if (this.teleportPad.update(dt, onHubPad && !menuOpen)) {
         return { type: 'goto', world: 'hub' };
+      }
+      if (this.bossExitPad.isVisible()) {
+        const onBossPad = this.bossExitPad.contains(p.x, p.z);
+        if (this.bossExitPad.update(dt, onBossPad && !menuOpen)) {
+          return { type: 'goto', world: 'level2' };
+        }
       }
     }
 
@@ -574,6 +617,7 @@ export class Level1World implements GameWorld {
     this.spellSystem.dispose();
     this.healthPackSystem.dispose();
     this.teleportPad.dispose();
+    this.bossExitPad.dispose();
     this.minionPhys.dispose();
     for (const e of this.enemies) {
       e.phys.dispose();

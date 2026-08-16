@@ -194,6 +194,19 @@ export class TeleportPad {
     return dx * dx + dz * dz <= this.radius * this.radius;
   }
 
+  setVisible(visible: boolean): void {
+    this.root.setEnabled(visible);
+    if (!visible) {
+      this.occupySfx.stop();
+      this.charge = 0;
+      this.visualCharge = 0;
+    }
+  }
+
+  isVisible(): boolean {
+    return this.root.isEnabled();
+  }
+
   /** 传送落地后调用：必须先离开再站上才重新蓄力 */
   disarmUntilLeave(): void {
     this.requireLeave = true;

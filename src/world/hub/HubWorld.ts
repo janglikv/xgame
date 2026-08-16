@@ -136,7 +136,6 @@ export class HubWorld implements GameWorld {
 
     const { shadowGen } = addStandardLighting(scene, {
       half: 32,
-      mapSize: 2048,
     });
 
     const initialFloorSurface = loadFloorSurfaceState();
@@ -240,9 +239,6 @@ export class HubWorld implements GameWorld {
       hubWorld.respawnNearPad();
     };
 
-    minion.onFootstep = () => {
-      playSfx('/audio/player_walk.mp3', 0.16, 80);
-    };
     minion.onTakeDamage = (amount) => {
       playSfx('/audio/player_hit.mp3', 0.55);
       playerHealthBar.takeDamage(amount);

@@ -9,6 +9,7 @@ export type WorldMode = WorldId;
 function normalizeWorldId(raw: string | null): WorldId {
   // 旧存档 'blank' → level1
   if (raw === 'level1' || raw === 'blank') return 'level1';
+  if (raw === 'level2') return 'level2';
   return 'hub';
 }
 

@@ -3,10 +3,12 @@ import {
   AdvancedDynamicTexture,
   Checkbox,
   Control,
+  Grid,
   Rectangle,
   StackPanel,
   TextBlock,
 } from '@babylonjs/gui';
+import { type GraphicsQuality } from '../storage/graphicsQuality';
 import type { CameraMode } from '../storage/settingsState';
 
 /**
@@ -34,6 +36,8 @@ export interface SettingsPanelDeps {
   setIsInvincible: (invincible: boolean) => void;
   getBgmEnabled: () => boolean;
   setBgmEnabled: (enabled: boolean) => void;
+  getGraphicsQuality: () => GraphicsQuality;
+  setGraphicsQuality: (quality: GraphicsQuality) => void;
   getCameraMode: () => CameraMode;
   setCameraMode: (mode: CameraMode) => void;
   getCameraInfo: () => SettingsCameraInfo;
@@ -57,6 +61,10 @@ export class SettingsPanel {
   private fpsCheck!: Checkbox;
   private bgmCheck!: Checkbox;
   private invincibleCheck!: Checkbox;
+  private gfxLowCheck!: Checkbox;
+  private gfxMidCheck!: Checkbox;
+  private gfxHighCheck!: Checkbox;
+  private gfxHint!: TextBlock;
   private freeCheck!: Checkbox;
   private fixedCheck!: Checkbox;
   private camAlpha!: TextBlock;
@@ -67,6 +75,7 @@ export class SettingsPanel {
   private opened = false;
   /** 避免互斥勾选时递归触发 */
   private syncingModeUi = false;
+  private syncingGfxUi = false;
   private disposed = false;
 
   constructor(
@@ -112,114 +121,114 @@ export class SettingsPanel {
     this.tex.addControl(this.panel);
 
     const stack = new StackPanel('settingsStack');
-    stack.width = '520px';
+    stack.width = '480px';
     stack.isVertical = true;
     stack.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
     stack.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
-    stack.paddingTop = '28px';
-    stack.paddingBottom = '28px';
-    stack.paddingLeft = '40px';
-    stack.paddingRight = '40px';
+    stack.paddingTop = '48px';
+    stack.paddingBottom = '16px';
+    stack.paddingLeft = '20px';
+    stack.paddingRight = '20px';
     this.panel.addControl(stack);
 
     stack.addControl(
-      this.makeText('title', '设置', {
-        fontSize: 26,
+      this.makeText('title', '设置  ·  Esc 关闭', {
+        fontSize: 18,
         fontWeight: '700',
-        height: 36,
+        height: 24,
         color: 'rgba(255,255,255,0.94)',
       }),
     );
-    stack.addControl(
-      this.makeText('hint', '按 Esc 关闭', {
-        fontSize: 13,
-        height: 20,
-        color: 'rgba(255,255,255,0.45)',
-      }),
-    );
 
-    // —— 战斗与功能 ——
-    stack.addControl(this.spacer(16));
-    stack.addControl(
-      this.makeText('secGameplay', '战斗与功能', {
-        fontSize: 13,
-        height: 24,
-        color: 'rgba(255,255,255,0.45)',
-        fontWeight: '600',
-      }),
-    );
-    stack.addControl(this.spacer(4));
-
-    const invincibleRow = this.makeToggleRow(
+    this.addSection(stack, 'secGameplay', '功能');
+    const invincible = this.makeMiniToggle(
       'invincibleRow',
-      '角色无敌（不受伤害）',
+      '无敌',
       this.deps.getIsInvincible(),
       (checked) => this.deps.setIsInvincible(checked),
     );
-    this.invincibleCheck = invincibleRow.check;
-    stack.addControl(invincibleRow.row);
-
-    const bgmRow = this.makeToggleRow(
+    this.invincibleCheck = invincible.check;
+    const bgm = this.makeMiniToggle(
       'bgmRow',
       '背景音乐',
       this.deps.getBgmEnabled(),
       (checked) => this.deps.setBgmEnabled(checked),
     );
-    this.bgmCheck = bgmRow.check;
-    stack.addControl(bgmRow.row);
+    this.bgmCheck = bgm.check;
+    stack.addControl(this.gridRow('fnRow', [invincible.row, bgm.row]));
 
-    // —— 显示 ——
-    stack.addControl(this.spacer(16));
-    stack.addControl(
-      this.makeText('secDisplay', '显示', {
-        fontSize: 13,
-        height: 24,
-        color: 'rgba(255,255,255,0.45)',
-        fontWeight: '600',
-      }),
+    this.addSection(stack, 'secGfx', '画质');
+    const gfxLow = this.makeMiniToggle(
+      'gfxLow',
+      '低',
+      this.deps.getGraphicsQuality() === 'low',
+      (checked) => {
+        if (this.syncingGfxUi) return;
+        if (checked) this.applyGfxFromUi('low');
+        else this.syncGfxChecks(this.deps.getGraphicsQuality());
+      },
     );
-    stack.addControl(this.spacer(4));
+    this.gfxLowCheck = gfxLow.check;
+    const gfxMid = this.makeMiniToggle(
+      'gfxMid',
+      '中',
+      this.deps.getGraphicsQuality() === 'medium',
+      (checked) => {
+        if (this.syncingGfxUi) return;
+        if (checked) this.applyGfxFromUi('medium');
+        else this.syncGfxChecks(this.deps.getGraphicsQuality());
+      },
+    );
+    this.gfxMidCheck = gfxMid.check;
+    const gfxHigh = this.makeMiniToggle(
+      'gfxHigh',
+      '高',
+      this.deps.getGraphicsQuality() === 'high',
+      (checked) => {
+        if (this.syncingGfxUi) return;
+        if (checked) this.applyGfxFromUi('high');
+        else this.syncGfxChecks(this.deps.getGraphicsQuality());
+      },
+    );
+    this.gfxHighCheck = gfxHigh.check;
+    stack.addControl(this.gridRow('gfxRow', [gfxLow.row, gfxMid.row, gfxHigh.row]));
+    this.gfxHint = this.makeText(
+      'gfxHint',
+      '阴影/分辨率即时；模型下次进场景更新',
+      {
+        fontSize: 11,
+        height: 16,
+        color: 'rgba(255,255,255,0.36)',
+      },
+    );
+    stack.addControl(this.gfxHint);
 
-    const fpsRow = this.makeToggleRow(
+    this.addSection(stack, 'secDisplay', '显示');
+    const fps = this.makeMiniToggle(
       'fpsRow',
-      '显示 FPS',
+      'FPS',
       this.deps.getShowFps(),
       (checked) => this.deps.setShowFps(checked),
     );
-    this.fpsCheck = fpsRow.check;
-    stack.addControl(fpsRow.row);
-
-    const gridRow = this.makeToggleRow(
+    this.fpsCheck = fps.check;
+    const grid = this.makeMiniToggle(
       'gridRow',
-      '显示坐标系网格',
+      '坐标网格',
       this.deps.getShowGrid(),
       (checked) => this.deps.setShowGrid(checked),
     );
-    stack.addControl(gridRow.row);
-
-    const collidersRow = this.makeToggleRow(
+    const colliders = this.makeMiniToggle(
       'collidersRow',
-      '显示隐形盒体（调试）',
+      '碰撞盒',
       this.deps.getShowColliders(),
       (checked) => this.deps.setShowColliders(checked),
     );
-    stack.addControl(collidersRow.row);
+    stack.addControl(this.gridRow('visRow', [fps.row, grid.row, colliders.row]));
 
-    // —— 镜头模式 ——
-    stack.addControl(this.spacer(16));
-    stack.addControl(
-      this.makeText('secMode', '镜头模式', {
-        fontSize: 13,
-        height: 24,
-        color: 'rgba(255,255,255,0.45)',
-        fontWeight: '600',
-      }),
-    );
-    stack.addControl(this.spacer(4));
-
-    const fixedRow = this.makeToggleRow(
+    this.addSection(stack, 'secMode', '镜头');
+    const fixed = this.makeMiniToggle(
       'fixedCamRow',
-      '俯视镜头',
+      '俯视',
       this.deps.getCameraMode() === 'fixed',
       (checked) => {
         if (this.syncingModeUi) return;
@@ -227,12 +236,10 @@ export class SettingsPanel {
         else this.applyModeFromUi('free');
       },
     );
-    this.fixedCheck = fixedRow.check;
-    stack.addControl(fixedRow.row);
-
-    const freeRow = this.makeToggleRow(
+    this.fixedCheck = fixed.check;
+    const free = this.makeMiniToggle(
       'freeCamRow',
-      '自由镜头（调试）',
+      '自由',
       this.deps.getCameraMode() === 'free',
       (checked) => {
         if (this.syncingModeUi) return;
@@ -240,56 +247,47 @@ export class SettingsPanel {
         else this.applyModeFromUi('fixed');
       },
     );
-    this.freeCheck = freeRow.check;
-    stack.addControl(freeRow.row);
-
+    this.freeCheck = free.check;
+    stack.addControl(this.gridRow('camRow', [fixed.row, free.row]));
     this.camModeHint = this.makeText(
       'modeHint',
       this.modeHintText(this.deps.getCameraMode()),
       {
-        fontSize: 12,
-        height: 24,
-        color: 'rgba(255,255,255,0.38)',
+        fontSize: 11,
+        height: 16,
+        color: 'rgba(255,255,255,0.36)',
       },
     );
-    stack.addControl(this.spacer(2));
     stack.addControl(this.camModeHint);
 
-    // —— 镜头读数 ——
-    stack.addControl(this.spacer(16));
-    stack.addControl(
-      this.makeText('secCam', '镜头参数', {
-        fontSize: 13,
-        height: 24,
-        color: 'rgba(255,255,255,0.45)',
-        fontWeight: '600',
-      }),
-    );
-    stack.addControl(this.spacer(4));
-
-    this.camAlpha = this.makeMonoLine(stack, 'camAlpha', '方位角 α');
-    this.camBeta = this.makeMonoLine(stack, 'camBeta', '仰角 β');
-    this.camRadius = this.makeMonoLine(stack, 'camRadius', '距离');
-    this.camTarget = this.makeMonoLine(stack, 'camTarget', '注视点');
-
-    stack.addControl(this.spacer(16));
-    stack.addControl(
-      this.makeText(
-        'foot',
-        '俯视：角色居中，WASD 相对镜头移动；自由：轨道拖拽；Esc 键关闭',
-        {
-          fontSize: 12,
-          height: 28,
-          color: 'rgba(255,255,255,0.4)',
-        },
-      ),
-    );
+    this.addSection(stack, 'secCam', '镜头参数');
+    const camPair1 = this.gridRow('camPair1', []);
+    this.camAlpha = this.makeMonoCell(camPair1, 'camAlpha', 'α', 0);
+    this.camBeta = this.makeMonoCell(camPair1, 'camBeta', 'β', 1);
+    stack.addControl(camPair1);
+    const camPair2 = this.gridRow('camPair2', []);
+    this.camRadius = this.makeMonoCell(camPair2, 'camRadius', '距', 0);
+    this.camTarget = this.makeMonoCell(camPair2, 'camTarget', '点', 1);
+    stack.addControl(camPair2);
   }
 
   private modeHintText(mode: CameraMode): string {
     return mode === 'fixed'
-      ? '略倾俯视锁定：角色居中，可看侧身，不可拖拽'
-      : '调试用轨道相机：可拖拽旋转与滚轮缩放';
+      ? '俯视锁定，WASD 相对镜头'
+      : '可拖拽旋转 / 滚轮缩放';
+  }
+
+  private applyGfxFromUi(quality: GraphicsQuality): void {
+    this.deps.setGraphicsQuality(quality);
+    this.syncGfxChecks(quality);
+  }
+
+  private syncGfxChecks(quality: GraphicsQuality): void {
+    this.syncingGfxUi = true;
+    this.gfxLowCheck.isChecked = quality === 'low';
+    this.gfxMidCheck.isChecked = quality === 'medium';
+    this.gfxHighCheck.isChecked = quality === 'high';
+    this.syncingGfxUi = false;
   }
 
   private applyModeFromUi(mode: CameraMode): void {
@@ -305,7 +303,33 @@ export class SettingsPanel {
     this.syncingModeUi = false;
   }
 
-  private makeToggleRow(
+  private addSection(parent: StackPanel, name: string, title: string): void {
+    parent.addControl(this.spacer(10));
+    parent.addControl(
+      this.makeText(name, title, {
+        fontSize: 11,
+        height: 16,
+        color: 'rgba(255,255,255,0.42)',
+        fontWeight: '600',
+      }),
+    );
+  }
+
+  private gridRow(name: string, cells: Control[]): Grid {
+    const cols = Math.max(cells.length, 2);
+    const g = new Grid(name);
+    g.width = '100%';
+    g.height = '28px';
+    for (let i = 0; i < cols; i++) g.addColumnDefinition(1 / cols);
+    g.addRowDefinition(1);
+    cells.forEach((cell, i) => {
+      cell.width = '100%';
+      g.addControl(cell, 0, i);
+    });
+    return g;
+  }
+
+  private makeMiniToggle(
     name: string,
     label: string,
     checked: boolean,
@@ -313,24 +337,25 @@ export class SettingsPanel {
   ): { row: Rectangle; check: Checkbox } {
     const row = new Rectangle(name);
     row.width = '100%';
-    row.height = '32px';
+    row.height = '26px';
     row.thickness = 0;
     row.background = 'transparent';
 
-    const fpsLabel = this.makeText(`${name}_label`, label, {
-      fontSize: 15,
-      height: 32,
+    const tb = this.makeText(`${name}_label`, label, {
+      fontSize: 13,
+      height: 26,
       color: 'rgba(255,255,255,0.92)',
     });
-    fpsLabel.width = '70%';
-    fpsLabel.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
-    row.addControl(fpsLabel);
+    tb.width = '72%';
+    tb.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+    row.addControl(tb);
 
     const check = new Checkbox(`${name}_check`);
-    check.width = '20px';
-    check.height = '20px';
+    check.width = '16px';
+    check.height = '16px';
     check.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
     check.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
+    check.paddingRight = '4px';
     check.color = '#34d399';
     check.background = 'rgba(255,255,255,0.12)';
     check.isChecked = checked;
@@ -378,43 +403,44 @@ export class SettingsPanel {
     return t;
   }
 
-  private makeMonoLine(
-    parent: StackPanel,
+  private makeMonoCell(
+    parent: Grid,
     name: string,
     key: string,
+    col: number,
   ): TextBlock {
-    const row = new Rectangle(`${name}Row`);
-    row.width = '100%';
-    row.height = '24px';
-    row.thickness = 0;
-    row.background = 'transparent';
-    parent.addControl(row);
+    const cell = new Rectangle(`${name}Row`);
+    cell.width = '100%';
+    cell.height = '20px';
+    cell.thickness = 0;
+    cell.background = 'transparent';
+    parent.addControl(cell, 0, col);
 
     const keyTb = new TextBlock(`${name}Key`);
     keyTb.text = key;
-    keyTb.color = 'rgba(255,255,255,0.45)';
-    keyTb.fontSize = 13;
-    keyTb.width = '120px';
-    keyTb.height = '24px';
+    keyTb.color = 'rgba(255,255,255,0.4)';
+    keyTb.fontSize = 11;
+    keyTb.width = '22px';
+    keyTb.height = '20px';
     keyTb.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
     keyTb.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
     keyTb.textVerticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
     keyTb.fontFamily = UI_FONT;
-    row.addControl(keyTb);
+    cell.addControl(keyTb);
 
     const val = new TextBlock(`${name}Val`);
     val.text = '-';
-    val.color = 'rgba(255,255,255,0.92)';
-    val.fontSize = 13;
-    val.height = '24px';
-    val.left = '120px';
-    val.width = '70%';
+    val.color = 'rgba(255,255,255,0.88)';
+    val.fontSize = 11;
+    val.height = '20px';
+    val.left = '22px';
+    val.width = '80%';
     val.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
     val.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
     val.textVerticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
     val.fontFamily = MONO_FONT;
     val.textWrapping = true;
-    row.addControl(val);
+    cell.addControl(val);
     return val;
   }
 
@@ -437,6 +463,7 @@ export class SettingsPanel {
       this.fpsCheck.isChecked = this.deps.getShowFps();
       this.bgmCheck.isChecked = this.deps.getBgmEnabled();
       this.invincibleCheck.isChecked = this.deps.getIsInvincible();
+      this.syncGfxChecks(this.deps.getGraphicsQuality());
       this.syncModeChecks(this.deps.getCameraMode());
       this.camModeHint.text = this.modeHintText(this.deps.getCameraMode());
       this.refreshCamera();
@@ -467,10 +494,10 @@ export class SettingsPanel {
 
   private refreshCamera(): void {
     const c = this.deps.getCameraInfo();
-    this.camAlpha.text = `${fmt(radToDeg(c.alpha), 1)}\u00b0  (${fmt(c.alpha, 3)} rad)`;
-    this.camBeta.text = `${fmt(radToDeg(c.beta), 1)}\u00b0  (${fmt(c.beta, 3)} rad)`;
+    this.camAlpha.text = `${fmt(radToDeg(c.alpha), 1)}\u00b0`;
+    this.camBeta.text = `${fmt(radToDeg(c.beta), 1)}\u00b0`;
     this.camRadius.text = fmt(c.radius, 2);
-    this.camTarget.text = `(${fmt(c.targetX)}, ${fmt(c.targetY)}, ${fmt(c.targetZ)})`;
+    this.camTarget.text = `${fmt(c.targetX, 1)},${fmt(c.targetY, 1)},${fmt(c.targetZ, 1)}`;
   }
 
   dispose(): void {

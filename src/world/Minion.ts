@@ -245,7 +245,7 @@ export class Minion {
 
   private walkPhase = 0;
   private walkWeight = 0;
-  private lastFootSign = 0;
+
   private targetYaw = 0;
   /** 呼吸相位（弧度），各实例随机错开 */
   private breathPhase = 0;
@@ -481,9 +481,6 @@ export class Minion {
 
   /** 受到伤害时的事件回调 */
   onTakeDamage?: (damage: number, dir?: Vector3) => void;
-  /** 左右脚切换着地时回调（主角脚步声） */
-  onFootstep?: () => void;
-
   /** 对角色施加伤害 */
   takeDamage(amount: number, dir?: Vector3): void {
     this.playHitReact(dir);
@@ -909,16 +906,6 @@ export class Minion {
       if (this.walkWeight > 0.01) {
         this.walkPhase += dt * Math.PI * 2 * Minion.WALK_HZ * this.walkWeight;
       }
-    }
-
-    if (moving && this.walkWeight > 0.35 && this.onFootstep && !this.isDeadState) {
-      const sign = Math.sin(this.walkPhase) >= 0 ? 1 : -1;
-      if (this.lastFootSign !== 0 && sign !== this.lastFootSign) {
-        this.onFootstep();
-      }
-      this.lastFootSign = sign;
-    } else if (!moving) {
-      this.lastFootSign = 0;
     }
 
     // 微弱呼吸：行走时减弱，避免盖过步态

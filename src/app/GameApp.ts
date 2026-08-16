@@ -7,6 +7,11 @@ import {
 import { saveMinionAppearanceState } from '../storage/minionAppearanceState';
 import { saveMinionState } from '../storage/minionState';
 import {
+  applyLiveShadowQuality,
+  getGraphicsPreset,
+  type GraphicsQuality,
+} from '../storage/graphicsQuality';
+import {
   loadSettingsState,
   saveSettingsState,
   type CameraMode,
@@ -21,7 +26,7 @@ import { MoveInput } from './MoveInput';
 import { PlayerCombatController } from './PlayerCombatController';
 import { TeleportFlow } from './TeleportFlow';
 import { WarpLanding } from './WarpLanding';
-import { BgmPlayer } from '../audio/BgmPlayer';
+import { BgmPlayer, HUB_BGM, LEVEL1_BGM, LEVEL2_BGM } from '../audio/BgmPlayer';
 import { WorldRouter } from './WorldRouter';
 
 const MOVE_SPEED = 2;
@@ -41,6 +46,7 @@ export class GameApp {
   private showColliders = false;
   private isInvincible = false;
   private bgmEnabled = true;
+  private graphicsQuality: GraphicsQuality = 'medium';
   private readonly bgm = new BgmPlayer();
 
   private readonly moveInput = new MoveInput();
@@ -68,10 +74,6 @@ export class GameApp {
       stencil: true,
       adaptToDeviceRatio: true,
     });
-    this.engine.setHardwareScalingLevel(
-      1 / Math.min(window.devicePixelRatio || 1, 2),
-    );
-
     const settings = loadSettingsState();
     this.cameraMode = settings.cameraMode;
     this.showFps = settings.showFps;
@@ -79,6 +81,8 @@ export class GameApp {
     this.showColliders = settings.showColliders;
     this.isInvincible = settings.isInvincible;
     this.bgmEnabled = settings.bgmEnabled;
+    this.graphicsQuality = settings.graphicsQuality;
+    this.applyHardwareScale();
     this.bgm.setEnabled(this.bgmEnabled);
     this.bgm.armUnlock();
 
@@ -104,6 +108,13 @@ export class GameApp {
         this.settingsPanel.rebind(world.scene);
         this.fpsOverlay.rebind(world.scene);
         applyCollidersVisibility(world.scene, this.showColliders);
+        this.bgm.setTrack(
+          world.id === 'hub'
+            ? HUB_BGM
+            : world.id === 'level2'
+              ? LEVEL2_BGM
+              : LEVEL1_BGM,
+        );
         if (meta.isInitialLoad) {
           this.teleportFlow.rebindScene(world.scene, false);
         }
@@ -173,6 +184,8 @@ export class GameApp {
         this.bgm.setEnabled(enabled);
         this.persistSettings();
       },
+      getGraphicsQuality: () => this.graphicsQuality,
+      setGraphicsQuality: (quality) => this.setGraphicsQuality(quality),
       getCameraMode: () => this.cameraMode,
       setCameraMode: (mode) => this.setCameraMode(mode),
       getCameraInfo: () => {
@@ -197,11 +210,14 @@ export class GameApp {
       const active = this.router.active;
       active.getPlayer().getFocusPoint(focus);
       active.camera.setTarget(focus);
-      this.cameraFollow.snapTo((out) => active.getPlayer().getFocusPoint(out));
+      this.cameraFollow.snapTo(
+        (out) => active.getPlayer().getFocusPoint(out),
+        this.cameraMode,
+      );
     }
 
-    if (savedWorld === 'level1') {
-      await this.router.goto('level1', {
+    if (savedWorld === 'level1' || savedWorld === 'level2') {
+      await this.router.goto(savedWorld, {
         restorePosition: true,
         isInitialLoad: true,
       });
@@ -396,7 +412,24 @@ export class GameApp {
       isInvincible: this.isInvincible,
       cameraMode: this.cameraMode,
       bgmEnabled: this.bgmEnabled,
+      graphicsQuality: this.graphicsQuality,
     });
+  }
+
+  private setGraphicsQuality(quality: GraphicsQuality): void {
+    if (this.graphicsQuality === quality) return;
+    this.graphicsQuality = quality;
+    this.applyHardwareScale();
+    this.router.forEach((w) => applyLiveShadowQuality(w.scene, quality));
+    this.router.dropInactive();
+    this.persistSettings();
+  }
+
+  private applyHardwareScale(): void {
+    const cap = getGraphicsPreset(this.graphicsQuality).dprCap;
+    this.engine.setHardwareScalingLevel(
+      1 / Math.min(window.devicePixelRatio || 1, cap),
+    );
   }
 }
 
