@@ -98,6 +98,14 @@ export class EnemyAI {
   private isDead = false;
   private readonly onDefeated?: () => void;
 
+  /** 绕行方向记忆偏置：1 表示偏右绕行，-1 表示偏左绕行，0 表示未锁定 */
+  private avoidanceBias = 0;
+  private avoidanceBiasTimer = 0;
+  private lastPos = new Vector3();
+  private stuckTimer = 0;
+  private unstuckDir: Vector3 | null = null;
+  private unstuckTimer = 0;
+
   constructor(
     enemy: Minion,
     enemyPhys: MinionPhysicsProxy,
@@ -186,6 +194,11 @@ export class EnemyAI {
     this.cooldownTimer = 0;
     this.windupTimer = 0;
     this.isAggroLocked = false;
+    this.avoidanceBias = 0;
+    this.avoidanceBiasTimer = 0;
+    this.stuckTimer = 0;
+    this.unstuckTimer = 0;
+    this.unstuckDir = null;
   }
 
   /** 每帧更新 AI 逻辑 */
@@ -233,15 +246,8 @@ export class EnemyAI {
       }
 
       if (dist > this.meleeRange) {
-        // 1. 追击玩家：面向玩家高速奔跑逼近
-        const normX = dx / (dist || 1);
-        const normZ = dz / (dist || 1);
-        const vx = normX * this.chaseSpeed;
-        const vz = normZ * this.chaseSpeed;
-
-        this.enemy.faceToward(vx, vz);
-        this.enemyPhys.setHorizontalVelocity(vx, vz);
-        this.enemy.update(dt, true);
+        // 1. 智能追击玩家：支持 Raycast 探针避障 + 沿墙切线滑行 + 拐角绕行
+        this.updateSmartChase(dt, ePos, pPos);
       } else {
         // 2. 进入近战范围：停下脚步，面对主角挥拳攻击！
         this.enemyPhys.setHorizontalVelocity(0, 0);
@@ -390,6 +396,207 @@ export class EnemyAI {
   }
 
   /**
+   * 判断 mesh 是否为墙壁或障碍物
+   */
+  private isObstacleMesh(mesh: unknown): boolean {
+    const m = mesh as {
+      isEnabled?: () => boolean;
+      isPickable?: boolean;
+      name?: string;
+      metadata?: { minion?: unknown; isColliderMesh?: boolean };
+    } | null;
+    if (!m || !m.isEnabled || !m.isEnabled() || !m.isPickable) return false;
+    const name = (m.name || '').toLowerCase();
+    if (name.includes('bullet') || name.includes('spell') || m.metadata?.minion) {
+      return false;
+    }
+    if (
+      (name.includes('floor') && !name.includes('wall')) ||
+      name.includes('ground') ||
+      name.includes('grid') ||
+      name.includes('axes') ||
+      name.includes('pad')
+    ) {
+      return false;
+    }
+    if (name.startsWith('phys') || m.metadata?.isColliderMesh === true) {
+      return false;
+    }
+    return (
+      name.includes('renderwall') ||
+      name.includes('wall') ||
+      name.includes('obstacle') ||
+      name.includes('pillar') ||
+      name.includes('podium') ||
+      name.includes('barrier')
+    );
+  }
+
+  /**
+   * 近战敌人智能追击：结合 Raycast 多角探针 + 沿墙切线滑行 (Wall Sliding) + 偏置记忆 + 紧急解卡
+   */
+  private updateSmartChase(dt: number, ePos: Vector3, pPos: Vector3): void {
+    const scene = this.enemy.root.getScene();
+
+    // 1. 记忆偏置计时衰减
+    if (this.avoidanceBiasTimer > 0) {
+      this.avoidanceBiasTimer -= dt;
+      if (this.avoidanceBiasTimer <= 0) {
+        this.avoidanceBias = 0;
+      }
+    }
+
+    // 2. 解卡状态处理 (Unstuck recovery)
+    if (this.unstuckTimer > 0) {
+      this.unstuckTimer -= dt;
+      if (this.unstuckDir) {
+        const vx = this.unstuckDir.x * this.chaseSpeed;
+        const vz = this.unstuckDir.z * this.chaseSpeed;
+        this.enemy.faceToward(vx, vz);
+        this.enemyPhys.setHorizontalVelocity(vx, vz);
+        this.enemy.update(dt, true);
+        return;
+      }
+    }
+
+    // 检测实际移动速度（防卡在凹角/狭缝）
+    const moveDist = Vector3.Distance(ePos, this.lastPos);
+    this.lastPos.copyFrom(ePos);
+    if (moveDist < 0.02 * (dt / 0.016)) {
+      this.stuckTimer += dt;
+      if (this.stuckTimer > 0.3) {
+        // 卡住了，尝试向 90° 侧向强制突破 0.4s
+        const sideSign = Math.random() < 0.5 ? 1 : -1;
+        const dx = pPos.x - ePos.x;
+        const dz = pPos.z - ePos.z;
+        this.unstuckDir = new Vector3(-dz * sideSign, 0, dx * sideSign);
+        if (this.unstuckDir.lengthSquared() > 1e-4) {
+          this.unstuckDir.normalize();
+        } else {
+          this.unstuckDir.set(1, 0, 0);
+        }
+        this.unstuckTimer = 0.4;
+        this.stuckTimer = 0;
+        this.avoidanceBias = sideSign;
+        this.avoidanceBiasTimer = 0.8;
+      }
+    } else {
+      this.stuckTimer = Math.max(0, this.stuckTimer - dt * 2);
+    }
+
+    // 3. 直奔玩家方向向量
+    const dirToPlayer = new Vector3(pPos.x - ePos.x, 0, pPos.z - ePos.z);
+    if (dirToPlayer.lengthSquared() > 1e-6) {
+      dirToPlayer.normalize();
+    } else {
+      dirToPlayer.set(0, 0, 1);
+    }
+
+    const origin = ePos.clone();
+    origin.y += 0.35; // 敌军胸口高度
+
+    // 4. 多角 Context Steering 探针测试
+    const baseAngle = Math.atan2(dirToPlayer.z, dirToPlayer.x);
+    const candidateOffsets = [
+      0,
+      Math.PI / 8,
+      -Math.PI / 8,
+      Math.PI / 4,
+      -Math.PI / 4,
+      (3 * Math.PI) / 8,
+      -(3 * Math.PI) / 8,
+      Math.PI / 2,
+      -Math.PI / 2,
+      (5 * Math.PI) / 8,
+      -(5 * Math.PI) / 8,
+      (3 * Math.PI) / 4,
+      -(3 * Math.PI) / 4,
+    ];
+
+    let bestDir = dirToPlayer.clone();
+    let maxScore = -9999;
+    let selectedOffset = 0;
+    let hitNormalForSliding: Vector3 | null = null;
+
+    for (const offset of candidateOffsets) {
+      const testAngle = baseAngle + offset;
+      const testDir = new Vector3(Math.cos(testAngle), 0, Math.sin(testAngle));
+
+      // 根据偏角决定探针长度：前向探更远 (1.1m)，大偏角探稍短 (0.7m)
+      const rayLen = 0.7 + 0.4 * Math.cos(offset);
+      const ray = new Ray(origin, testDir, rayLen);
+
+      const pickInfo = scene.pickWithRay(ray, (mesh) => this.isObstacleMesh(mesh));
+
+      let penalty = 0;
+      if (pickInfo && pickInfo.hit) {
+        const hitDist = pickInfo.distance;
+        penalty = Math.pow(Math.max(0, 1 - hitDist / rayLen), 1.5) * 3.0;
+
+        // 保存正面碰墙法线，用于 Wall Sliding
+        if (offset === 0) {
+          const norm = pickInfo.getNormal(true);
+          if (norm) {
+            hitNormalForSliding = new Vector3(norm.x, 0, norm.z);
+            if (hitNormalForSliding.lengthSquared() > 1e-4) {
+              hitNormalForSliding.normalize();
+            } else {
+              hitNormalForSliding = null;
+            }
+          }
+        }
+      }
+
+      // 目标契合度（与直指玩家方向的点积）
+      const dotTarget = Vector3.Dot(testDir, dirToPlayer);
+
+      // 偏置记忆奖励 (防止左右频繁抖动)
+      let biasBonus = 0;
+      if (this.avoidanceBias !== 0 && offset !== 0) {
+        const isRight = offset > 0;
+        if ((this.avoidanceBias > 0 && isRight) || (this.avoidanceBias < 0 && !isRight)) {
+          biasBonus = 0.35;
+        }
+      }
+
+      const score = dotTarget - penalty + biasBonus;
+
+      if (score > maxScore) {
+        maxScore = score;
+        bestDir = testDir;
+        selectedOffset = offset;
+      }
+    }
+
+    // 5. 更新绕行偏置记忆
+    if (Math.abs(selectedOffset) > 1e-3) {
+      this.avoidanceBias = selectedOffset > 0 ? 1 : -1;
+      this.avoidanceBiasTimer = 0.5;
+    }
+
+    // 6. 沿墙切线滑行 (Wall Sliding) 融合
+    if (hitNormalForSliding) {
+      const dotNorm = Vector3.Dot(bestDir, hitNormalForSliding);
+      if (dotNorm < 0) {
+        const tangent = bestDir.subtract(hitNormalForSliding.scale(dotNorm));
+        tangent.y = 0;
+        if (tangent.lengthSquared() > 1e-4) {
+          tangent.normalize();
+          bestDir = Vector3.Lerp(bestDir, tangent, 0.8).normalize();
+        }
+      }
+    }
+
+    // 7. 应用计算得出的绕路速度
+    const vx = bestDir.x * this.chaseSpeed;
+    const vz = bestDir.z * this.chaseSpeed;
+
+    this.enemy.faceToward(vx, vz);
+    this.enemyPhys.setHorizontalVelocity(vx, vz);
+    this.enemy.update(dt, true);
+  }
+
+  /**
    * 前向撞墙/障碍物 Raycast 检测：若巡逻前方 0.55 米处有墙体，自动反转踱步方向并转身
    */
   private checkWallCollisionTurnAround(): void {
@@ -410,27 +617,7 @@ export class EnemyAI {
     origin.y += 0.35; // 敌军胸口高度
 
     const ray = new Ray(origin, dirVec, 0.55);
-    const pickInfo = scene.pickWithRay(ray, (mesh) => {
-      if (!mesh.isEnabled() || !mesh.isPickable) return false;
-      const name = mesh.name.toLowerCase();
-      if (name.includes('bullet') || name.includes('spell') || mesh.metadata?.minion) return false;
-      if (
-        (name.includes('floor') && !name.includes('wall')) ||
-        name.includes('ground') ||
-        name.includes('grid') ||
-        name.includes('axes') ||
-        name.includes('pad')
-      ) return false;
-      if (name.startsWith('phys') || mesh.metadata?.isColliderMesh === true) return false;
-      return (
-        name.includes('renderwall') ||
-        name.includes('wall') ||
-        name.includes('obstacle') ||
-        name.includes('pillar') ||
-        name.includes('podium') ||
-        name.includes('barrier')
-      );
-    });
+    const pickInfo = scene.pickWithRay(ray, (mesh) => this.isObstacleMesh(mesh));
 
     if (pickInfo && pickInfo.hit) {
       this.patrolDir *= -1;
