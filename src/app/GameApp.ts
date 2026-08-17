@@ -120,7 +120,7 @@ export class GameApp {
         this.fpsOverlay.rebind(world.scene);
         applyCollidersVisibility(world.scene, this.showColliders);
         this.bgm.setTrack(
-          world.id === 'hub'
+          world.id === 'hub' || world.id === 'debugWarehouse'
             ? HUB_BGM
             : world.id === 'level2'
               ? LEVEL2_BGM
@@ -233,7 +233,11 @@ export class GameApp {
       );
     }
 
-    if (savedWorld === 'level1' || savedWorld === 'level2') {
+    if (
+      savedWorld === 'level1' ||
+      savedWorld === 'level2' ||
+      savedWorld === 'debugWarehouse'
+    ) {
       await this.router.goto(savedWorld, {
         restorePosition: true,
         isInitialLoad: true,
@@ -252,10 +256,10 @@ export class GameApp {
       if (isTypingTarget(e.target)) return;
 
       if (key === 'e' || key === 'r') {
-        const hub = this.router.getHub();
-        if (!hub || this.router.activeWorldId !== 'hub') return;
+        const warehouse = this.router.getDebugWarehouse();
+        if (!warehouse || this.router.activeWorldId !== 'debugWarehouse') return;
         const mode = key === 'e' ? 'partial' : 'full';
-        if (hub.tryApplyHoverAppearance(mode)) e.preventDefault();
+        if (warehouse.tryApplyHoverAppearance(mode)) e.preventDefault();
         return;
       }
 
@@ -274,9 +278,9 @@ export class GameApp {
 
     this.canvas.addEventListener('pointermove', () => {
       if (this.settingsPanel.isOpen()) return;
-      const hub = this.router.getHub();
-      if (hub && this.router.activeWorldId === 'hub') {
-        hub.hoverOutline.updateFromScenePick(hub.scene);
+      const warehouse = this.router.getDebugWarehouse();
+      if (warehouse && this.router.activeWorldId === 'debugWarehouse') {
+        warehouse.hoverOutline.updateFromScenePick(warehouse.scene);
       }
     });
   }
@@ -320,8 +324,8 @@ export class GameApp {
 
   private onMenuOpenChange(open: boolean): void {
     this.moveInput.clear();
-    this.router.getHub()?.setHoverEnabled(
-      !open && this.router.activeWorldId === 'hub',
+    this.router.getDebugWarehouse()?.setHoverEnabled(
+      !open && this.router.activeWorldId === 'debugWarehouse',
     );
     if (open) {
       this.router.active.detachCamera();

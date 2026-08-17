@@ -20,8 +20,10 @@ import {
   LEVEL1_LANDING_Z,
   clampLevel1Position,
 } from '../world/level1/config';
+import { DebugWarehouseWorld } from '../world/debugWarehouse/DebugWarehouseWorld';
 import { Level2World } from '../world/level2/Level2World';
 import { LEVEL2_LANDING_X, LEVEL2_LANDING_Z } from '../world/level2/config';
+import { TeleportPad } from '../world/TeleportPad';
 import type { Minion, MinionAppearance } from '../world/Minion';
 import type { MinionPhysicsProxy } from '../world/physics/MinionPhysicsProxy';
 import type { CameraFollow } from './CameraFollow';
@@ -71,6 +73,10 @@ export class WorldRouter {
     hub: { x: 0, z: -5.4 },
     level1: { x: LEVEL1_LANDING_X, z: LEVEL1_LANDING_Z },
     level2: { x: LEVEL2_LANDING_X, z: LEVEL2_LANDING_Z },
+    debugWarehouse: {
+      x: TeleportPad.DEFAULT_X,
+      z: TeleportPad.DEFAULT_Z + TeleportPad.LANDING_DISTANCE,
+    },
   };
 
   constructor(private readonly ctx: WorldRouterContext) {}
@@ -111,6 +117,11 @@ export class WorldRouter {
   getHub(): HubWorld | null {
     const w = this.worlds.get('hub');
     return w instanceof HubWorld ? w : null;
+  }
+
+  getDebugWarehouse(): DebugWarehouseWorld | null {
+    const w = this.worlds.get('debugWarehouse');
+    return w instanceof DebugWarehouseWorld ? w : null;
   }
 
   /** 对所有已创建世界执行（网格开关等） */
@@ -177,6 +188,7 @@ export class WorldRouter {
         world,
         opts.restorePosition === true,
         playerYaw,
+        fromId,
       );
 
       from?.deactivate();
@@ -240,12 +252,13 @@ export class WorldRouter {
     const hub = this.spawns.hub;
     const level1 = this.spawns.level1;
     const isLevel1 = this.activeId === 'level1';
+    const isHub = this.activeId === 'hub';
 
     return {
       x: pos.x,
       z: pos.z,
-      hubX: isLevel1 ? (prev?.hubX ?? hub.x) : pos.x,
-      hubZ: isLevel1 ? (prev?.hubZ ?? hub.z) : pos.z,
+      hubX: isHub ? pos.x : (prev?.hubX ?? hub.x),
+      hubZ: isHub ? pos.z : (prev?.hubZ ?? hub.z),
       level1X: isLevel1 ? pos.x : (prev?.level1X ?? level1.x),
       level1Z: isLevel1 ? pos.z : (prev?.level1Z ?? level1.z),
     };
@@ -270,11 +283,12 @@ export class WorldRouter {
     world: GameWorld,
     restore: boolean,
     yaw?: number,
+    from?: WorldId | null,
   ): { x: number; z: number } {
     if (restore) {
-      return this.spawns[world.id] ?? world.getDefaultLandingXZ(yaw);
+      return this.spawns[world.id] ?? world.getDefaultLandingXZ(yaw, from ?? undefined);
     }
-    return world.getDefaultLandingXZ(yaw);
+    return world.getDefaultLandingXZ(yaw, from ?? undefined);
   }
 
   private async ensureWorld(
@@ -306,6 +320,26 @@ export class WorldRouter {
       return level2;
     }
 
+    if (id === 'debugWarehouse') {
+      const hub = this.getHub();
+      const app =
+        appearance ?? hub?.getAppearance() ?? defaultAppearanceFallback();
+      const spawn = this.spawns.debugWarehouse;
+      const warehouse = await DebugWarehouseWorld.create(this.ctx.engine, {
+        appearance: app,
+        cameraMode: this.ctx.getCameraMode(),
+        initialX: spawn.x,
+        initialZ: spawn.z,
+        getIsInvincible: this.ctx.getIsInvincible,
+        onAppearanceChanged: hub?.getPlayer().onAppearanceChanged,
+        onFloorSurfaceChanged: (surface) => hub?.floor.setSurface(surface),
+        onRequestLandingWarp: this.ctx.onLandingWarp,
+      });
+      this.wireWorld(warehouse);
+      this.worlds.set('debugWarehouse', warehouse);
+      return warehouse;
+    }
+
     if (id === 'level1') {
       const hub = this.getHub();
       const app =
@@ -331,7 +365,8 @@ export class WorldRouter {
     if (
       world instanceof HubWorld ||
       world instanceof Level1World ||
-      world instanceof Level2World
+      world instanceof Level2World ||
+      world instanceof DebugWarehouseWorld
     ) {
       world.setMovePersistenceHandlers({
         onMoved: this.ctx.onPlayerMoved,

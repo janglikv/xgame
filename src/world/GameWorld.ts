@@ -6,7 +6,7 @@ import type { MinionPhysicsProxy } from './physics/MinionPhysicsProxy';
 import type { SpellProjectileSystem } from './SpellProjectileSystem';
 
 /** 可切换的世界 ID（存档兼容旧值 `blank` → `level1`） */
-export type WorldId = 'hub' | 'level1' | 'level2';
+export type WorldId = 'hub' | 'level1' | 'level2' | 'debugWarehouse';
 
 /** 世界切换请求（由世界 update 返回，由 GameApp 执行） */
 export type WorldTransition =
@@ -73,9 +73,9 @@ export interface GameWorld {
 
   /**
    * 传送进入本世界时的默认落点。
-   * 可传入角色当前朝向 yaw，计算落在传送阵前方一点的位置；未传则使用默认 fallback。
+   * 按成对通道落在对应传送阵前方；`from` 为出发世界。
    */
-  getDefaultLandingXZ(yaw?: number): { x: number; z: number };
+  getDefaultLandingXZ(yaw?: number, from?: WorldId): { x: number; z: number };
 
   /**
    * 成为当前活动世界：挂相机、同步外观/网格、必要时落地动画与传送阵 disarm。

@@ -23,6 +23,7 @@ import {
 export interface FloorPickerGalleryOptions {
   /** 展台中心 Z 坐标（默认 13） */
   centerZ?: number;
+  onSurfaceChanged?: (surface: FloorSurface) => void;
 }
 
 /**
@@ -48,6 +49,7 @@ export class FloorPickerGallery {
   private animTime = 0;
   private isEKeyPressed = false;
   private eKeyHandler?: (e: KeyboardEvent) => void;
+  private readonly onSurfaceChanged?: (surface: FloorSurface) => void;
 
   constructor(
     scene: Scene,
@@ -58,6 +60,7 @@ export class FloorPickerGallery {
     this.floor = floor;
     this.root = new TransformNode('FloorPickerGallery', scene);
     this.activeSurface = floor.getSurface();
+    this.onSurfaceChanged = options.onSurfaceChanged;
 
     const presets = FLOOR_SURFACE_PRESETS;
     const centerZ = options.centerZ ?? 13;
@@ -404,6 +407,7 @@ export class FloorPickerGallery {
     this.activeSurface = surface;
     this.floor.setSurface(surface);
     saveFloorSurfaceState(surface);
+    this.onSurfaceChanged?.(surface);
     this.updateActiveVisuals();
   }
 

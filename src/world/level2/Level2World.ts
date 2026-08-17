@@ -26,7 +26,7 @@ import {
 } from '../shared/sceneBasics';
 import { SpatialAxesGrid } from '../SpatialAxesGrid';
 import { SpellProjectileSystem } from '../SpellProjectileSystem';
-import { TeleportPad } from '../TeleportPad';
+import { TeleportPad, TeleportPairTheme } from '../TeleportPad';
 import {
   LEVEL2_FLOOR_EXTEND,
   LEVEL2_LANDING_X,
@@ -137,7 +137,13 @@ export class Level2World implements GameWorld {
       extentZ: half,
     });
 
-    const teleportPad = new TeleportPad(scene, LEVEL2_PAD_X, LEVEL2_PAD_Z);
+    const teleportPad = new TeleportPad(
+      scene,
+      LEVEL2_PAD_X,
+      LEVEL2_PAD_Z,
+      TeleportPad.RADIUS,
+      { theme: TeleportPairTheme.level1Level2 },
+    );
     teleportPad.disarmUntilLeave();
 
     const spawn = clampLevel2Position(

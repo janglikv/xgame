@@ -10,6 +10,191 @@ import {
 } from '@babylonjs/core';
 import { LoopSfx } from '../audio/Sfx';
 
+export type TeleportPadTheme = 'default' | 'orange' | 'emerald';
+
+/** 成对传送：两端必须用同一 theme */
+export const TeleportPairTheme = {
+  hubLevel1: 'default',
+  hubWarehouse: 'orange',
+  level1Level2: 'emerald',
+} as const satisfies Record<string, TeleportPadTheme>;
+
+export interface TeleportPadOptions {
+  theme?: TeleportPadTheme;
+}
+
+interface OuterTint {
+  glowInner: string;
+  glowMid: string;
+  glowEdge: string;
+  glowOut: string;
+  ringA: string;
+  ringB: string;
+  tickLong: string;
+  tickShort: string;
+}
+
+interface RuneTint {
+  ringA: string;
+  ringB: string;
+  hex: string;
+  dotA: string;
+  dotB: string;
+  arc: string;
+}
+
+interface CoreTint {
+  glow0: string;
+  glow1: string;
+  glow2: string;
+  ringA: string;
+  ringB: string;
+  cross: string;
+  core: string;
+}
+
+interface ThemePalette {
+  outer: OuterTint;
+  rune: RuneTint;
+  core: CoreTint;
+  emissiveOuter: Color3;
+  emissiveRune: Color3;
+  emissiveCore: Color3;
+  pillarStops: readonly string[];
+  pillarEmissive: Color3;
+  pillarDiffuse: Color3;
+  pillarPulse: { r: number; g: number; b: number };
+}
+
+const THEME_PALETTE: Record<TeleportPadTheme, ThemePalette> = {
+  default: {
+    outer: {
+      glowInner: 'rgba(40, 160, 255, 0)',
+      glowMid: 'rgba(40, 180, 255, 0.08)',
+      glowEdge: 'rgba(80, 200, 255, 0.45)',
+      glowOut: 'rgba(20, 80, 160, 0)',
+      ringA: 'rgba(120, 220, 255, 0.95)',
+      ringB: 'rgba(80, 180, 255, 0.7)',
+      tickLong: 'rgba(180, 240, 255, 0.9)',
+      tickShort: 'rgba(100, 200, 255, 0.55)',
+    },
+    rune: {
+      ringA: 'rgba(180, 140, 255, 0.85)',
+      ringB: 'rgba(140, 100, 255, 0.65)',
+      hex: 'rgba(200, 170, 255, 0.8)',
+      dotA: 'rgba(220, 200, 255, 0.95)',
+      dotB: 'rgba(120, 200, 255, 0.85)',
+      arc: 'rgba(160, 220, 255, 0.55)',
+    },
+    core: {
+      glow0: 'rgba(200, 240, 255, 0.35)',
+      glow1: 'rgba(100, 180, 255, 0.12)',
+      glow2: 'rgba(40, 80, 200, 0)',
+      ringA: 'rgba(180, 240, 255, 0.9)',
+      ringB: 'rgba(140, 200, 255, 0.7)',
+      cross: 'rgba(220, 250, 255, 0.95)',
+      core: 'rgba(200, 240, 255, 0.95)',
+    },
+    emissiveOuter: new Color3(0.2, 0.75, 1),
+    emissiveRune: new Color3(0.55, 0.4, 1),
+    emissiveCore: new Color3(0.7, 0.95, 1),
+    pillarStops: [
+      'rgba(120, 220, 255, 0.55)',
+      'rgba(100, 200, 255, 0.42)',
+      'rgba(140, 160, 255, 0.22)',
+      'rgba(180, 140, 255, 0.1)',
+      'rgba(200, 160, 255, 0)',
+    ],
+    pillarEmissive: new Color3(0.65, 0.45, 1),
+    pillarDiffuse: new Color3(0.5, 0.35, 0.95),
+    pillarPulse: { r: 0.7, g: 0.55, b: 1.35 },
+  },
+  orange: {
+    outer: {
+      glowInner: 'rgba(255, 120, 0, 0)',
+      glowMid: 'rgba(255, 140, 20, 0.1)',
+      glowEdge: 'rgba(255, 160, 40, 0.5)',
+      glowOut: 'rgba(160, 60, 0, 0)',
+      ringA: 'rgba(255, 200, 80, 0.95)',
+      ringB: 'rgba(255, 140, 30, 0.75)',
+      tickLong: 'rgba(255, 230, 150, 0.95)',
+      tickShort: 'rgba(255, 150, 40, 0.6)',
+    },
+    rune: {
+      ringA: 'rgba(255, 170, 50, 0.9)',
+      ringB: 'rgba(255, 110, 20, 0.7)',
+      hex: 'rgba(255, 190, 80, 0.85)',
+      dotA: 'rgba(255, 230, 140, 0.95)',
+      dotB: 'rgba(255, 140, 40, 0.85)',
+      arc: 'rgba(255, 160, 50, 0.55)',
+    },
+    core: {
+      glow0: 'rgba(255, 230, 140, 0.4)',
+      glow1: 'rgba(255, 140, 30, 0.16)',
+      glow2: 'rgba(180, 60, 0, 0)',
+      ringA: 'rgba(255, 210, 90, 0.92)',
+      ringB: 'rgba(255, 150, 40, 0.75)',
+      cross: 'rgba(255, 240, 180, 0.95)',
+      core: 'rgba(255, 220, 120, 0.95)',
+    },
+    emissiveOuter: new Color3(1, 0.45, 0.08),
+    emissiveRune: new Color3(1, 0.35, 0.05),
+    emissiveCore: new Color3(1, 0.72, 0.18),
+    pillarStops: [
+      'rgba(255, 170, 40, 0.6)',
+      'rgba(255, 130, 20, 0.45)',
+      'rgba(255, 90, 10, 0.24)',
+      'rgba(220, 70, 0, 0.1)',
+      'rgba(180, 50, 0, 0)',
+    ],
+    pillarEmissive: new Color3(1, 0.48, 0.08),
+    pillarDiffuse: new Color3(1, 0.4, 0.05),
+    pillarPulse: { r: 1.2, g: 0.48, b: 0.08 },
+  },
+  emerald: {
+    outer: {
+      glowInner: 'rgba(20, 200, 120, 0)',
+      glowMid: 'rgba(30, 220, 130, 0.1)',
+      glowEdge: 'rgba(60, 255, 160, 0.48)',
+      glowOut: 'rgba(10, 80, 50, 0)',
+      ringA: 'rgba(140, 255, 200, 0.95)',
+      ringB: 'rgba(50, 220, 140, 0.75)',
+      tickLong: 'rgba(200, 255, 220, 0.95)',
+      tickShort: 'rgba(70, 230, 150, 0.6)',
+    },
+    rune: {
+      ringA: 'rgba(80, 240, 180, 0.9)',
+      ringB: 'rgba(30, 200, 130, 0.7)',
+      hex: 'rgba(140, 255, 200, 0.85)',
+      dotA: 'rgba(200, 255, 220, 0.95)',
+      dotB: 'rgba(60, 220, 150, 0.85)',
+      arc: 'rgba(80, 240, 170, 0.55)',
+    },
+    core: {
+      glow0: 'rgba(180, 255, 220, 0.4)',
+      glow1: 'rgba(50, 220, 140, 0.16)',
+      glow2: 'rgba(10, 80, 50, 0)',
+      ringA: 'rgba(160, 255, 210, 0.92)',
+      ringB: 'rgba(70, 230, 150, 0.75)',
+      cross: 'rgba(220, 255, 230, 0.95)',
+      core: 'rgba(180, 255, 210, 0.95)',
+    },
+    emissiveOuter: new Color3(0.15, 0.95, 0.5),
+    emissiveRune: new Color3(0.1, 0.8, 0.45),
+    emissiveCore: new Color3(0.45, 1, 0.7),
+    pillarStops: [
+      'rgba(80, 255, 180, 0.58)',
+      'rgba(40, 230, 140, 0.42)',
+      'rgba(30, 200, 120, 0.22)',
+      'rgba(20, 160, 90, 0.1)',
+      'rgba(10, 100, 60, 0)',
+    ],
+    pillarEmissive: new Color3(0.25, 1, 0.55),
+    pillarDiffuse: new Color3(0.15, 0.85, 0.4),
+    pillarPulse: { r: 0.22, g: 1.15, b: 0.55 },
+  },
+};
+
 /**
  * 地面传送阵：贴地魔法阵 + 小光柱。
  * 默认慢转；角色站上后逐渐加速，蓄力 CHARGE_TIME 秒后触发传送。
@@ -98,21 +283,26 @@ export class TeleportPad {
    */
   private requireLeave = false;
   private readonly occupySfx = new LoopSfx('/audio/teleport.mp3', 0.55);
+  private readonly theme: TeleportPadTheme;
 
   constructor(
     scene: Scene,
     x = TeleportPad.DEFAULT_X,
     z = TeleportPad.DEFAULT_Z,
     radius = TeleportPad.RADIUS,
+    options: TeleportPadOptions = {},
   ) {
     this.x = x;
     this.z = z;
     this.radius = radius;
+    this.theme = options.theme ?? 'default';
+    const uid = `${this.theme}_${x}_${z}`;
 
-    this.root = new TransformNode(`TeleportPad_${x}_${z}`, scene);
+    this.root = new TransformNode(`TeleportPad_${uid}`, scene);
     this.root.position = new Vector3(x, 0, z);
 
     const dia = radius * 2;
+    const pal = THEME_PALETTE[this.theme];
 
     // ── 地面阵法：三层差速旋转（默认偏慢） ──────────────
     const groundDefs: {
@@ -126,30 +316,30 @@ export class TeleportPad {
         scale: 1,
         y: 0.012,
         spin: 0.12,
-        paint: paintOuterRing,
-        emissive: new Color3(0.2, 0.75, 1),
+        paint: (ctx, res) => paintOuterRingTinted(ctx, res, pal.outer),
+        emissive: pal.emissiveOuter,
       },
       {
         scale: 0.78,
         y: 0.016,
         spin: -0.18,
-        paint: paintRuneRing,
-        emissive: new Color3(0.55, 0.4, 1),
+        paint: (ctx, res) => paintRuneRingTinted(ctx, res, pal.rune),
+        emissive: pal.emissiveRune,
       },
       {
         scale: 0.48,
         y: 0.02,
         spin: 0.28,
-        paint: paintCoreSeal,
-        emissive: new Color3(0.7, 0.95, 1),
+        paint: (ctx, res) => paintCoreSealTinted(ctx, res, pal.core),
+        emissive: pal.emissiveCore,
       },
     ];
 
     groundDefs.forEach((def, i) => {
-      const tex = paintToTexture(scene, `tpGround_${i}`, def.paint);
+      const tex = paintToTexture(scene, `tpGround_${uid}_${i}`, def.paint);
       const mesh = makeGroundDisc(
         scene,
-        `tpGroundMesh_${i}`,
+        `tpGroundMesh_${uid}_${i}`,
         dia * def.scale,
         tex,
         def.emissive,
@@ -162,7 +352,7 @@ export class TeleportPad {
     // ── 小光柱：半径更小，缩放作蓄力进度条（满=传送） ──
     const pillarH = TeleportPad.PILLAR_HEIGHT * 0.92;
     const pillarR = radius * TeleportPad.PILLAR_RADIUS_FRAC;
-    this.pillar = createRingPillar(scene, 'tpPillar', pillarR, pillarH, 40);
+    this.pillar = createRingPillar(scene, `tpPillar_${uid}`, pillarR, pillarH, 40);
     this.pillar.parent = this.root;
     this.pillar.position.y = 0.02;
     this.pillar.isPickable = false;
@@ -171,13 +361,19 @@ export class TeleportPad {
     const sy0 = TeleportPad.PILLAR_SCALE_Y_IDLE;
     this.pillar.scaling.set(sxz0, sy0, sxz0);
 
-    const pillarTex = paintPillarTexture(scene, 'tpPillarTex', 128, 512);
-    this.pillarMat = new StandardMaterial('tpPillarMat', scene);
+    const pillarTex = paintPillarTexture(
+      scene,
+      `tpPillarTex_${uid}`,
+      128,
+      512,
+      pal.pillarStops,
+    );
+    this.pillarMat = new StandardMaterial(`tpPillarMat_${uid}`, scene);
     this.pillarMat.diffuseTexture = pillarTex;
     this.pillarMat.opacityTexture = pillarTex;
     this.pillarMat.emissiveTexture = pillarTex;
-    this.pillarMat.emissiveColor = new Color3(0.65, 0.45, 1);
-    this.pillarMat.diffuseColor = new Color3(0.5, 0.35, 0.95);
+    this.pillarMat.emissiveColor = pal.pillarEmissive.clone();
+    this.pillarMat.diffuseColor = pal.pillarDiffuse.clone();
     this.pillarMat.specularColor = Color3.Black();
     this.pillarMat.disableLighting = true;
     this.pillarMat.useAlphaFromDiffuseTexture = true;
@@ -289,7 +485,12 @@ export class TeleportPad {
     this.pillar.scaling.set(sxz, sy, sxz);
     this.pillar.rotation.y -= (0.12 + 2.4 * ease) * dt;
     const bright = 0.95 + 0.55 * u;
-    this.pillarMat.emissiveColor.set(0.7 * bright, 0.55 * bright, 1.35 * bright);
+    const pulse = THEME_PALETTE[this.theme].pillarPulse;
+    this.pillarMat.emissiveColor.set(
+      pulse.r * bright,
+      pulse.g * bright,
+      pulse.b * bright,
+    );
     this.pillarMat.alpha = 0.65 + 0.3 * u;
 
     return triggered;
@@ -390,6 +591,7 @@ function paintPillarTexture(
   name: string,
   w: number,
   h: number,
+  stops: readonly string[],
 ): DynamicTexture {
   const tex = new DynamicTexture(name, { width: w, height: h }, scene, false);
   tex.hasAlpha = true;
@@ -397,11 +599,10 @@ function paintPillarTexture(
   ctx.clearRect(0, 0, w, h);
 
   const grad = ctx.createLinearGradient(0, h, 0, 0);
-  grad.addColorStop(0, 'rgba(120, 220, 255, 0.55)');
-  grad.addColorStop(0.15, 'rgba(100, 200, 255, 0.42)');
-  grad.addColorStop(0.55, 'rgba(140, 160, 255, 0.22)');
-  grad.addColorStop(0.85, 'rgba(180, 140, 255, 0.1)');
-  grad.addColorStop(1, 'rgba(200, 160, 255, 0)');
+  const last = Math.max(1, stops.length - 1);
+  stops.forEach((color, i) => {
+    grad.addColorStop(i / last, color);
+  });
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, w, h);
 
@@ -409,23 +610,36 @@ function paintPillarTexture(
   return tex;
 }
 
-function paintOuterRing(ctx: CanvasRenderingContext2D, res: number): void {
+function paintOuterRingTinted(
+  ctx: CanvasRenderingContext2D,
+  res: number,
+  c: {
+    glowInner: string;
+    glowMid: string;
+    glowEdge: string;
+    glowOut: string;
+    ringA: string;
+    ringB: string;
+    tickLong: string;
+    tickShort: string;
+  },
+): void {
   const cx = res / 2;
   const cy = res / 2;
   const R = res * 0.48;
 
   const glow = ctx.createRadialGradient(cx, cy, R * 0.55, cx, cy, R);
-  glow.addColorStop(0, 'rgba(40, 160, 255, 0)');
-  glow.addColorStop(0.7, 'rgba(40, 180, 255, 0.08)');
-  glow.addColorStop(0.9, 'rgba(80, 200, 255, 0.45)');
-  glow.addColorStop(1, 'rgba(20, 80, 160, 0)');
+  glow.addColorStop(0, c.glowInner);
+  glow.addColorStop(0.7, c.glowMid);
+  glow.addColorStop(0.9, c.glowEdge);
+  glow.addColorStop(1, c.glowOut);
   ctx.fillStyle = glow;
   ctx.beginPath();
   ctx.arc(cx, cy, R, 0, Math.PI * 2);
   ctx.fill();
 
-  strokeCircle(ctx, cx, cy, R * 0.98, 5, 'rgba(120, 220, 255, 0.95)');
-  strokeCircle(ctx, cx, cy, R * 0.88, 2.5, 'rgba(80, 180, 255, 0.7)');
+  strokeCircle(ctx, cx, cy, R * 0.98, 5, c.ringA);
+  strokeCircle(ctx, cx, cy, R * 0.88, 2.5, c.ringB);
 
   const n = 36;
   for (let i = 0; i < n; i++) {
@@ -433,9 +647,7 @@ function paintOuterRing(ctx: CanvasRenderingContext2D, res: number): void {
     const long = i % 3 === 0;
     const r0 = R * (long ? 0.78 : 0.84);
     const r1 = R * 0.95;
-    ctx.strokeStyle = long
-      ? 'rgba(180, 240, 255, 0.9)'
-      : 'rgba(100, 200, 255, 0.55)';
+    ctx.strokeStyle = long ? c.tickLong : c.tickShort;
     ctx.lineWidth = long ? 3 : 1.5;
     ctx.beginPath();
     ctx.moveTo(cx + Math.cos(a) * r0, cy + Math.sin(a) * r0);
@@ -444,15 +656,26 @@ function paintOuterRing(ctx: CanvasRenderingContext2D, res: number): void {
   }
 }
 
-function paintRuneRing(ctx: CanvasRenderingContext2D, res: number): void {
+function paintRuneRingTinted(
+  ctx: CanvasRenderingContext2D,
+  res: number,
+  c: {
+    ringA: string;
+    ringB: string;
+    hex: string;
+    dotA: string;
+    dotB: string;
+    arc: string;
+  },
+): void {
   const cx = res / 2;
   const cy = res / 2;
   const R = res * 0.46;
 
-  strokeCircle(ctx, cx, cy, R * 0.98, 3, 'rgba(180, 140, 255, 0.85)');
-  strokeCircle(ctx, cx, cy, R * 0.72, 2, 'rgba(140, 100, 255, 0.65)');
+  strokeCircle(ctx, cx, cy, R * 0.98, 3, c.ringA);
+  strokeCircle(ctx, cx, cy, R * 0.72, 2, c.ringB);
 
-  ctx.strokeStyle = 'rgba(200, 170, 255, 0.8)';
+  ctx.strokeStyle = c.hex;
   ctx.lineWidth = 2.5;
   ctx.beginPath();
   for (let i = 0; i < 6; i++) {
@@ -470,8 +693,7 @@ function paintRuneRing(ctx: CanvasRenderingContext2D, res: number): void {
     const a = (i / m) * Math.PI * 2 + 0.2;
     const x = cx + Math.cos(a) * R * 0.9;
     const y = cy + Math.sin(a) * R * 0.9;
-    ctx.fillStyle =
-      i % 2 === 0 ? 'rgba(220, 200, 255, 0.95)' : 'rgba(120, 200, 255, 0.85)';
+    ctx.fillStyle = i % 2 === 0 ? c.dotA : c.dotB;
     ctx.beginPath();
     ctx.arc(x, y, i % 2 === 0 ? 5 : 3.5, 0, Math.PI * 2);
     ctx.fill();
@@ -480,7 +702,7 @@ function paintRuneRing(ctx: CanvasRenderingContext2D, res: number): void {
   for (let i = 0; i < 16; i++) {
     const a0 = (i / 16) * Math.PI * 2;
     const a1 = a0 + 0.18;
-    ctx.strokeStyle = 'rgba(160, 220, 255, 0.55)';
+    ctx.strokeStyle = c.arc;
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.arc(cx, cy, R * 0.58, a0, a1);
@@ -488,24 +710,36 @@ function paintRuneRing(ctx: CanvasRenderingContext2D, res: number): void {
   }
 }
 
-function paintCoreSeal(ctx: CanvasRenderingContext2D, res: number): void {
+function paintCoreSealTinted(
+  ctx: CanvasRenderingContext2D,
+  res: number,
+  c: {
+    glow0: string;
+    glow1: string;
+    glow2: string;
+    ringA: string;
+    ringB: string;
+    cross: string;
+    core: string;
+  },
+): void {
   const cx = res / 2;
   const cy = res / 2;
   const R = res * 0.46;
 
   const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, R);
-  glow.addColorStop(0, 'rgba(200, 240, 255, 0.35)');
-  glow.addColorStop(0.45, 'rgba(100, 180, 255, 0.12)');
-  glow.addColorStop(1, 'rgba(40, 80, 200, 0)');
+  glow.addColorStop(0, c.glow0);
+  glow.addColorStop(0.45, c.glow1);
+  glow.addColorStop(1, c.glow2);
   ctx.fillStyle = glow;
   ctx.beginPath();
   ctx.arc(cx, cy, R, 0, Math.PI * 2);
   ctx.fill();
 
-  strokeCircle(ctx, cx, cy, R * 0.9, 3, 'rgba(180, 240, 255, 0.9)');
-  strokeCircle(ctx, cx, cy, R * 0.55, 2, 'rgba(140, 200, 255, 0.7)');
+  strokeCircle(ctx, cx, cy, R * 0.9, 3, c.ringA);
+  strokeCircle(ctx, cx, cy, R * 0.55, 2, c.ringB);
 
-  ctx.strokeStyle = 'rgba(220, 250, 255, 0.95)';
+  ctx.strokeStyle = c.cross;
   ctx.lineWidth = 3;
   ctx.lineCap = 'round';
   for (let i = 0; i < 4; i++) {
@@ -516,7 +750,7 @@ function paintCoreSeal(ctx: CanvasRenderingContext2D, res: number): void {
     ctx.stroke();
   }
 
-  ctx.fillStyle = 'rgba(200, 240, 255, 0.95)';
+  ctx.fillStyle = c.core;
   ctx.beginPath();
   ctx.arc(cx, cy, R * 0.12, 0, Math.PI * 2);
   ctx.fill();

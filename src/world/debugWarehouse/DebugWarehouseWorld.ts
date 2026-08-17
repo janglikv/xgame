@@ -6,24 +6,21 @@ import type {
 } from '@babylonjs/core';
 import { Vector3 } from '@babylonjs/core';
 import { playPlayerHitSfx } from '../../audio/hitSfx';
-import {
-  loadCameraState,
-  type CameraStateSnapshot,
-} from '../../storage/cameraState';
 import { loadFloorSurfaceState } from '../../storage/floorState';
-import { loadMinionAppearanceState } from '../../storage/minionAppearanceState';
 import type { CameraMode } from '../../storage/settingsState';
+import { DeathOverlay } from '../../ui/DeathOverlay';
 import type {
   GameWorld,
   WorldActivateOptions,
   WorldFrameContext,
-  WorldId,
   WorldTransition,
 } from '../GameWorld';
-import { Floor } from '../Floor';
+import { Floor, type FloorSurface } from '../Floor';
+import { FloorPickerGallery } from '../FloorPickerGallery';
 import { HealthBar } from '../HealthBar';
 import { HoverOutline } from '../HoverOutline';
 import { Minion, type MinionAppearance } from '../Minion';
+import { spawnMinionDemoLineup, type DemoLineup } from '../MinionDemoLineup';
 import {
   buildArenaColliders,
   initPhysics,
@@ -31,8 +28,8 @@ import {
 } from '../physics';
 import { RangeRing } from '../RangeRing';
 import {
-  applyCameraMode,
   addStandardLighting,
+  applyCameraMode,
   createDarkScene,
   createFollowCamera,
   defaultFocusY,
@@ -40,16 +37,15 @@ import {
 import { SpatialAxesGrid } from '../SpatialAxesGrid';
 import { SpellProjectileSystem } from '../SpellProjectileSystem';
 import { TeleportPad, TeleportPairTheme } from '../TeleportPad';
-import { DeathOverlay } from '../../ui/DeathOverlay';
 
-export interface CreateHubWorldOptions {
+export interface CreateDebugWarehouseOptions {
+  appearance: MinionAppearance;
   cameraMode: CameraMode;
-  /** 枢纽出生点 */
-  spawnX: number;
-  spawnZ: number;
-  freeCamera?: { alpha: number; beta: number; radius: number };
+  initialX?: number;
+  initialZ?: number;
   getIsInvincible?: () => boolean;
   onAppearanceChanged?: (appearance: MinionAppearance) => void;
+  onFloorSurfaceChanged?: (surface: FloorSurface) => void;
   onRequestLandingWarp?: (
     minion: Minion,
     phys: MinionPhysicsProxy,
@@ -59,10 +55,10 @@ export interface CreateHubWorldOptions {
 }
 
 /**
- * 枢纽：进关传送阵、开发模式调试仓库入口。
+ * 开发调试仓库：展示阵列、地板材质展台、回枢纽传送阵。
  */
-export class HubWorld implements GameWorld {
-  readonly id = 'hub' as const;
+export class DebugWarehouseWorld implements GameWorld {
+  readonly id = 'debugWarehouse' as const;
 
   readonly scene: Scene;
   readonly camera: ArcRotateCamera;
@@ -72,14 +68,15 @@ export class HubWorld implements GameWorld {
   readonly deathOverlay: DeathOverlay;
   readonly spellSystem: SpellProjectileSystem;
   readonly floor: Floor;
+  readonly floorPickerGallery: FloorPickerGallery;
   readonly spatialAxesGrid: SpatialAxesGrid;
   readonly teleportPad: TeleportPad;
-  readonly debugWarehousePad: TeleportPad | null;
   readonly hoverOutline: HoverOutline;
   readonly swapRangeRing: RangeRing;
+  readonly demoLineup: DemoLineup;
   readonly shadowGen: ShadowGenerator;
 
-  private readonly onRequestLandingWarp?: CreateHubWorldOptions['onRequestLandingWarp'];
+  private readonly onRequestLandingWarp?: CreateDebugWarehouseOptions['onRequestLandingWarp'];
   private readonly getIsInvincible?: () => boolean;
   private wasMoving = false;
   private onPlayerMoved: (() => void) | null = null;
@@ -95,13 +92,14 @@ export class HubWorld implements GameWorld {
     deathOverlay: DeathOverlay,
     spellSystem: SpellProjectileSystem,
     floor: Floor,
+    floorPickerGallery: FloorPickerGallery,
     spatialAxesGrid: SpatialAxesGrid,
     teleportPad: TeleportPad,
-    debugWarehousePad: TeleportPad | null,
     hoverOutline: HoverOutline,
     swapRangeRing: RangeRing,
+    demoLineup: DemoLineup,
     shadowGen: ShadowGenerator,
-    onRequestLandingWarp?: CreateHubWorldOptions['onRequestLandingWarp'],
+    onRequestLandingWarp?: CreateDebugWarehouseOptions['onRequestLandingWarp'],
     getIsInvincible?: () => boolean,
   ) {
     this.scene = scene;
@@ -112,11 +110,12 @@ export class HubWorld implements GameWorld {
     this.deathOverlay = deathOverlay;
     this.spellSystem = spellSystem;
     this.floor = floor;
+    this.floorPickerGallery = floorPickerGallery;
     this.spatialAxesGrid = spatialAxesGrid;
     this.teleportPad = teleportPad;
-    this.debugWarehousePad = debugWarehousePad;
     this.hoverOutline = hoverOutline;
     this.swapRangeRing = swapRangeRing;
+    this.demoLineup = demoLineup;
     this.shadowGen = shadowGen;
     this.onRequestLandingWarp = onRequestLandingWarp;
     this.getIsInvincible = getIsInvincible;
@@ -125,18 +124,19 @@ export class HubWorld implements GameWorld {
 
   static async create(
     engine: Engine,
-    options: CreateHubWorldOptions,
-  ): Promise<HubWorld> {
+    options: CreateDebugWarehouseOptions,
+  ): Promise<DebugWarehouseWorld> {
     const scene = createDarkScene(engine, { start: 22, end: 45 });
     await initPhysics(scene);
 
-    const { shadowGen } = addStandardLighting(scene, {
-      half: 32,
-    });
+    const { shadowGen } = addStandardLighting(scene, { half: 32 });
 
-    const initialFloorSurface = loadFloorSurfaceState();
     const floor = new Floor(scene, shadowGen, {
-      surface: initialFloorSurface,
+      surface: loadFloorSurfaceState(),
+    });
+    const floorPickerGallery = new FloorPickerGallery(scene, floor, {
+      centerZ: -14,
+      onSurfaceChanged: options.onFloorSurfaceChanged,
     });
     buildArenaColliders(scene, {});
     const spatialAxesGrid = new SpatialAxesGrid(scene);
@@ -146,39 +146,26 @@ export class HubWorld implements GameWorld {
       TeleportPad.DEFAULT_X,
       TeleportPad.DEFAULT_Z,
       TeleportPad.RADIUS,
-      { theme: TeleportPairTheme.hubLevel1 },
+      { theme: TeleportPairTheme.hubWarehouse },
     );
-    const debugWarehousePad = import.meta.env.DEV
-      ? new TeleportPad(
-          scene,
-          3.2,
-          TeleportPad.DEFAULT_Z,
-          TeleportPad.RADIUS,
-          { theme: TeleportPairTheme.hubWarehouse },
-        )
-      : null;
+    teleportPad.disarmUntilLeave();
 
-    let spawnX = options.spawnX;
-    let spawnZ = options.spawnZ;
-    if (Math.abs(spawnX) < 2.2 && Math.abs(spawnZ) < 2.2) {
-      spawnX = 0;
-      spawnZ = -5.4;
-    }
+    const spawnX = options.initialX ?? teleportPad.getLandingXZ().x;
+    const spawnZ = options.initialZ ?? teleportPad.getLandingXZ().z;
 
+    const appearance = options.appearance;
     const minion = new Minion(scene, spawnX, spawnZ, {
       facePositiveX: false,
       shadowGenerator: shadowGen,
-      allBlack: true,
-      face: 'fierce',
-      redHat: true,
-      magicStaff: true,
-      scaleMultiplier: 0.5,
-      formation: 'crimson',
+      face: appearance.face,
+      mosaicFace: appearance.mosaicFace,
+      bodyColor: appearance.bodyColor,
+      hat: appearance.hat ?? undefined,
+      staff: appearance.staff ?? undefined,
+      scaleMultiplier: appearance.scaleMultiplier,
+      lowPolyFlat: appearance.lowPolyFlat,
+      formation: appearance.formation,
     });
-    const savedAppearance = loadMinionAppearanceState();
-    if (savedAppearance) {
-      minion.applyPatch(savedAppearance);
-    }
     if (options.onAppearanceChanged) {
       minion.onAppearanceChanged = options.onAppearanceChanged;
     }
@@ -198,21 +185,29 @@ export class HubWorld implements GameWorld {
     });
     minionPhys.teleportToTarget();
 
+    const demoLineup = spawnMinionDemoLineup(scene, shadowGen, {
+      horizontal: true,
+      z0: -2.0,
+      rowGap: 1.4,
+      colGap: 1.2,
+      facePositiveX: false,
+      physics: true,
+    });
+
     const hoverOutline = new HoverOutline(scene);
+    hoverOutline.registerMinions(demoLineup.minions);
     const swapRangeRing = new RangeRing(scene, RangeRing.DEFAULT_RADIUS);
     const spellSystem = new SpellProjectileSystem(scene);
 
-    const focusY = defaultFocusY(minion.getAppearance().scaleMultiplier);
     const camera = createFollowCamera(scene, {
-      name: 'hubCam',
+      name: 'debugWarehouseCam',
       mode: options.cameraMode,
-      target: new Vector3(spawnX, focusY, spawnZ),
-      free: options.freeCamera,
+      target: new Vector3(spawnX, defaultFocusY(scaleMul), spawnZ),
     });
 
     const deathOverlay = new DeathOverlay(scene);
 
-    const hubWorld = new HubWorld(
+    const world = new DebugWarehouseWorld(
       scene,
       camera,
       minion,
@@ -221,17 +216,19 @@ export class HubWorld implements GameWorld {
       deathOverlay,
       spellSystem,
       floor,
+      floorPickerGallery,
       spatialAxesGrid,
       teleportPad,
-      debugWarehousePad,
       hoverOutline,
       swapRangeRing,
+      demoLineup,
       shadowGen,
       options.onRequestLandingWarp,
+      options.getIsInvincible,
     );
 
     deathOverlay.onRespawnClick = () => {
-      hubWorld.respawnNearPad();
+      world.respawnNearPad();
     };
 
     minion.onTakeDamage = (amount) => {
@@ -243,7 +240,7 @@ export class HubWorld implements GameWorld {
       }
     };
 
-    return hubWorld;
+    return world;
   }
 
   setMovePersistenceHandlers(handlers: {
@@ -282,15 +279,6 @@ export class HubWorld implements GameWorld {
     applyCameraMode(this.camera, mode, canvas, !menuOpen && mode === 'free');
   }
 
-  /** 恢复上次自由镜头角度（切到 free 时由 App 调用） */
-  restoreFreeCameraAngles(): void {
-    const free = loadCameraState();
-    if (!free) return;
-    this.camera.alpha = free.alpha;
-    this.camera.beta = free.beta;
-    this.camera.radius = free.radius;
-  }
-
   setGridVisible(visible: boolean): void {
     this.spatialAxesGrid.setVisible(visible);
   }
@@ -317,7 +305,6 @@ export class HubWorld implements GameWorld {
     this.camera.setTarget(focus);
   }
 
-  /** 在传送阵前方落点复活：回满血、站起、瞬移，并 disarm 防止刚落地又传送。 */
   respawnNearPad(): void {
     const landing = this.getDefaultLandingXZ();
     this.teleportPlayer(landing.x, landing.z);
@@ -327,35 +314,13 @@ export class HubWorld implements GameWorld {
   }
 
   getTeleportCharge01(): number {
-    const a = this.teleportPad.getVisualCharge01();
-    const b = this.debugWarehousePad?.getVisualCharge01() ?? 0;
-    return Math.max(a, b);
+    return this.teleportPad.getVisualCharge01();
   }
 
-  getDefaultLandingXZ(yaw?: number, from?: WorldId): { x: number; z: number } {
-    if (from === 'debugWarehouse' && this.debugWarehousePad) {
-      return this.debugWarehousePad.getLandingXZ(yaw);
-    }
+  getDefaultLandingXZ(yaw?: number): { x: number; z: number } {
     return this.teleportPad.getLandingXZ(yaw);
   }
 
-  snapshotCamera(): CameraStateSnapshot {
-    return {
-      alpha: this.camera.alpha,
-      beta: this.camera.beta,
-      radius: this.camera.radius,
-      targetX: this.camera.target.x,
-      targetY: this.camera.target.y,
-      targetZ: this.camera.target.z,
-    };
-  }
-
-  /**
-   * 悬停展示目标后：
-   * - partial：只拷该行展示槽
-   * - full：全量外观
-   * @returns 是否消费了按键
-   */
   tryApplyHoverAppearance(mode: 'partial' | 'full'): boolean {
     const target = this.hoverOutline.getHovered();
     if (!target || target === this.minion) return false;
@@ -374,15 +339,13 @@ export class HubWorld implements GameWorld {
   }
 
   activate(opts: WorldActivateOptions): void {
-    if (opts.appearance) {
-      this.applyAppearance(opts.appearance);
-    }
+    if (opts.appearance) this.applyAppearance(opts.appearance);
     this.setGridVisible(opts.showGrid);
 
     const spawnYaw = opts.spawnYaw ?? Math.PI;
     this.minion.setRotationY(spawnYaw);
 
-    const spawn = opts.spawn ?? this.getDefaultLandingXZ(spawnYaw);
+    const spawn = opts.spawn ?? this.teleportPad.getLandingXZ(spawnYaw);
 
     if (opts.playLandingWarp && this.onRequestLandingWarp) {
       this.onRequestLandingWarp(
@@ -405,7 +368,6 @@ export class HubWorld implements GameWorld {
       this.camera.setTarget(focus);
     }
     this.teleportPad.disarmUntilLeave();
-    this.debugWarehousePad?.disarmUntilLeave();
   }
 
   deactivate(): void {
@@ -413,7 +375,6 @@ export class HubWorld implements GameWorld {
     this.hoverOutline.clear();
     this.setHoverEnabled(false);
     this.teleportPad.resetCharge();
-    this.debugWarehousePad?.resetCharge();
   }
 
   update(ctx: WorldFrameContext): WorldTransition {
@@ -435,28 +396,27 @@ export class HubWorld implements GameWorld {
       isMoving ? moveWish.wishZ : 0,
     );
     this.minion.update(dt, isMoving);
-    if (this.getIsInvincible?.() && !isDead && this.playerHealthBar.getHp() < this.playerHealthBar.getMaxHp()) {
+    if (
+      this.getIsInvincible?.() &&
+      !isDead &&
+      this.playerHealthBar.getHp() < this.playerHealthBar.getMaxHp()
+    ) {
       this.playerHealthBar.setHp(this.playerHealthBar.getMaxHp());
     }
     this.playerHealthBar.update(dt);
-    this.spellSystem.update(dt, [this.minion], this.minion);
+    const targetMinions = [this.minion, ...this.demoLineup.minions];
+    this.spellSystem.update(dt, targetMinions, this.minion);
+    this.demoLineup.update(dt);
+    this.floorPickerGallery.update(this.minion.root.position);
 
-    if (!isMoving && this.wasMoving) {
-      this.onPlayerStopped?.();
-    }
+    if (!isMoving && this.wasMoving) this.onPlayerStopped?.();
     this.wasMoving = isMoving;
 
     if (!isDead) {
       const p = this.minion.root.position;
       const onPad = this.teleportPad.contains(p.x, p.z);
       if (this.teleportPad.update(dt, onPad && !menuOpen)) {
-        return { type: 'goto', world: 'level1' };
-      }
-      if (this.debugWarehousePad) {
-        const onDebug = this.debugWarehousePad.contains(p.x, p.z);
-        if (this.debugWarehousePad.update(dt, onDebug && !menuOpen)) {
-          return { type: 'goto', world: 'debugWarehouse' };
-        }
+        return { type: 'goto', world: 'hub' };
       }
     }
 
@@ -472,8 +432,8 @@ export class HubWorld implements GameWorld {
     this.deathOverlay.dispose();
     this.playerHealthBar.dispose();
     this.spellSystem.dispose();
+    this.floorPickerGallery.dispose();
     this.teleportPad.dispose();
-    this.debugWarehousePad?.dispose();
     this.minionPhys.dispose();
     this.scene.dispose();
   }
@@ -483,11 +443,4 @@ export class HubWorld implements GameWorld {
     const b = target.root.position;
     return Math.hypot(a.x - b.x, a.z - b.z) <= this.swapRange;
   }
-}
-
-export async function createHubWorld(
-  engine: Engine,
-  options: CreateHubWorldOptions,
-): Promise<HubWorld> {
-  return HubWorld.create(engine, options);
 }

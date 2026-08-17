@@ -6,6 +6,7 @@ import type {
   GameWorld,
   WorldActivateOptions,
   WorldFrameContext,
+  WorldId,
   WorldTransition,
 } from '../GameWorld';
 import { EnemyAI } from '../EnemyAI';
@@ -28,7 +29,7 @@ import {
 } from '../shared/sceneBasics';
 import { SpatialAxesGrid } from '../SpatialAxesGrid';
 import { SpellProjectileSystem } from '../SpellProjectileSystem';
-import { TeleportPad } from '../TeleportPad';
+import { TeleportPad, TeleportPairTheme } from '../TeleportPad';
 import { DeathOverlay } from '../../ui/DeathOverlay';
 import {
   LEVEL1_FLOOR_EXTEND,
@@ -174,13 +175,21 @@ export class Level1World implements GameWorld {
       extentZ: LEVEL1_Z_MAX,
     });
 
-    const teleportPad = new TeleportPad(scene, LEVEL1_PAD_X, LEVEL1_PAD_Z);
+    const teleportPad = new TeleportPad(
+      scene,
+      LEVEL1_PAD_X,
+      LEVEL1_PAD_Z,
+      TeleportPad.RADIUS,
+      { theme: TeleportPairTheme.hubLevel1 },
+    );
     teleportPad.disarmUntilLeave();
 
     const bossExitPad = new TeleportPad(
       scene,
       LEVEL1_BOSS_EXIT_PAD_X,
       LEVEL1_BOSS_EXIT_PAD_Z,
+      TeleportPad.RADIUS,
+      { theme: TeleportPairTheme.level1Level2 },
     );
     bossExitPad.setVisible(false);
 
@@ -485,11 +494,12 @@ export class Level1World implements GameWorld {
     return Math.max(hub, boss);
   }
 
-  getDefaultLandingXZ(yaw?: number): { x: number; z: number } {
-    if (yaw === undefined) {
+  getDefaultLandingXZ(yaw?: number, from?: WorldId): { x: number; z: number } {
+    const pad = from === 'level2' ? this.bossExitPad : this.teleportPad;
+    if (yaw === undefined && pad === this.teleportPad) {
       return { x: LEVEL1_LANDING_X, z: LEVEL1_LANDING_Z };
     }
-    const p = this.teleportPad.getLandingXZ(yaw);
+    const p = pad.getLandingXZ(yaw);
     return clampLevel1Spawn(p.x, p.z);
   }
 
@@ -516,9 +526,7 @@ export class Level1World implements GameWorld {
     this.minion.setRotationY(spawnYaw);
 
     // 默认落在 3×3 方围开口内侧，避免站上阵心或卡进墙
-    const raw =
-      opts.spawn ??
-      this.teleportPad.getLandingXZ(spawnYaw);
+    const raw = opts.spawn ?? this.getDefaultLandingXZ(spawnYaw);
     const spawn = clampLevel1Spawn(raw.x, raw.z);
 
     if (opts.playLandingWarp && this.onRequestLandingWarp) {

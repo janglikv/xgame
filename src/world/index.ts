@@ -22,3 +22,4 @@ export {
   clampLevel1Position,
 } from './level1/config';
 export { Level2World } from './level2/Level2World';
+export { DebugWarehouseWorld } from './debugWarehouse/DebugWarehouseWorld';
