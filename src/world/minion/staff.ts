@@ -9,7 +9,7 @@ import {
 } from '@babylonjs/core';
 import { cast, emissiveMat, mat } from './materials';
 
-/** 法杖款式（武器行展示） */
+/** 法杖及枪械武器款式（武器行展示） */
 export type StaffStyle =
   | 'arcane'
   | 'flame'
@@ -17,7 +17,8 @@ export type StaffStyle =
   | 'nature'
   | 'void'
   | 'storm'
-  | 'holy';
+  | 'holy'
+  | 'pistol';
 
 export const STAFF_STYLES: readonly StaffStyle[] = [
   'arcane',
@@ -27,7 +28,17 @@ export const STAFF_STYLES: readonly StaffStyle[] = [
   'void',
   'storm',
   'holy',
+  'pistol',
 ] as const;
+
+/** 枪械款式列表 */
+export const GUN_STYLES: readonly StaffStyle[] = ['pistol'] as const;
+
+export function isGunStyle(
+  style: StaffStyle | null | undefined,
+): style is 'pistol' {
+  return style === 'pistol';
+}
 
 export const STAFF_LABELS: Record<StaffStyle, string> = {
   arcane: '魔法杖',
@@ -37,6 +48,7 @@ export const STAFF_LABELS: Record<StaffStyle, string> = {
   void: '虚空杖',
   storm: '雷电杖',
   holy: '圣光杖',
+  pistol: '简单手枪',
 };
 
 export interface StaffFx {
@@ -51,9 +63,11 @@ export interface StaffFx {
   auraMat: StandardMaterial | null;
   crown: TransformNode | null;
   sparks: Mesh[];
-  /** 额外可动部件（火焰舌、冰刺等） */
+  /** 额外可动部件（火焰舌、冰刺、滑套、枪口焰等） */
   extras: Mesh[];
   t: number;
+  /** 开枪瞬间权重：驱动枪口焰与滑套后座，仅枪械使用 */
+  shootKick?: number;
 }
 
 function gripRoot(
@@ -95,7 +109,12 @@ export function attachStaff(
   shadowGen?: ShadowGenerator,
   lite = false,
 ): StaffFx {
-  if (lite) return attachLiteStaff(scene, rightHand, style);
+  if (lite) {
+    if (style === 'pistol') {
+      return attachLitePistol(scene, rightHand);
+    }
+    return attachLiteStaff(scene, rightHand, style);
+  }
   switch (style) {
     case 'flame':
       return attachFlameStaff(scene, rightHand, shadowGen);
@@ -109,6 +128,8 @@ export function attachStaff(
       return attachStormStaff(scene, rightHand, shadowGen);
     case 'holy':
       return attachHolyStaff(scene, rightHand, shadowGen);
+    case 'pistol':
+      return attachPistol(scene, rightHand, shadowGen);
     case 'arcane':
     default:
       return attachArcaneStaff(scene, rightHand, shadowGen);
@@ -131,6 +152,7 @@ function attachLiteStaff(
     storm: 0x00e5ff,
     holy: 0xffcc00,
     arcane: 0xb545ff,
+    pistol: 0xff8800,
   }[style];
 
   let mats = liteStaffCache.get(style);
@@ -180,6 +202,15 @@ function attachLiteStaff(
     extras: [],
     t: 0,
   };
+}
+
+/** 发射瞬间：法杖放大宝珠，枪械点亮枪口焰并踢滑套 */
+export function triggerStaffShootPulse(fx: StaffFx): void {
+  if (fx.style === 'pistol') {
+    fx.shootKick = 1;
+    return;
+  }
+  fx.orb.scaling.set(1.65, 1.65, 1.65);
 }
 
 /** 兼容旧名 */
@@ -1704,7 +1735,7 @@ export function updateStaffFx(fx: StaffFx, dt: number, lite = false): void {
   fx.t += dt;
   const t = fx.t;
 
-  if (lite) {
+  if (lite && fx.style !== 'pistol') {
     const pulse = 0.75 + 0.25 * Math.sin(t * 4);
     fx.orbMat.emissiveColor.set(pulse, pulse * 0.35, pulse * 0.08);
     fx.orb.scaling.setAll(0.96 + 0.08 * Math.sin(t * 3));
@@ -1729,6 +1760,9 @@ export function updateStaffFx(fx: StaffFx, dt: number, lite = false): void {
       break;
     case 'holy':
       updateHoly(fx, t, dt);
+      break;
+    case 'pistol':
+      updatePistol(fx, t, dt);
       break;
     case 'arcane':
     default:
@@ -2129,6 +2163,356 @@ function orbitSparks(
     spark.position.set(Math.cos(a) * radius, yOff, Math.sin(a) * radius);
     const ps = 0.7 + 0.5 * Math.sin(t * 9 + i);
     spark.scaling.setAll(ps);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// 枪械：简单手枪 (Pistol)
+// 握在掌心：枪管沿法杖 +Y，瞄准时自然指向目标
+// 包含：握把、套筒座、滑套后座、准星夜光点、枪口焰（仅开枪时亮）
+// ═══════════════════════════════════════════════════════════
+const PISTOL_SLIDE_Z = 0.045;
+const PISTOL_FLASH_Z = 0.22;
+
+function pistolGripRoot(
+  scene: Scene,
+  name: string,
+  rightHand: Mesh,
+): TransformNode {
+  const root = new TransformNode(name, scene);
+  root.parent = rightHand;
+  // 略偏掌心外侧，避免枪身埋进手球
+  root.position = new Vector3(0.015, -0.02, 0.01);
+  root.scaling = new Vector3(1.22, 1.22, 1.22);
+  return root;
+}
+
+function attachPistol(
+  scene: Scene,
+  rightHand: Mesh,
+  shadowGen?: ShadowGenerator,
+): StaffFx {
+  const p = 'weaponPistol';
+
+  const root = pistolGripRoot(scene, 'pistolStaff', rightHand);
+
+  // 模型沿 +Z 建模，转 -90° 后枪管对齐法杖 +Y
+  const modelNode = new TransformNode('pistolModel', scene);
+  modelNode.parent = root;
+  modelNode.rotation.x = -Math.PI / 2;
+  // 握把落在掌心，枪身刚好探出手球
+  modelNode.position.set(0, 0.10, 0.02);
+  modelNode.scaling.setAll(1.28);
+
+  const gripMat = mat(scene, `${p}Grip`, 0x1a1c20);
+  const gripPanelMat = mat(scene, `${p}GripPanel`, 0x2b2e35);
+  const frameMat = mat(scene, `${p}Frame`, 0x2d3238);
+  const slideMat = mat(scene, `${p}Slide`, 0x484f58);
+  const barrelMat = mat(scene, `${p}Barrel`, 0x111316);
+  const triggerMat = mat(scene, `${p}Trigger`, 0xd0d5dd);
+  const sightDotMat = emissiveMat(scene, `${p}SightDot`, 0x00ff66, 1.15);
+  const muzzleOrbMat = emissiveMat(scene, `${p}MuzzleOrb`, 0xffc060, 1.6);
+  muzzleOrbMat.transparencyMode = StandardMaterial.MATERIAL_ALPHABLEND;
+  muzzleOrbMat.disableDepthWrite = true;
+  muzzleOrbMat.alpha = 0.2;
+
+  const flashMat = softAuraMat(scene, `${p}FlashCone`, 0xffaa44, 1.8, 0);
+
+  // 1. 握把
+  const grip = MeshBuilder.CreateBox(
+    `${p}Grip`,
+    { width: 0.042, height: 0.15, depth: 0.065 },
+    scene,
+  );
+  grip.position.set(0, -0.06, -0.02);
+  grip.rotation.x = -0.22;
+  grip.material = gripMat;
+  grip.parent = modelNode;
+  cast(grip, shadowGen);
+
+  [-0.023, 0.023].forEach((xSide, idx) => {
+    const panel = MeshBuilder.CreateBox(
+      `${p}Panel_${idx}`,
+      { width: 0.006, height: 0.11, depth: 0.05 },
+      scene,
+    );
+    panel.position.set(xSide, -0.06, -0.02);
+    panel.rotation.x = -0.22;
+    panel.material = gripPanelMat;
+    panel.parent = modelNode;
+    cast(panel, shadowGen);
+  });
+
+  // 2. 套筒座 / 扳机
+  const frame = MeshBuilder.CreateBox(
+    `${p}Frame`,
+    { width: 0.046, height: 0.045, depth: 0.22 },
+    scene,
+  );
+  frame.position.set(0, 0.015, 0.04);
+  frame.material = frameMat;
+  frame.parent = modelNode;
+  cast(frame, shadowGen);
+
+  const guard = MeshBuilder.CreateTorus(
+    `${p}Guard`,
+    { diameter: 0.052, thickness: 0.008, tessellation: 16 },
+    scene,
+  );
+  guard.position.set(0, -0.02, 0.035);
+  guard.rotation.y = Math.PI / 2;
+  guard.material = frameMat;
+  guard.parent = modelNode;
+  cast(guard, shadowGen);
+
+  const trigger = MeshBuilder.CreateBox(
+    `${p}Trigger`,
+    { width: 0.008, height: 0.028, depth: 0.012 },
+    scene,
+  );
+  trigger.position.set(0, -0.012, 0.038);
+  trigger.rotation.x = 0.25;
+  trigger.material = triggerMat;
+  trigger.parent = modelNode;
+
+  // 3. 滑套 + 抛壳窗
+  const slide = MeshBuilder.CreateBox(
+    `${p}Slide`,
+    { width: 0.05, height: 0.052, depth: 0.24 },
+    scene,
+  );
+  slide.position.set(0, 0.06, PISTOL_SLIDE_Z);
+  slide.material = slideMat;
+  slide.parent = modelNode;
+  cast(slide, shadowGen);
+
+  const port = MeshBuilder.CreateBox(
+    `${p}EjectionPort`,
+    { width: 0.024, height: 0.022, depth: 0.06 },
+    scene,
+  );
+  // 相对滑套：随滑套后座一起退
+  port.position.set(0.018, 0.01, -0.035);
+  port.material = barrelMat;
+  port.parent = slide;
+
+  // 4. 枪管 + 枪口环
+  const barrel = MeshBuilder.CreateCylinder(
+    `${p}Barrel`,
+    { height: 0.24, diameter: 0.026, tessellation: 12 },
+    scene,
+  );
+  barrel.rotation.x = Math.PI / 2;
+  barrel.position.set(0, 0.058, 0.05);
+  barrel.material = barrelMat;
+  barrel.parent = modelNode;
+
+  const muzzleRing = MeshBuilder.CreateCylinder(
+    `${p}MuzzleRing`,
+    { height: 0.016, diameter: 0.034, tessellation: 10 },
+    scene,
+  );
+  muzzleRing.rotation.x = Math.PI / 2;
+  muzzleRing.position.set(0, 0.058, 0.168);
+  muzzleRing.material = slideMat;
+  muzzleRing.parent = modelNode;
+
+  // 5. 准星照门
+  const rearSight = MeshBuilder.CreateBox(
+    `${p}RearSight`,
+    { width: 0.034, height: 0.016, depth: 0.018 },
+    scene,
+  );
+  rearSight.position.set(0, 0.032, -0.105);
+  rearSight.material = frameMat;
+  rearSight.parent = slide;
+
+  const frontSight = MeshBuilder.CreateBox(
+    `${p}FrontSight`,
+    { width: 0.014, height: 0.018, depth: 0.016 },
+    scene,
+  );
+  frontSight.position.set(0, 0.033, 0.105);
+  frontSight.material = frameMat;
+  frontSight.parent = slide;
+
+  const dots: Mesh[] = [];
+  [-0.01, 0.01].forEach((xOff, i) => {
+    const rearDot = MeshBuilder.CreateSphere(
+      `${p}RearDot_${i}`,
+      { diameter: 0.007, segments: 6 },
+      scene,
+    );
+    rearDot.position.set(xOff, 0.034, -0.096);
+    rearDot.material = sightDotMat;
+    rearDot.parent = slide;
+    dots.push(rearDot);
+  });
+  const frontDot = MeshBuilder.CreateSphere(
+    `${p}FrontDot`,
+    { diameter: 0.008, segments: 6 },
+    scene,
+  );
+  frontDot.position.set(0, 0.035, 0.113);
+  frontDot.material = sightDotMat;
+  frontDot.parent = slide;
+  dots.push(frontDot);
+
+  // 6. 枪口焰：平时几乎不可见，开枪瞬间爆亮；同时作为子弹出生锚点
+  const orb = MeshBuilder.CreateSphere(
+    `${p}MuzzleOrb`,
+    { diameter: 0.042, segments: 8 },
+    scene,
+  );
+  orb.position.set(0, 0.058, 0.188);
+  orb.material = muzzleOrbMat;
+  orb.parent = modelNode;
+  orb.scaling.setAll(0.18);
+  orb.isPickable = false;
+
+  const flashCone = MeshBuilder.CreateCylinder(
+    `${p}FlashCone`,
+    {
+      height: 0.11,
+      diameterTop: 0.09,
+      diameterBottom: 0.016,
+      tessellation: 8,
+    },
+    scene,
+  );
+  flashCone.rotation.x = Math.PI / 2;
+  flashCone.position.set(0, 0.058, PISTOL_FLASH_Z);
+  flashCone.material = flashMat;
+  flashCone.parent = modelNode;
+  flashCone.isPickable = false;
+  flashCone.visibility = 0;
+
+  return {
+    style: 'pistol',
+    root,
+    orb,
+    orbMat: muzzleOrbMat,
+    core: null,
+    coreMat: null,
+    halos: [],
+    aura: null,
+    auraMat: flashMat,
+    crown: modelNode,
+    sparks: dots,
+    extras: [slide, flashCone],
+    t: 0,
+    shootKick: 0,
+  };
+}
+
+function attachLitePistol(scene: Scene, rightHand: Mesh): StaffFx {
+  const p = 'litePistol';
+  const root = pistolGripRoot(scene, `liteStaff_pistol`, rightHand);
+
+  const modelNode = new TransformNode(`${p}Model`, scene);
+  modelNode.parent = root;
+  modelNode.rotation.x = -Math.PI / 2;
+  modelNode.position.set(0, 0.10, 0.02);
+  modelNode.scaling.setAll(1.2);
+
+  const bodyMat = mat(scene, `${p}Body`, 0x2a2e34);
+  const orbMat = emissiveMat(scene, `${p}Orb`, 0xff8800, 1.3);
+  orbMat.transparencyMode = StandardMaterial.MATERIAL_ALPHABLEND;
+  orbMat.disableDepthWrite = true;
+
+  const grip = MeshBuilder.CreateBox(
+    `${p}Grip`,
+    { width: 0.04, height: 0.13, depth: 0.055 },
+    scene,
+  );
+  grip.position.set(0, -0.05, -0.015);
+  grip.rotation.x = -0.2;
+  grip.material = bodyMat;
+  grip.parent = modelNode;
+  grip.isPickable = false;
+
+  const slide = MeshBuilder.CreateBox(
+    `${p}Slide`,
+    { width: 0.046, height: 0.044, depth: 0.22 },
+    scene,
+  );
+  slide.position.set(0, 0.05, 0.04);
+  slide.material = bodyMat;
+  slide.parent = modelNode;
+  slide.isPickable = false;
+
+  const orb = MeshBuilder.CreateSphere(
+    `${p}Muzzle`,
+    { diameter: 0.036, segments: 6 },
+    scene,
+  );
+  orb.position.set(0, 0.05, 0.16);
+  orb.material = orbMat;
+  orb.parent = modelNode;
+  orb.isPickable = false;
+  orb.scaling.setAll(0.2);
+
+  return {
+    style: 'pistol',
+    root,
+    orb,
+    orbMat,
+    core: null,
+    coreMat: null,
+    halos: [],
+    aura: null,
+    auraMat: null,
+    crown: modelNode,
+    sparks: [],
+    extras: [slide],
+    t: 0,
+    shootKick: 0,
+  };
+}
+
+function updatePistol(fx: StaffFx, t: number, dt: number): void {
+  const kick = fx.shootKick ?? 0;
+  if (kick > 0) {
+    fx.shootKick = Math.max(0, kick - dt * 14);
+  }
+  const flash = fx.shootKick ?? 0;
+
+  // 枪口焰：开枪当帧最亮，随后迅速熄灭
+  const ember = 0.16 + flash * 2.6;
+  fx.orb.scaling.setAll(ember);
+  fx.orbMat.emissiveColor.set(
+    1.0 * (0.18 + flash * 0.82),
+    0.55 * (0.12 + flash * 0.88),
+    0.08 + flash * 0.35,
+  );
+  fx.orbMat.alpha = 0.18 + flash * 0.82;
+
+  const cone = fx.extras[1];
+  if (cone) {
+    cone.visibility = flash;
+    const stretch = 0.35 + flash * 1.8;
+    cone.scaling.set(0.7 + flash * 0.9, stretch, 0.7 + flash * 0.9);
+    if (fx.auraMat) {
+      fx.auraMat.alpha = flash * 0.85;
+    }
+  }
+
+  // 滑套后座 + 整枪微微后坐
+  const slide = fx.extras[0];
+  if (slide) {
+    slide.position.z = PISTOL_SLIDE_Z - flash * 0.058;
+  }
+  if (fx.crown) {
+    fx.crown.position.y = 0.10 - flash * 0.02;
+  }
+
+  // 准星夜光：微弱稳态，不再乱闪
+  for (let i = 0; i < fx.sparks.length; i++) {
+    const dotMat = fx.sparks[i]?.material as StandardMaterial | undefined;
+    if (dotMat) {
+      const dotEm = 0.85 + 0.12 * Math.sin(t * 2.2 + i * 0.9);
+      dotMat.emissiveColor.set(0, dotEm, dotEm * 0.38);
+    }
   }
 }
 

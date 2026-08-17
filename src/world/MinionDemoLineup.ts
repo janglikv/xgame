@@ -11,7 +11,7 @@ import {
 } from './Minion';
 import type { FaceStyle } from './minion/faces';
 import { HAT_LABELS, HAT_STYLES } from './minion/hat';
-import { STAFF_LABELS, STAFF_STYLES } from './minion/staff';
+import { GUN_STYLES, STAFF_LABELS, STAFF_STYLES } from './minion/staff';
 import { MinionPhysicsProxy } from './physics/MinionPhysicsProxy';
 
 import { HealthBar } from './HealthBar';
@@ -25,6 +25,7 @@ const CATEGORY_PARTIAL_SLOTS: Record<string, readonly AppearanceSlot[]> = {
   阵法: ['formation'],
   肤色: ['bodyColor'],
   武器: ['staff'],
+  枪械武器: ['staff'],
   帽子: ['hat'],
   体型: ['scaleMultiplier', 'lowPolyFlat'],
 };
@@ -92,7 +93,14 @@ export const DEMO_ROWS: readonly DemoRow[] = [
   },
   {
     category: '武器',
-    presets: STAFF_STYLES.map((style) => ({
+    presets: STAFF_STYLES.filter((style) => style !== 'pistol').map((style) => ({
+      label: STAFF_LABELS[style],
+      options: { staff: style },
+    })),
+  },
+  {
+    category: '枪械武器',
+    presets: GUN_STYLES.map((style) => ({
       label: STAFF_LABELS[style],
       options: { staff: style },
     })),

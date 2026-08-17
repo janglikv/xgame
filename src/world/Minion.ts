@@ -24,8 +24,10 @@ import {
 import { ball, cast, colorFromHex, mat } from './minion/materials';
 import {
   attachStaff,
+  isGunStyle,
   type StaffFx,
   type StaffStyle,
+  triggerStaffShootPulse,
   updateStaffFx,
 } from './minion/staff';
 
@@ -175,6 +177,17 @@ export class Minion {
 
   static readonly HAND_REST_EMPTY = new Vector3(-0.5, 0.5, 0.05);
   static readonly HAND_REST_STAFF = new Vector3(-0.52, 0.68, 0.28);
+  /** 手枪闲置：靠髋、略低，不再按法杖高举 */
+  static readonly HAND_REST_PISTOL = new Vector3(-0.5, 0.46, 0.16);
+  static readonly AIM_HAND_STAFF = new Vector3(-0.42, 0.72, 0.42);
+  /** 手枪瞄准：手臂更前伸、略低 */
+  static readonly AIM_HAND_PISTOL = new Vector3(-0.36, 0.56, 0.58);
+
+  private static handRestFor(style: StaffStyle | null | undefined): Vector3 {
+    if (isGunStyle(style)) return Minion.HAND_REST_PISTOL;
+    if (style) return Minion.HAND_REST_STAFF;
+    return Minion.HAND_REST_EMPTY;
+  }
   static readonly BODY_RADIUS = 0.42;
   static readonly HAND_RADIUS = 0.1;
   /** 拳心与躯干球心的最小间距，略大于两球半径之和 */
@@ -235,12 +248,20 @@ export class Minion {
   private aimWeight = 0;
   /** 贴墙防穿模法杖向上抬高避让角度 */
   private staffRetractPitch = 0;
+  /** 开枪向上摇（后座向上跳枪 recoil）动画权重 */
+  private pistolRecoilT = 0;
   private isDeadState = false;
   private deathAnimWeight = 0;
   private readonly defaultStaffQuat = Quaternion.RotationYawPitchRoll(
     0,
     -0.32,
     0.1,
+  );
+  /** 手枪闲置：枪口略前倾，贴在身侧 */
+  private readonly defaultPistolQuat = Quaternion.RotationYawPitchRoll(
+    0,
+    -0.1,
+    0.06,
   );
 
   private walkPhase = 0;
@@ -339,9 +360,7 @@ export class Minion {
     cast(body, shadowGen);
 
     this.leftHandRest = new Vector3(0.5, 0.5, 0.05);
-    this.rightHandRest = (
-      appearance.staff ? Minion.HAND_REST_STAFF : Minion.HAND_REST_EMPTY
-    ).clone();
+    this.rightHandRest = Minion.handRestFor(appearance.staff).clone();
 
     this.leftHand = ball(
       scene,
@@ -472,10 +491,12 @@ export class Minion {
     return this.rightHand.absolutePosition.clone().addInPlace(new Vector3(0, 0.65, 0));
   }
 
-  /** 发射能量光球时的顶端宝珠瞬间脉动放大 */
+  /** 发射能量光球/开枪时的顶端宝珠瞬间脉动放大与枪口向上摇跳枪 Recoil */
   triggerStaffShootFx(): void {
-    if (this.staffFx) {
-      this.staffFx.orb.scaling.set(1.65, 1.65, 1.65);
+    if (!this.staffFx) return;
+    triggerStaffShootPulse(this.staffFx);
+    if (isGunStyle(this.staffFx.style)) {
+      this.pistolRecoilT = 1.0;
     }
   }
 
@@ -981,7 +1002,9 @@ export class Minion {
 
     // 瞄准姿态调整：右手臂位姿插值 & 法杖实时旋转指向目标点
     if (this.aimWeight > 0.001) {
-      const aimHandPos = new Vector3(-0.42, 0.72, 0.42);
+      const aimHandPos = isGunStyle(this.appearance.staff)
+        ? Minion.AIM_HAND_PISTOL
+        : Minion.AIM_HAND_STAFF;
       this.rightHand.position.x =
         this.rightHand.position.x * (1 - this.aimWeight) +
         aimHandPos.x * this.aimWeight;
@@ -997,9 +1020,19 @@ export class Minion {
       // 1. 先平滑更新贴墙抬高倾角 (staffRetractPitch)
       this.updateStaffWallRetraction(dt);
 
+      // 2. 手枪后座：枪口上跳，仅枪械
+      const isPistol = isGunStyle(this.staffFx.style);
+      if (isPistol && this.pistolRecoilT > 0) {
+        this.pistolRecoilT = Math.max(0, this.pistolRecoilT - dt * 8);
+      }
+      const recoilPitch = isPistol
+        ? Math.sin(this.pistolRecoilT * Math.PI) * 0.26
+        : 0;
+      const totalPitch = this.staffRetractPitch + recoilPitch;
+
       const qRetract =
-        this.staffRetractPitch > 0.001
-          ? Quaternion.RotationAxis(Vector3.Right(), -this.staffRetractPitch)
+        totalPitch > 0.001
+          ? Quaternion.RotationAxis(Vector3.Right(), -totalPitch)
           : null;
 
       const activeAimTarget = this.aimTarget ?? this.lastAimTarget;
@@ -1035,8 +1068,11 @@ export class Minion {
             qAim = qAim.multiply(qRetract);
           }
 
+          const qRest = isPistol
+            ? this.defaultPistolQuat
+            : this.defaultStaffQuat;
           const qFinal = Quaternion.Slerp(
-            this.defaultStaffQuat,
+            qRest,
             qAim,
             this.aimWeight,
           );
@@ -1052,14 +1088,18 @@ export class Minion {
           }
         }
 
-        // 瞄准脉动强化
-        const pulse =
-          1 + Math.sin(this.breathPhase * 8) * 0.12 * this.aimWeight;
-        this.staffFx.orb.scaling.set(pulse, pulse, pulse);
+        // 瞄准脉动强化（手枪枪口焰由 updatePistol 接管）
+        if (!isPistol) {
+          const pulse =
+            1 + Math.sin(this.breathPhase * 8) * 0.12 * this.aimWeight;
+          this.staffFx.orb.scaling.set(pulse, pulse, pulse);
+        }
       } else {
-        let qDefault = this.defaultStaffQuat;
+        let qDefault = isPistol
+          ? this.defaultPistolQuat
+          : this.defaultStaffQuat;
         if (qRetract) {
-          qDefault = this.defaultStaffQuat.multiply(qRetract);
+          qDefault = qDefault.multiply(qRetract);
         }
         if (!this.staffFx.root.rotationQuaternion) {
           this.staffFx.root.rotationQuaternion = qDefault.clone();
@@ -1170,6 +1210,7 @@ export class Minion {
       if (style === null || this.staffFx) return;
     }
     this.appearance.staff = style;
+    this.pistolRecoilT = 0;
     if (this.staffFx) {
       this.staffFx.root.dispose();
       this.staffFx = null;
@@ -1181,10 +1222,8 @@ export class Minion {
         style,
         this.shadowGen,
       );
-      this.rightHandRest.copyFrom(Minion.HAND_REST_STAFF);
-    } else {
-      this.rightHandRest.copyFrom(Minion.HAND_REST_EMPTY);
     }
+    this.rightHandRest.copyFrom(Minion.handRestFor(style));
   }
 
   private setScaleMultiplier(mul: number): void {

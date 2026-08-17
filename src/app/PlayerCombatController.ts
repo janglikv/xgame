@@ -1,6 +1,7 @@
 import { Matrix, Vector3, type ArcRotateCamera, type Scene } from '@babylonjs/core';
 import { playSfx } from '../audio/Sfx';
 import type { Minion } from '../world/Minion';
+import { isGunStyle } from '../world/minion/staff';
 import { spawnHitSparkFx } from '../world/MeleeSectorFx';
 import type { SpellProjectileSystem } from '../world/SpellProjectileSystem';
 import type { CameraFollow } from './CameraFollow';
@@ -10,11 +11,30 @@ import type { CameraFollow } from './CameraFollow';
  * 1. 有法杖：瞄准 + 当法杖方向与【角色中心点 -> 指针位置】逻辑线平行时，沿法杖前向发射子弹；
  * 2. 空手（无法杖）：按住/点击鼠标触发近战空手挥拳动画与拳头落点打击。
  */
+/** 手枪连发水平最大偏角（弧度，约 16°） */
+const PISTOL_SPREAD_MAX = 0.28;
+/** 连发至少偏这么多，避免看起来仍像精准弹 */
+const PISTOL_SPREAD_MIN = 0.09;
+
+function yawJitter(dir: Vector3, minRad: number, maxRad: number): Vector3 {
+  const sign = Math.random() < 0.5 ? -1 : 1;
+  const angle = sign * (minRad + Math.random() * (maxRad - minRad));
+  const c = Math.cos(angle);
+  const s = Math.sin(angle);
+  const x = dir.x * c - dir.z * s;
+  const z = dir.x * s + dir.z * c;
+  const out = new Vector3(x, 0, z);
+  if (out.lengthSquared() < 1e-8) return dir.clone();
+  return out.normalize();
+}
+
 export class PlayerCombatController {
   private shootCooldown = 0;
   private meleeCooldown = 0;
   private isPointerDown = false;
   private pointerOverCanvas = false;
+  /** 本次按下是否已经打出第一发精准弹 */
+  private pistolBurstShot = false;
 
   constructor(
     private readonly shootInterval = 0.2,
@@ -35,10 +55,12 @@ export class PlayerCombatController {
         this.isPointerDown = true;
         this.shootCooldown = 0;
         this.meleeCooldown = 0;
+        this.pistolBurstShot = false;
       }
     };
     const onUp = (): void => {
       this.isPointerDown = false;
+      this.pistolBurstShot = false;
     };
     const onEnter = (): void => {
       this.pointerOverCanvas = true;
@@ -49,6 +71,7 @@ export class PlayerCombatController {
     const onLeave = (): void => {
       this.pointerOverCanvas = false;
       this.isPointerDown = false;
+      this.pistolBurstShot = false;
     };
 
     canvas.addEventListener('pointerdown', onDown);
@@ -85,6 +108,7 @@ export class PlayerCombatController {
     const { scene, camera, player, spellSystem, menuOpen } = opts;
 
     if (!this.isPointerDown || !this.pointerOverCanvas || menuOpen || player.isDead()) {
+      this.pistolBurstShot = false;
       player.setAimTarget(null);
       return;
     }
@@ -130,12 +154,19 @@ export class PlayerCombatController {
         return;
       }
 
-      this.shootCooldown = this.shootInterval;
-      const tipPos = player.getStaffTipWorldPos();
-      // 子弹方向沿用法杖前向向量向前发射
-      const shootDir = player.getStaffForwardVector();
-
       const style = player.getStaffStyle() ?? 'arcane';
+      this.shootCooldown = isGunStyle(style)
+        ? this.shootInterval * 1.9
+        : this.shootInterval;
+      const tipPos = player.getStaffTipWorldPos();
+      // 子弹方向沿用法杖前向向量向前发射；手枪仅首发精准，连发水平随机偏移
+      let shootDir = player.getStaffForwardVector();
+      if (isGunStyle(style)) {
+        if (this.pistolBurstShot) {
+          shootDir = yawJitter(shootDir, PISTOL_SPREAD_MIN, PISTOL_SPREAD_MAX);
+        }
+        this.pistolBurstShot = true;
+      }
       playSfx(
         style === 'storm'
           ? '/audio/staff_storm_fire.mp3'

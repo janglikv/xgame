@@ -14,7 +14,7 @@ import {
 } from '@babylonjs/core';
 import { playSfx } from '../audio/Sfx';
 import type { Minion } from './Minion';
-import type { StaffStyle } from './minion/staff';
+import { isGunStyle, type StaffStyle } from './minion/staff';
 
 /**
  * 各法杖类型对应的纯鲜艳颜色
@@ -27,6 +27,7 @@ const STYLE_COLORS: Record<StaffStyle, Color3> = {
   void: Color3.FromHexString('#8811ee'),   // 虚空紫
   storm: Color3.FromHexString('#00e5ff'),  // 风暴青
   holy: Color3.FromHexString('#ffcc00'),   // 圣光黄
+  pistol: Color3.FromHexString('#ff8800'), // 战术高能橙
 };
 
 const BASE_BULLET_DAMAGE = 25;
@@ -63,6 +64,7 @@ export class SpellProjectileSystem {
   private readonly matMap = new Map<StaffStyle, StandardMaterial>();
   private readonly textureMap = new Map<StaffStyle, DynamicTexture>();
   private readonly explosionMatMap = new Map<StaffStyle, StandardMaterial>();
+  private readonly sparkMatMap = new Map<StaffStyle, StandardMaterial>();
   private readonly bullets: Bullet[] = [];
   private readonly meshPool: Mesh[] = [];
   private liveExplosions = 0;
@@ -108,6 +110,7 @@ export class SpellProjectileSystem {
     const g = Math.round(baseColor.g * 255);
     const b = Math.round(baseColor.b * 255);
     const rgba = (a: number) => `rgba(${r}, ${g}, ${b}, ${a})`;
+    const pistol = isGunStyle(style);
 
     const width = 256;
     const height = 64;
@@ -121,63 +124,100 @@ export class SpellProjectileSystem {
 
     ctx.clearRect(0, 0, width, height);
 
-    // 1. 柔和外晕 (Soft Outer Teardrop Aura)
-    const auraGrad = ctx.createLinearGradient(0, 0, 230, 0);
-    auraGrad.addColorStop(0, rgba(0));
-    auraGrad.addColorStop(0.3, rgba(0.25));
-    auraGrad.addColorStop(0.7, rgba(0.6));
-    auraGrad.addColorStop(1.0, rgba(0));
+    if (pistol) {
+      // 手枪：细长热曳光，头白尾橙，没有法杖那种胖彗星
+      const auraGrad = ctx.createLinearGradient(0, 0, 240, 0);
+      auraGrad.addColorStop(0, rgba(0));
+      auraGrad.addColorStop(0.45, rgba(0.22));
+      auraGrad.addColorStop(0.85, rgba(0.7));
+      auraGrad.addColorStop(1.0, rgba(0));
+      ctx.fillStyle = auraGrad;
+      ctx.beginPath();
+      ctx.moveTo(8, 32);
+      ctx.quadraticCurveTo(130, 20, 220, 24);
+      ctx.arc(220, 32, 10, -Math.PI / 2, Math.PI / 2);
+      ctx.quadraticCurveTo(130, 44, 8, 32);
+      ctx.closePath();
+      ctx.fill();
 
-    ctx.fillStyle = auraGrad;
-    ctx.beginPath();
-    ctx.moveTo(0, 32);
-    ctx.quadraticCurveTo(110, 0, 206, 8);
-    ctx.arc(206, 32, 24, -Math.PI / 2, Math.PI / 2);
-    ctx.quadraticCurveTo(110, 64, 0, 32);
-    ctx.closePath();
-    ctx.fill();
+      const coreGrad = ctx.createLinearGradient(40, 0, 224, 0);
+      coreGrad.addColorStop(0, rgba(0));
+      coreGrad.addColorStop(0.4, 'rgba(255, 220, 160, 0.75)');
+      coreGrad.addColorStop(1.0, '#ffffff');
+      ctx.strokeStyle = coreGrad;
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(48, 32);
+      ctx.lineTo(220, 32);
+      ctx.stroke();
 
-    // 2. 彗星能量主体 (Comet Body)
-    const bodyGrad = ctx.createLinearGradient(0, 0, 206, 0);
-    bodyGrad.addColorStop(0, rgba(0));
-    bodyGrad.addColorStop(0.25, rgba(0.45));
-    bodyGrad.addColorStop(0.75, rgba(0.95));
-    bodyGrad.addColorStop(1.0, '#ffffff');
+      const headGrad = ctx.createRadialGradient(222, 32, 0, 222, 32, 12);
+      headGrad.addColorStop(0, '#ffffff');
+      headGrad.addColorStop(0.45, '#ffe0a0');
+      headGrad.addColorStop(1.0, rgba(0));
+      ctx.fillStyle = headGrad;
+      ctx.beginPath();
+      ctx.arc(222, 32, 12, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      // 1. 柔和外晕 (Soft Outer Teardrop Aura)
+      const auraGrad = ctx.createLinearGradient(0, 0, 230, 0);
+      auraGrad.addColorStop(0, rgba(0));
+      auraGrad.addColorStop(0.3, rgba(0.25));
+      auraGrad.addColorStop(0.7, rgba(0.6));
+      auraGrad.addColorStop(1.0, rgba(0));
 
-    ctx.fillStyle = bodyGrad;
-    ctx.beginPath();
-    ctx.moveTo(8, 32);
-    ctx.quadraticCurveTo(115, 10, 204, 18);
-    ctx.arc(204, 32, 14, -Math.PI / 2, Math.PI / 2);
-    ctx.quadraticCurveTo(115, 54, 8, 32);
-    ctx.closePath();
-    ctx.fill();
+      ctx.fillStyle = auraGrad;
+      ctx.beginPath();
+      ctx.moveTo(0, 32);
+      ctx.quadraticCurveTo(110, 0, 206, 8);
+      ctx.arc(206, 32, 24, -Math.PI / 2, Math.PI / 2);
+      ctx.quadraticCurveTo(110, 64, 0, 32);
+      ctx.closePath();
+      ctx.fill();
 
-    // 3. 核心白热能量光束 (White Hot Inner Ray)
-    const coreGrad = ctx.createLinearGradient(30, 0, 204, 0);
-    coreGrad.addColorStop(0, rgba(0));
-    coreGrad.addColorStop(0.35, 'rgba(255, 255, 255, 0.85)');
-    coreGrad.addColorStop(1.0, '#ffffff');
+      // 2. 彗星能量主体 (Comet Body)
+      const bodyGrad = ctx.createLinearGradient(0, 0, 206, 0);
+      bodyGrad.addColorStop(0, rgba(0));
+      bodyGrad.addColorStop(0.25, rgba(0.45));
+      bodyGrad.addColorStop(0.75, rgba(0.95));
+      bodyGrad.addColorStop(1.0, '#ffffff');
 
-    ctx.strokeStyle = coreGrad;
-    ctx.lineWidth = 8;
-    ctx.lineCap = 'round';
-    ctx.beginPath();
-    ctx.moveTo(30, 32);
-    ctx.lineTo(204, 32);
-    ctx.stroke();
+      ctx.fillStyle = bodyGrad;
+      ctx.beginPath();
+      ctx.moveTo(8, 32);
+      ctx.quadraticCurveTo(115, 10, 204, 18);
+      ctx.arc(204, 32, 14, -Math.PI / 2, Math.PI / 2);
+      ctx.quadraticCurveTo(115, 54, 8, 32);
+      ctx.closePath();
+      ctx.fill();
 
-    // 4. 子弹头部发光圆核 (Glowing Bullet Head Orb) at X=204, Y=32
-    const headGrad = ctx.createRadialGradient(204, 32, 0, 204, 32, 20);
-    headGrad.addColorStop(0, '#ffffff');
-    headGrad.addColorStop(0.45, '#ffffff');
-    headGrad.addColorStop(0.75, rgba(1));
-    headGrad.addColorStop(1.0, rgba(0));
+      // 3. 核心白热能量光束 (White Hot Inner Ray)
+      const coreGrad = ctx.createLinearGradient(30, 0, 204, 0);
+      coreGrad.addColorStop(0, rgba(0));
+      coreGrad.addColorStop(0.35, 'rgba(255, 255, 255, 0.85)');
+      coreGrad.addColorStop(1.0, '#ffffff');
 
-    ctx.fillStyle = headGrad;
-    ctx.beginPath();
-    ctx.arc(204, 32, 20, 0, Math.PI * 2);
-    ctx.fill();
+      ctx.strokeStyle = coreGrad;
+      ctx.lineWidth = 8;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(30, 32);
+      ctx.lineTo(204, 32);
+      ctx.stroke();
+
+      // 4. 子弹头部发光圆核 (Glowing Bullet Head Orb) at X=204, Y=32
+      const headGrad = ctx.createRadialGradient(204, 32, 0, 204, 32, 20);
+      headGrad.addColorStop(0, '#ffffff');
+      headGrad.addColorStop(0.45, '#ffffff');
+      headGrad.addColorStop(0.75, rgba(1));
+      headGrad.addColorStop(1.0, rgba(0));
+
+      ctx.fillStyle = headGrad;
+      ctx.beginPath();
+      ctx.arc(204, 32, 20, 0, Math.PI * 2);
+      ctx.fill();
+    }
 
     dynTex.update(false);
     dynTex.hasAlpha = true;
@@ -308,6 +348,8 @@ export class SpellProjectileSystem {
     }
 
     const powerScale = Math.max(0.2, shooter?.getStaffPowerScale() ?? 1);
+    const pistol = isGunStyle(style);
+    const fireSpeed = (pistol ? speed * 1.55 : speed) / Math.max(0.4, powerScale);
 
     if (this.bullets.length >= MAX_LIVE_BULLETS) {
       this.retireBullet(0);
@@ -325,12 +367,12 @@ export class SpellProjectileSystem {
       position: finalSpawnPos.clone(),
       lastPos: finalSpawnPos.clone(),
       direction: dir,
-      speed: speed / Math.max(0.4, powerScale),
+      speed: fireSpeed,
       shooter,
       style,
       posBuffer,
       powerScale,
-      damage: Math.round(BASE_BULLET_DAMAGE * powerScale),
+      damage: Math.round(BASE_BULLET_DAMAGE * powerScale * (pistol ? 0.6 : 1)),
     };
 
     this.updateTrailMeshVertices(bullet);
@@ -343,9 +385,10 @@ export class SpellProjectileSystem {
   private updateTrailMeshVertices(bullet: Bullet): void {
     const H = bullet.position;
     const stepDist = Vector3.Distance(bullet.position, bullet.lastPos);
+    const pistol = isGunStyle(bullet.style);
     const trailLen = Math.max(
-      BASE_TRAIL_LEN * bullet.powerScale,
-      stepDist * 1.3,
+      BASE_TRAIL_LEN * bullet.powerScale * (pistol ? 1.2 : 1),
+      stepDist * (pistol ? 1.55 : 1.3),
     );
 
     const T = this.tmpTail;
@@ -381,7 +424,7 @@ export class SpellProjectileSystem {
     }
     side.normalize();
 
-    const width = BASE_TRAIL_WIDTH * bullet.powerScale;
+    const width = BASE_TRAIL_WIDTH * bullet.powerScale * (pistol ? 0.4 : 1);
     const halfW = width * 0.5;
 
     const sideX = side.x * halfW;
@@ -463,6 +506,13 @@ export class SpellProjectileSystem {
       }
 
       if (wallHitDist !== Infinity || outOfBounds) {
+        let impactPos = nextPos;
+        if (wallHitDist !== Infinity) {
+          impactPos = b.lastPos.add(this.tmpDir.scale(wallHitDist));
+        }
+        // 命中墙体：触发爆裂与火花溅射视觉特效，但不播放命中音效
+        this.triggerExplosionFx(impactPos, b.style, b.powerScale);
+        this.triggerWallImpactFx(impactPos, b.style, b.powerScale);
         this.retireBullet(i);
         continue;
       }
@@ -620,6 +670,8 @@ export class SpellProjectileSystem {
       m.dispose();
     }
     this.explosionMatMap.clear();
+    for (const m of this.sparkMatMap.values()) m.dispose();
+    this.sparkMatMap.clear();
   }
 
   /**
@@ -636,9 +688,13 @@ export class SpellProjectileSystem {
     if (this.liveExplosions >= MAX_LIVE_EXPLOSIONS) return;
     this.liveExplosions += 1;
 
+    const pistol = isGunStyle(style);
     const expMesh = MeshBuilder.CreateDisc(
       'expSprite',
-      { radius: BASE_EXPLOSION_R * powerScale, tessellation: 12 },
+      {
+        radius: BASE_EXPLOSION_R * powerScale * (pistol ? 0.38 : 1),
+        tessellation: 12,
+      },
       scene,
     );
     expMesh.billboardMode = Mesh.BILLBOARDMODE_ALL;
@@ -664,7 +720,7 @@ export class SpellProjectileSystem {
         return;
       }
 
-      const s = 0.4 + progress * 1.2;
+      const s = pistol ? 0.5 + progress * 0.65 : 0.4 + progress * 1.2;
       expMesh.scaling.set(s, s, s);
       expMesh.visibility = 1 - progress * progress;
     });
@@ -721,6 +777,80 @@ export class SpellProjectileSystem {
     mat.backFaceCulling = false;
 
     this.explosionMatMap.set(style, mat);
+    return mat;
+  }
+
+  /**
+   * 子弹命中墙体时的碎花火花散逸视觉特效 (纯视觉，无音效)
+   */
+  private triggerWallImpactFx(
+    pos: Vector3,
+    style: StaffStyle,
+    powerScale = 1,
+  ): void {
+    const scene = this.scene;
+    const mat = this.getSparkMaterial(style);
+    const pistol = isGunStyle(style);
+
+    const sparkCount = 4;
+    const duration = pistol ? 0.14 : 0.16;
+    const radius = (pistol ? 0.026 : 0.06) * powerScale;
+
+    for (let k = 0; k < sparkCount; k++) {
+      const spark = MeshBuilder.CreateDisc(
+        'wallSpark',
+        { radius, tessellation: 8 },
+        scene,
+      );
+      spark.billboardMode = Mesh.BILLBOARDMODE_ALL;
+      spark.position.copyFrom(pos);
+      spark.isPickable = false;
+      spark.renderingGroupId = 2;
+      spark.material = mat;
+
+      const angle = (k / sparkCount) * Math.PI * 2 + Math.random() * 0.55;
+      const speed = (pistol ? 0.85 : 1.2) + Math.random() * (pistol ? 0.7 : 1.5);
+      const vx = Math.cos(angle) * speed;
+      let vy = (Math.random() - 0.15) * speed * 0.85;
+      const vz = Math.sin(angle) * speed;
+
+      let timer = 0;
+
+      const obs = scene.onBeforeRenderObservable.add(() => {
+        const dt = scene.getEngine().getDeltaTime() / 1000;
+        timer += dt;
+        const p = Math.min(1, timer / duration);
+
+        vy -= 8 * dt;
+        spark.position.x += vx * dt;
+        spark.position.y += vy * dt;
+        spark.position.z += vz * dt;
+
+        const s = (1 - p) * (pistol ? 0.9 : 1.2);
+        spark.scaling.set(s, s, s);
+        spark.visibility = 1 - p;
+
+        if (p >= 1) {
+          scene.onBeforeRenderObservable.remove(obs);
+          spark.dispose();
+        }
+      });
+    }
+  }
+
+  private getSparkMaterial(style: StaffStyle): StandardMaterial {
+    let mat = this.sparkMatMap.get(style);
+    if (mat) return mat;
+
+    const baseColor = STYLE_COLORS[style] ?? STYLE_COLORS.arcane;
+    mat = new StandardMaterial(`wallSparkMat_${style}`, this.scene);
+    mat.diffuseColor = baseColor;
+    mat.emissiveColor = baseColor.scale(2.1);
+    mat.disableLighting = true;
+    mat.backFaceCulling = false;
+    mat.transparencyMode = StandardMaterial.MATERIAL_ALPHABLEND;
+    mat.disableDepthWrite = true;
+    this.sparkMatMap.set(style, mat);
     return mat;
   }
 }
