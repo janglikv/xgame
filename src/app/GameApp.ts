@@ -27,6 +27,7 @@ import { PlayerCombatController } from './PlayerCombatController';
 import { TeleportFlow } from './TeleportFlow';
 import { WarpLanding } from './WarpLanding';
 import { BgmPlayer, HUB_BGM, LEVEL1_BGM, LEVEL2_BGM } from '../audio/BgmPlayer';
+import { setHitSfxId, type HitSfxId } from '../audio/hitSfx';
 import { WorldRouter } from './WorldRouter';
 
 const MOVE_SPEED = 2;
@@ -47,6 +48,7 @@ export class GameApp {
   private isInvincible = false;
   private bgmEnabled = true;
   private graphicsQuality: GraphicsQuality = 'medium';
+  private hitSfxId: HitSfxId = 'original';
   private readonly bgm = new BgmPlayer();
 
   private readonly moveInput = new MoveInput();
@@ -80,8 +82,17 @@ export class GameApp {
     this.showGrid = settings.showGrid;
     this.showColliders = settings.showColliders;
     this.isInvincible = settings.isInvincible;
+    // 正式包没有调试入口：关掉网格/无敌/自由镜头，避免沿用本地存档
+    if (!import.meta.env.DEV) {
+      this.cameraMode = 'fixed';
+      this.showGrid = false;
+      this.showColliders = false;
+      this.isInvincible = false;
+    }
     this.bgmEnabled = settings.bgmEnabled;
     this.graphicsQuality = settings.graphicsQuality;
+    this.hitSfxId = settings.hitSfxId;
+    setHitSfxId(this.hitSfxId);
     this.applyHardwareScale();
     this.bgm.setEnabled(this.bgmEnabled);
     this.bgm.armUnlock();
@@ -188,6 +199,12 @@ export class GameApp {
       setGraphicsQuality: (quality) => this.setGraphicsQuality(quality),
       getCameraMode: () => this.cameraMode,
       setCameraMode: (mode) => this.setCameraMode(mode),
+      getHitSfxId: () => this.hitSfxId,
+      setHitSfxId: (id) => {
+        this.hitSfxId = id;
+        setHitSfxId(id);
+        this.persistSettings();
+      },
       getCameraInfo: () => {
         const cam = this.router.active.camera;
         return {
@@ -413,6 +430,7 @@ export class GameApp {
       cameraMode: this.cameraMode,
       bgmEnabled: this.bgmEnabled,
       graphicsQuality: this.graphicsQuality,
+      hitSfxId: this.hitSfxId,
     });
   }
 

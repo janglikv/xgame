@@ -1,4 +1,7 @@
+import { isHitSfxId, type HitSfxId } from '../audio/hitSfx';
 import { isGraphicsQuality, type GraphicsQuality } from './graphicsQuality';
+
+export type { HitSfxId };
 
 /** localStorage 键；改字段结构时递增版本 */
 const STORAGE_KEY = 'luolu.settings.v5';
@@ -23,6 +26,8 @@ export interface SettingsStateSnapshot {
   bgmEnabled: boolean;
   /** 画质档次 */
   graphicsQuality: GraphicsQuality;
+  /** 玩家掉血音效（开发者调试） */
+  hitSfxId: HitSfxId;
 }
 
 /** 自由/调试镜头默认垂直 FOV（Babylon 默认约 0.8） */
@@ -37,10 +42,10 @@ export const FIXED_CAMERA = {
   alpha: 4.695,
   /** 仰/俯角 β：约 53°（相对竖直）。原 32.5° 太陡，脚被身体挡住 */
   beta: 0.92,
-  /** 垂直 FOV：继续收窄，透视更平 */
-  fov: 0.36,
-  /** 跟拍距离：FOV 再收后继续拉远 */
-  radius: 22,
+  /** 垂直 FOV：再收窄一档，近大远小更弱 */
+  fov: 0.30,
+  /** 跟拍距离：按 R·fov 近似配对，角色屏幕体量接近上一档 */
+  radius: 26.4,
   /**
    * 注视高度相对身体中心的比例。
    * 压到接近脚底，脚进画面下沿内侧。
@@ -56,6 +61,7 @@ const DEFAULTS: SettingsStateSnapshot = {
   cameraMode: 'fixed',
   bgmEnabled: true,
   graphicsQuality: 'medium',
+  hitSfxId: 'original',
 };
 
 export function loadSettingsState(): SettingsStateSnapshot {
@@ -79,6 +85,7 @@ export function loadSettingsState(): SettingsStateSnapshot {
       graphicsQuality: isGraphicsQuality(data.graphicsQuality)
         ? data.graphicsQuality
         : DEFAULTS.graphicsQuality,
+      hitSfxId: isHitSfxId(data.hitSfxId) ? data.hitSfxId : DEFAULTS.hitSfxId,
     };
   } catch {
     return { ...DEFAULTS };

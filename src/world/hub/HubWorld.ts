@@ -5,7 +5,7 @@ import type {
   ShadowGenerator,
 } from '@babylonjs/core';
 import { Vector3 } from '@babylonjs/core';
-import { playSfx } from '../../audio/Sfx';
+import { playPlayerHitSfx } from '../../audio/hitSfx';
 import {
   loadCameraState,
   type CameraStateSnapshot,
@@ -240,7 +240,7 @@ export class HubWorld implements GameWorld {
     };
 
     minion.onTakeDamage = (amount) => {
-      playSfx('/audio/player_hit.mp3', 0.55);
+      playPlayerHitSfx();
       playerHealthBar.takeDamage(amount);
       if (playerHealthBar.isDead() && !minion.isDead()) {
         minion.setDead(true);

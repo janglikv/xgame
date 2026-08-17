@@ -1,5 +1,5 @@
 import { Vector3, type ArcRotateCamera, type Engine, type Scene } from '@babylonjs/core';
-import { playSfx } from '../../audio/Sfx';
+import { playPlayerHitSfx } from '../../audio/hitSfx';
 import { getGraphicsPreset } from '../../storage/graphicsQuality';
 import { loadSettingsState, type CameraMode } from '../../storage/settingsState';
 import { DeathOverlay } from '../../ui/DeathOverlay';
@@ -214,7 +214,7 @@ export class Level2World implements GameWorld {
     };
 
     minion.onTakeDamage = (amount) => {
-      playSfx('/audio/player_hit.mp3', 0.55);
+      playPlayerHitSfx();
       if (options.getIsInvincible?.()) return;
       playerHealthBar.takeDamage(amount);
       if (playerHealthBar.isDead() && !minion.isDead()) {
