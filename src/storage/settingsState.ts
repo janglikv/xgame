@@ -38,19 +38,16 @@ export const FREE_CAMERA_FOV = 0.8;
  * （过陡时身体球体把脚挡在下面）。
  */
 export const FIXED_CAMERA = {
-  /** 方位角 α：269.0° (4.695 rad) */
-  alpha: 4.695,
-  /** 仰/俯角 β：约 53°（相对竖直）。原 32.5° 太陡，脚被身体挡住 */
-  beta: 0.92,
-  /** 垂直 FOV：再收窄一档，近大远小更弱 */
-  fov: 0.30,
-  /** 跟拍距离：按 R·fov 近似配对，角色屏幕体量接近上一档 */
-  radius: 26.4,
-  /**
-   * 注视高度相对身体中心的比例。
-   * 压到接近脚底，脚进画面下沿内侧。
-   */
-  focusHeightScale: 0.2,
+  /** 方位角 α：斜向 45° (3.91 rad / 225°) */
+  alpha: 3.91,
+  /** 仰/俯角 β：经典 Isometric 俯角 54.74° (0.9553 rad) */
+  beta: 0.9553,
+  /** 垂直 FOV：0.24 */
+  fov: 0.24,
+  /** 跟拍距离：匹配 0.24 FOV 的显示比例 */
+  radius: 30.0,
+  /** 注视高度相对身体中心的比例 */
+  focusHeightScale: 0.35,
 } as const;
 
 const DEFAULTS: SettingsStateSnapshot = {

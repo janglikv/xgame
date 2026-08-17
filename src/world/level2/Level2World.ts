@@ -111,7 +111,7 @@ export class Level2World implements GameWorld {
     engine: Engine,
     options: CreateLevel2WorldOptions,
   ): Promise<Level2World> {
-    const scene = createDarkScene(engine, { start: 28, end: 48 });
+    const scene = createDarkScene(engine, { start: 160, end: 350 });
     await initPhysics(scene);
 
     const half = LEVEL2_MAP_HALF;

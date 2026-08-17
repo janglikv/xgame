@@ -4,6 +4,7 @@ export interface CameraOrbitLike {
   position: Vector3;
   target: Vector3;
   alpha: number;
+  beta?: number;
 }
 
 export interface MoveWish {
@@ -48,19 +49,32 @@ export function computeCameraRelativeWish(
     moveRight.normalize();
   }
 
+  // 视角倾角 (beta)。Z 轴在屏幕上的投影比率为 sin(beta)。
+  // 为使上下走在屏幕上的像素移动速度与左右走完全一致，纵向添加 1 / sin(beta) 补偿。
+  const beta = typeof camera.beta === 'number' ? camera.beta : Math.PI / 3;
+  const forwardCompensation = 1 / Math.max(0.25, Math.sin(beta));
+
+  const inputLen = Math.hypot(ix, iz);
+  const normalizedIx = ix / inputLen;
+  const normalizedIz = iz / inputLen;
+
   moveDelta.set(0, 0, 0);
-  moveDelta.addInPlace(moveForward.scale(iz));
-  moveDelta.addInPlace(moveRight.scale(ix));
+  moveDelta.addInPlace(moveRight.scale(normalizedIx));
+  moveDelta.addInPlace(moveForward.scale(normalizedIz * forwardCompensation));
+
   if (moveDelta.lengthSquared() <= 1e-8) {
     return { moving: false, wishX: 0, wishZ: 0, dirX: 0, dirZ: 0 };
   }
 
-  moveDelta.normalize();
+  const wishX = moveDelta.x * speed;
+  const wishZ = moveDelta.z * speed;
+  const dirLen = Math.hypot(wishX, wishZ);
+
   return {
     moving: true,
-    wishX: moveDelta.x * speed,
-    wishZ: moveDelta.z * speed,
-    dirX: moveDelta.x,
-    dirZ: moveDelta.z,
+    wishX,
+    wishZ,
+    dirX: dirLen > 1e-6 ? wishX / dirLen : 0,
+    dirZ: dirLen > 1e-6 ? wishZ / dirLen : 0,
   };
 }

@@ -58,8 +58,8 @@ export function addStandardLighting(
   shadow: ShadowOrthoOptions,
 ): Omit<SceneBasics, 'scene'> {
   const hemi = new HemisphericLight('hemi', new Vector3(0, 1, 0), scene);
-  hemi.intensity = 0.55;
-  hemi.groundColor = new Color3(0.15, 0.16, 0.18);
+  hemi.intensity = 0.75;
+  hemi.groundColor = new Color3(0.25, 0.26, 0.30);
 
   const dir = new DirectionalLight(
     'dir',
@@ -67,7 +67,7 @@ export function addStandardLighting(
     scene,
   );
   dir.position = new Vector3(12, 22, 14);
-  dir.intensity = 1.25;
+  dir.intensity = 1.45;
 
   const gfx = getGraphicsPreset(loadSettingsState().graphicsQuality);
   const shadowGen = new ShadowGenerator(

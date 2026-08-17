@@ -126,7 +126,7 @@ export class DebugWarehouseWorld implements GameWorld {
     engine: Engine,
     options: CreateDebugWarehouseOptions,
   ): Promise<DebugWarehouseWorld> {
-    const scene = createDarkScene(engine, { start: 22, end: 45 });
+    const scene = createDarkScene(engine, { start: 160, end: 350 });
     await initPhysics(scene);
 
     const { shadowGen } = addStandardLighting(scene, { half: 32 });

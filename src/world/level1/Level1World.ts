@@ -135,7 +135,7 @@ export class Level1World implements GameWorld {
     engine: Engine,
     options: CreateLevel1WorldOptions,
   ): Promise<Level1World> {
-    const scene = createDarkScene(engine, { start: 28, end: 48 });
+    const scene = createDarkScene(engine, { start: 160, end: 350 });
     await initPhysics(scene);
 
     const half = LEVEL1_MAP_HALF;
