@@ -29,13 +29,6 @@ export const LEVEL1_LANDING_OFFSET_Z = 1.6;
 export const LEVEL1_LANDING_X = LEVEL1_PAD_X + LEVEL1_LANDING_OFFSET_X;
 export const LEVEL1_LANDING_Z = LEVEL1_PAD_Z + LEVEL1_LANDING_OFFSET_Z;
 
-/** 传送阵方围中心线（与 Floor.SPAWN_COVER_PATH 一致，围绕 x=0, z=-7） */
-const COVER_X0 = -1.5;
-const COVER_X1 = 1.5;
-const COVER_Z0 = -8.5;
-const COVER_Z1 = -5.5;
-const COVER_HALF_T = 0.4;
-
 /** 将坐标钳到第一关可站立区域（留半米边距） */
 export function clampLevel1Position(
   x: number,

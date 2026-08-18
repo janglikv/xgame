@@ -120,7 +120,7 @@ export class SpellProjectileSystem {
       scene,
       false,
     );
-    const ctx = dynTex.getContext();
+    const ctx = dynTex.getContext() as CanvasRenderingContext2D;
 
     ctx.clearRect(0, 0, width, height);
 
@@ -401,7 +401,6 @@ export class SpellProjectileSystem {
 
     const fwd = bullet.direction;
     const cam = this.scene.activeCamera;
-    const camPos = cam ? cam.globalPosition : this.tmpToCam;
     const toCam = this.tmpToCam;
     if (cam) {
       cam.globalPosition.subtractToRef(H, toCam);

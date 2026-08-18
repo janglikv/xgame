@@ -193,40 +193,6 @@ function createTickMarks(
   mesh.parent = parent;
 }
 
-function createTickPoints(
-  scene: Scene,
-  parent: TransformNode,
-  extents: AxisExtents,
-  step: number,
-): void {
-  const diameter = 0.0175;
-  const matX = unlitMat(scene, 'tickMatX', AXIS_X);
-  const matZ = unlitMat(scene, 'tickMatZ', AXIS_Z);
-
-  for (let t = -extents.x; t <= extents.x + 1e-9; t += step) {
-    if (Math.abs(t) < 1e-9) continue;
-    const p = MeshBuilder.CreateSphere(
-      `tickX_${t}`,
-      { diameter, segments: 8 },
-      scene,
-    );
-    p.position = new Vector3(t, 0, 0);
-    p.material = matX;
-    p.parent = parent;
-  }
-  for (let t = -extents.z; t <= extents.z + 1e-9; t += step) {
-    if (Math.abs(t) < 1e-9) continue;
-    const p = MeshBuilder.CreateSphere(
-      `tickZ_${t}`,
-      { diameter, segments: 8 },
-      scene,
-    );
-    p.position = new Vector3(0, 0, t);
-    p.material = matZ;
-    p.parent = parent;
-  }
-}
-
 function createAxisLabels(
   scene: Scene,
   parent: TransformNode,

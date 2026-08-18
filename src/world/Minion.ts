@@ -104,14 +104,14 @@ export interface MinionOptions {
    * 帽子款式。
    * 若同时设 redHat=true 且未指定 hat，则用 'wizard'。
    */
-  hat?: HatStyle;
+  hat?: HatStyle | null;
   /** 戴红色巫师帽（等价 hat: 'wizard'） */
   redHat?: boolean;
   /**
    * 右手持法杖款式。
    * 若同时设 magicStaff=true 且未指定 staff，则用 'arcane'。
    */
-  staff?: StaffStyle;
+  staff?: StaffStyle | null;
   /** 右手持炫彩魔法杖（等价 staff: 'arcane'） */
   magicStaff?: boolean;
   /** 表情 */
@@ -236,7 +236,6 @@ export class Minion {
 
   private readonly blobShadow: Mesh;
   private readonly scene: Scene;
-  private readonly shadowGen: ShadowGenerator | undefined;
   private readonly bodyMat: StandardMaterial;
   private readonly limbMat: StandardMaterial;
   private readonly blinkEnabled: boolean;
@@ -318,14 +317,12 @@ export class Minion {
 
   constructor(scene: Scene, x = 0, z = 0, options: MinionOptions = {}) {
     const facePositiveX = options.facePositiveX ?? true;
-    const shadowGen = options.shadowGenerator;
     const appearance = resolveAppearance(options);
     const sphereSegments = appearance.lowPolyFlat ? 10 : 24;
     const limbSegments = appearance.lowPolyFlat ? 3 : 16;
     const scale = Minion.SCALE * appearance.scaleMultiplier;
 
     this.scene = scene;
-    this.shadowGen = shadowGen;
     this.combatTeam = options.combatTeam;
     this.appearance = { ...appearance };
     this.partialSlots = options.partialSlots ? [...options.partialSlots] : null;

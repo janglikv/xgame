@@ -57,7 +57,7 @@ export class HealthPackSystem {
   private getPlusTexture(): Texture {
     if (!this.plusTexture) {
       const dynTex = new DynamicTexture('plusParticleTex', 64, this.scene, false);
-      const ctx = dynTex.getContext();
+      const ctx = dynTex.getContext() as CanvasRenderingContext2D;
       ctx.clearRect(0, 0, 64, 64);
       ctx.fillStyle = '#ffffff';
       ctx.font = 'bold 48px sans-serif';
@@ -157,7 +157,7 @@ export class HealthPackSystem {
     // 3. 环绕飘浮小“+”号粒子系统 (Floating "+" Particle System)
     const ps = new ParticleSystem(`plusPS_${x}_${z}`, 25, scene);
     ps.particleTexture = this.getPlusTexture();
-    ps.emitter = modelNode;
+    ps.emitter = crossV;
     ps.minEmitBox = new Vector3(-0.35, -0.15, -0.35);
     ps.maxEmitBox = new Vector3(0.35, 0.25, 0.35);
 

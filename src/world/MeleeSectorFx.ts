@@ -1,14 +1,9 @@
 import {
   Color3,
-  DynamicTexture,
-  Engine,
   Mesh,
   MeshBuilder,
-  type Observer,
   type Scene,
   StandardMaterial,
-  Texture,
-  TransformNode,
   Vector3,
 } from '@babylonjs/core';
 
