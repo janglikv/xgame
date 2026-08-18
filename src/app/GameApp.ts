@@ -42,6 +42,7 @@ export class GameApp {
   private router!: WorldRouter;
 
   private cameraMode: CameraMode = 'fixed';
+  private allowZoomOut = false;
   private showFps = true;
   private showGrid = true;
   private showColliders = false;
@@ -78,17 +79,20 @@ export class GameApp {
     });
     const settings = loadSettingsState();
     this.cameraMode = settings.cameraMode;
+    this.allowZoomOut = settings.allowZoomOut;
     this.showFps = settings.showFps;
     this.showGrid = settings.showGrid;
     this.showColliders = settings.showColliders;
     this.isInvincible = settings.isInvincible;
-    // 正式包没有调试入口：关掉网格/无敌/自由镜头，避免沿用本地存档
+    // 正式包没有调试入口：关掉网格/无敌/自由镜头/超广角拉远，避免沿用本地存档
     if (!import.meta.env.DEV) {
       this.cameraMode = 'fixed';
+      this.allowZoomOut = false;
       this.showGrid = false;
       this.showColliders = false;
       this.isInvincible = false;
     }
+    this.cameraFollow.setAllowZoomOut(this.allowZoomOut);
     this.bgmEnabled = settings.bgmEnabled;
     this.graphicsQuality = settings.graphicsQuality;
     this.hitSfxId = settings.hitSfxId;
@@ -199,6 +203,12 @@ export class GameApp {
       setGraphicsQuality: (quality) => this.setGraphicsQuality(quality),
       getCameraMode: () => this.cameraMode,
       setCameraMode: (mode) => this.setCameraMode(mode),
+      getAllowZoomOut: () => this.allowZoomOut,
+      setAllowZoomOut: (allow) => {
+        this.allowZoomOut = allow;
+        this.cameraFollow.setAllowZoomOut(allow);
+        this.persistSettings();
+      },
       getHitSfxId: () => this.hitSfxId,
       setHitSfxId: (id) => {
         this.hitSfxId = id;
@@ -436,6 +446,7 @@ export class GameApp {
       showColliders: this.showColliders,
       isInvincible: this.isInvincible,
       cameraMode: this.cameraMode,
+      allowZoomOut: this.allowZoomOut,
       bgmEnabled: this.bgmEnabled,
       graphicsQuality: this.graphicsQuality,
       hitSfxId: this.hitSfxId,

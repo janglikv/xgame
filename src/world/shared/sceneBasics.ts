@@ -126,7 +126,7 @@ export function createFollowCamera(
     scene,
   );
   camera.lowerRadiusLimit = 2;
-  camera.upperRadiusLimit = 120;
+  camera.upperRadiusLimit = null;
   camera.wheelPrecision = 40;
   camera.panningSensibility = 80;
   // 小兵用 WASD；关掉轨道相机方向键，避免抢键
@@ -135,7 +135,7 @@ export function createFollowCamera(
   camera.keysLeft = [];
   camera.keysRight = [];
   camera.minZ = 0.1;
-  camera.maxZ = 1000;
+  camera.maxZ = 10000;
 
   if (opts.mode === 'fixed') {
     lockFixedOrbit(camera);

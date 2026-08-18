@@ -22,6 +22,8 @@ export interface SettingsStateSnapshot {
   isInvincible: boolean;
   /** 镜头模式（默认固定略倾俯视） */
   cameraMode: CameraMode;
+  /** 固定视角是否允许广角拉远缩小（开发者调试选项，默认关闭） */
+  allowZoomOut: boolean;
   /** 是否播放背景音乐 */
   bgmEnabled: boolean;
   /** 画质档次 */
@@ -46,10 +48,10 @@ export const FIXED_CAMERA = {
   fov: 0.24,
   /** 跟拍距离基准值：匹配 0.24 FOV 的显示比例 */
   radius: 30.0,
-  /** 滚轮拉近最小半径（角色特写） */
-  minRadius: 8.0,
-  /** 滚轮拉远最大半径（广角宏观俯瞰） */
-  maxRadius: 75.0,
+  /** 滚轮拉近放大最小半径（角色极致放大特写） */
+  minRadius: 4.5,
+  /** 开启开发者设置后，滚轮拉远无上限限制（超广角宏观俯瞰，画面缩到极小） */
+  maxRadius: Infinity,
   /** 注视高度相对身体中心的比例 */
   focusHeightScale: 0.35,
 } as const;
@@ -60,6 +62,7 @@ const DEFAULTS: SettingsStateSnapshot = {
   showColliders: false,
   isInvincible: false,
   cameraMode: 'fixed',
+  allowZoomOut: false,
   bgmEnabled: true,
   graphicsQuality: 'medium',
   hitSfxId: 'original',
@@ -82,6 +85,7 @@ export function loadSettingsState(): SettingsStateSnapshot {
       showColliders: typeof data.showColliders === 'boolean' ? data.showColliders : DEFAULTS.showColliders,
       isInvincible: typeof data.isInvincible === 'boolean' ? data.isInvincible : DEFAULTS.isInvincible,
       cameraMode: mode === 'free' || mode === 'fixed' ? mode : DEFAULTS.cameraMode,
+      allowZoomOut: typeof data.allowZoomOut === 'boolean' ? data.allowZoomOut : DEFAULTS.allowZoomOut,
       bgmEnabled: typeof data.bgmEnabled === 'boolean' ? data.bgmEnabled : DEFAULTS.bgmEnabled,
       graphicsQuality: isGraphicsQuality(data.graphicsQuality)
         ? data.graphicsQuality

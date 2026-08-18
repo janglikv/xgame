@@ -6,6 +6,7 @@ import {
   Control,
   Grid,
   Rectangle,
+  ScrollViewer,
   StackPanel,
   TextBlock,
 } from '@babylonjs/gui';
@@ -49,6 +50,8 @@ export interface SettingsPanelDeps {
   setGraphicsQuality: (quality: GraphicsQuality) => void;
   getCameraMode: () => CameraMode;
   setCameraMode: (mode: CameraMode) => void;
+  getAllowZoomOut: () => boolean;
+  setAllowZoomOut: (allow: boolean) => void;
   getHitSfxId: () => HitSfxId;
   setHitSfxId: (id: HitSfxId) => void;
   getCameraInfo: () => SettingsCameraInfo;
@@ -85,6 +88,7 @@ export class SettingsPanel {
   private invincibleCheck?: Checkbox;
   private freeCheck?: Checkbox;
   private fixedCheck?: Checkbox;
+  private zoomOutCheck?: Checkbox;
   private camAlpha?: TextBlock;
   private camBeta?: TextBlock;
   private camRadius?: TextBlock;
@@ -142,14 +146,31 @@ export class SettingsPanel {
     this.panel.isPointerBlocker = true;
     this.tex.addControl(this.panel);
 
-    this.mainStack = this.makePageStack('settingsMain');
-    this.panel.addControl(this.mainStack);
+    const scrollViewer = new ScrollViewer('settingsScroll');
+    scrollViewer.width = '100%';
+    scrollViewer.height = '100%';
+    scrollViewer.thickness = 0;
+    scrollViewer.barSize = 6;
+    scrollViewer.barColor = 'rgba(255, 255, 255, 0.25)';
+    scrollViewer.barBackground = 'transparent';
+    this.panel.addControl(scrollViewer);
+
+    const contentBox = new Rectangle('settingsContentBox');
+    contentBox.width = '100%';
+    contentBox.height = '100%';
+    contentBox.thickness = 0;
+    contentBox.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+    contentBox.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+    scrollViewer.addControl(contentBox);
+
+    this.mainStack = this.makePageStack('settingsMain', '520px');
+    contentBox.addControl(this.mainStack);
     this.buildMainPage(this.mainStack);
 
     if (IS_DEV) {
-      this.debugStack = this.makePageStack('settingsDebug');
+      this.debugStack = this.makePageStack('settingsDebug', '1040px');
       this.debugStack.isVisible = false;
-      this.panel.addControl(this.debugStack);
+      contentBox.addControl(this.debugStack);
       this.buildDebugPage(this.debugStack);
     } else {
       this.debugStack = undefined;
@@ -283,12 +304,35 @@ export class SettingsPanel {
       }),
     );
 
-    stack.addControl(this.spacer(12));
+    stack.addControl(this.spacer(8));
     stack.addControl(
-      this.makeNavButton('backMain', '返回设置', () => this.showPage('main')),
+      this.makeNavButton('backMain', '← 返回设置', () => this.showPage('main')),
     );
+    stack.addControl(this.spacer(12));
 
-    this.addSection(stack, 'secGameplay', '战斗与功能');
+    // 双列网格布局：总宽 960px，左列 460px，中间间距 40px，右列 460px
+    const grid = new Grid('debugGrid');
+    grid.width = '960px';
+    grid.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+    grid.addColumnDefinition(460, true);
+    grid.addColumnDefinition(40, true);
+    grid.addColumnDefinition(460, true);
+    grid.addRowDefinition(1);
+
+    const leftCol = new StackPanel('debugLeftCol');
+    leftCol.isVertical = true;
+    leftCol.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+    leftCol.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+    leftCol.width = '100%';
+
+    const rightCol = new StackPanel('debugRightCol');
+    rightCol.isVertical = true;
+    rightCol.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+    rightCol.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+    rightCol.width = '100%';
+
+    // —— 左列：战斗功能、显示、掉血音效 ——
+    this.addSection(leftCol, 'secGameplay', '战斗与功能');
     const invincibleRow = this.makeToggleRow(
       'invincibleRow',
       '角色无敌（不受伤害）',
@@ -296,9 +340,28 @@ export class SettingsPanel {
       (checked) => this.deps.setIsInvincible(checked),
     );
     this.invincibleCheck = invincibleRow.check;
-    stack.addControl(invincibleRow.row);
+    leftCol.addControl(invincibleRow.row);
 
-    this.addSection(stack, 'secHitSfx', '掉血音效');
+    this.addSection(leftCol, 'secDisplay', '显示调试');
+    const gridRow = this.makeToggleRow(
+      'gridRow',
+      '显示坐标系网格',
+      this.deps.getShowGrid(),
+      (checked) => this.deps.setShowGrid(checked),
+    );
+    this.gridCheck = gridRow.check;
+    leftCol.addControl(gridRow.row);
+
+    const collidersRow = this.makeToggleRow(
+      'collidersRow',
+      '显示隐形盒体（调试）',
+      this.deps.getShowColliders(),
+      (checked) => this.deps.setShowColliders(checked),
+    );
+    this.collidersCheck = collidersRow.check;
+    leftCol.addControl(collidersRow.row);
+
+    this.addSection(leftCol, 'secHitSfx', '掉血音效试听');
     this.hitSfxChecks.clear();
     const original = HIT_SFX_OPTIONS[0]!;
     const originalRow = this.makeToggleRow(
@@ -312,7 +375,7 @@ export class SettingsPanel {
       },
     );
     this.hitSfxChecks.set(original.id, originalRow.check);
-    stack.addControl(originalRow.row);
+    leftCol.addControl(originalRow.row);
 
     const packOpts = HIT_SFX_OPTIONS.slice(1);
     const packCells: Control[] = [];
@@ -330,10 +393,10 @@ export class SettingsPanel {
       this.hitSfxChecks.set(opt.id, row.check);
       packCells.push(row.row);
     }
-    stack.addControl(this.gridRow('hitSfxPack1', packCells.slice(0, 5), 5));
-    stack.addControl(this.gridRow('hitSfxPack2', packCells.slice(5, 10), 5));
-    stack.addControl(this.spacer(2));
-    stack.addControl(
+    leftCol.addControl(this.gridRow('hitSfxPack1', packCells.slice(0, 5), 5));
+    leftCol.addControl(this.gridRow('hitSfxPack2', packCells.slice(5, 10), 5));
+    leftCol.addControl(this.spacer(2));
+    leftCol.addControl(
       this.makeText('hitSfxHint', '点选即试听，掉血时播放当前项', {
         fontSize: 12,
         height: 20,
@@ -341,26 +404,8 @@ export class SettingsPanel {
       }),
     );
 
-    this.addSection(stack, 'secDisplay', '显示');
-    const gridRow = this.makeToggleRow(
-      'gridRow',
-      '显示坐标系网格',
-      this.deps.getShowGrid(),
-      (checked) => this.deps.setShowGrid(checked),
-    );
-    this.gridCheck = gridRow.check;
-    stack.addControl(gridRow.row);
-
-    const collidersRow = this.makeToggleRow(
-      'collidersRow',
-      '显示隐形盒体（调试）',
-      this.deps.getShowColliders(),
-      (checked) => this.deps.setShowColliders(checked),
-    );
-    this.collidersCheck = collidersRow.check;
-    stack.addControl(collidersRow.row);
-
-    this.addSection(stack, 'secMode', '镜头模式');
+    // —— 右列：镜头模式、镜头参数 ——
+    this.addSection(rightCol, 'secMode', '镜头模式');
     const fixedRow = this.makeToggleRow(
       'fixedCamRow',
       '俯视镜头',
@@ -372,7 +417,7 @@ export class SettingsPanel {
       },
     );
     this.fixedCheck = fixedRow.check;
-    stack.addControl(fixedRow.row);
+    rightCol.addControl(fixedRow.row);
 
     const freeRow = this.makeToggleRow(
       'freeCamRow',
@@ -385,7 +430,16 @@ export class SettingsPanel {
       },
     );
     this.freeCheck = freeRow.check;
-    stack.addControl(freeRow.row);
+    rightCol.addControl(freeRow.row);
+
+    const zoomOutRow = this.makeToggleRow(
+      'zoomOutRow',
+      '允许广角拉远缩小（调试）',
+      this.deps.getAllowZoomOut(),
+      (checked) => this.deps.setAllowZoomOut(checked),
+    );
+    this.zoomOutCheck = zoomOutRow.check;
+    rightCol.addControl(zoomOutRow.row);
 
     this.camModeHint = this.makeText(
       'modeHint',
@@ -396,14 +450,18 @@ export class SettingsPanel {
         color: 'rgba(255,255,255,0.38)',
       },
     );
-    stack.addControl(this.spacer(2));
-    stack.addControl(this.camModeHint);
+    rightCol.addControl(this.spacer(2));
+    rightCol.addControl(this.camModeHint);
 
-    this.addSection(stack, 'secCam', '镜头参数');
-    this.camAlpha = this.makeMonoLine(stack, 'camAlpha', '方位角 α');
-    this.camBeta = this.makeMonoLine(stack, 'camBeta', '仰角 β');
-    this.camRadius = this.makeMonoLine(stack, 'camRadius', '距离');
-    this.camTarget = this.makeMonoLine(stack, 'camTarget', '注视点');
+    this.addSection(rightCol, 'secCam', '镜头实时参数');
+    this.camAlpha = this.makeMonoLine(rightCol, 'camAlpha', '方位角 α');
+    this.camBeta = this.makeMonoLine(rightCol, 'camBeta', '仰角 β');
+    this.camRadius = this.makeMonoLine(rightCol, 'camRadius', '距离');
+    this.camTarget = this.makeMonoLine(rightCol, 'camTarget', '注视点');
+
+    grid.addControl(leftCol, 0, 0);
+    grid.addControl(rightCol, 0, 2);
+    stack.addControl(grid);
   }
 
   private showPage(page: 'main' | 'debug'): void {
@@ -461,14 +519,14 @@ export class SettingsPanel {
     this.syncingModeUi = false;
   }
 
-  private makePageStack(name: string): StackPanel {
+  private makePageStack(name: string, width = '520px'): StackPanel {
     const stack = new StackPanel(name);
-    stack.width = '520px';
+    stack.width = width;
     stack.isVertical = true;
     stack.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
     stack.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
     stack.paddingTop = '28px';
-    stack.paddingBottom = '28px';
+    stack.paddingBottom = '36px';
     stack.paddingLeft = '40px';
     stack.paddingRight = '40px';
     return stack;
@@ -674,6 +732,9 @@ export class SettingsPanel {
     }
     if (this.invincibleCheck) {
       this.invincibleCheck.isChecked = this.deps.getIsInvincible();
+    }
+    if (this.zoomOutCheck) {
+      this.zoomOutCheck.isChecked = this.deps.getAllowZoomOut();
     }
     this.syncHitSfxChecks(this.deps.getHitSfxId());
     this.syncModeChecks(this.deps.getCameraMode());
