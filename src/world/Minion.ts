@@ -21,7 +21,7 @@ import {
   HAT_RED_BAND,
   type HatStyle,
 } from './minion/hat';
-import { ball, cast, colorFromHex, mat } from './minion/materials';
+import { ball, colorFromHex, mat } from './minion/materials';
 import {
   attachStaff,
   isGunStyle,
@@ -32,6 +32,28 @@ import {
 } from './minion/staff';
 
 import type { MinionPhysicsProxy } from './physics/MinionPhysicsProxy';
+
+/**
+ * 获取/创建小黄人通用的纯色半透明贴地椭圆阴影材质（无渐变，纯正卡通清晰投影）
+ */
+function getBlobShadowMaterial(scene: Scene): StandardMaterial {
+  const existing = scene.getMaterialByName('minionBlobShadowMat') as StandardMaterial | null;
+  if (existing) {
+    return existing;
+  }
+
+  const mat = new StandardMaterial('minionBlobShadowMat', scene);
+  mat.diffuseColor = Color3.Black();
+  mat.emissiveColor = Color3.Black();
+  mat.disableLighting = true;
+  mat.backFaceCulling = false;
+  mat.transparencyMode = StandardMaterial.MATERIAL_ALPHABLEND;
+  mat.alpha = 0.38; // 纯色半透明无渐变
+  mat.disableDepthWrite = true;
+  mat.zOffset = -2;
+
+  return mat;
+}
 
 export type { FaceStyle } from './minion/faces';
 export type { StaffStyle } from './minion/staff';
@@ -212,6 +234,7 @@ export class Minion {
   private readonly leftFootRest: Vector3;
   private readonly rightFootRest: Vector3;
 
+  private readonly blobShadow: Mesh;
   private readonly scene: Scene;
   private readonly shadowGen: ShadowGenerator | undefined;
   private readonly bodyMat: StandardMaterial;
@@ -321,6 +344,20 @@ export class Minion {
     this.root.rotation.y = facePositiveX ? Math.PI / 2 : Math.PI;
     this.targetYaw = this.root.rotation.y;
 
+    // 1. 贴地动态正圆阴影 (Circular Flat Shadow)
+    const blobShadow = MeshBuilder.CreateDisc(
+      'blobShadow',
+      { radius: 0.44, tessellation: 32 },
+      scene,
+    );
+    blobShadow.rotation.x = Math.PI / 2;
+    blobShadow.position.set(0, 0.012, 0);
+    blobShadow.material = getBlobShadowMaterial(scene);
+    blobShadow.parent = this.root;
+    blobShadow.isPickable = false;
+    blobShadow.doNotSerialize = true;
+    this.blobShadow = blobShadow;
+
     this.bodyRoot = new TransformNode('bodyRoot', scene);
     this.bodyRoot.parent = this.root;
 
@@ -357,7 +394,6 @@ export class Minion {
     if (appearance.lowPolyFlat) {
       body.convertToFlatShadedMesh();
     }
-    cast(body, shadowGen);
 
     this.leftHandRest = new Vector3(0.5, 0.5, 0.05);
     this.rightHandRest = Minion.handRestFor(appearance.staff).clone();
@@ -373,7 +409,6 @@ export class Minion {
     this.leftHand.metadata = { minion: this };
     this.leftHand.position.copyFrom(this.leftHandRest);
     this.leftHand.parent = this.bodyRoot;
-    cast(this.leftHand, shadowGen);
 
     this.rightHand = ball(
       scene,
@@ -386,7 +421,6 @@ export class Minion {
     this.rightHand.metadata = { minion: this };
     this.rightHand.position.copyFrom(this.rightHandRest);
     this.rightHand.parent = this.bodyRoot;
-    cast(this.rightHand, shadowGen);
 
     this.leftFootRest = new Vector3(0.14, 0.1, 0.02);
     this.rightFootRest = new Vector3(-0.14, 0.1, 0.02);
@@ -400,7 +434,6 @@ export class Minion {
     );
     this.leftFoot.position.copyFrom(this.leftFootRest);
     this.leftFoot.parent = this.bodyRoot;
-    cast(this.leftFoot, shadowGen);
 
     this.rightFoot = ball(
       scene,
@@ -412,17 +445,16 @@ export class Minion {
     );
     this.rightFoot.position.copyFrom(this.rightFootRest);
     this.rightFoot.parent = this.bodyRoot;
-    cast(this.rightFoot, shadowGen);
 
     if (appearance.hat) {
-      this.hatRoot = attachHat(scene, this.torso, appearance.hat, shadowGen);
+      this.hatRoot = attachHat(scene, this.torso, appearance.hat);
     }
     if (appearance.staff) {
       this.staffFx = attachStaff(
         scene,
         this.rightHand,
         appearance.staff,
-        this.liteStaffFx ? undefined : shadowGen,
+        undefined,
         this.liteStaffFx,
       );
     }
@@ -1121,6 +1153,44 @@ export class Minion {
     }
 
     this.applyHitJuice(dt);
+    this.updateBlobShadow(dt, moving, breath, breathAmt);
+  }
+
+  /**
+   * 贴地椭圆阴影（Blob Shadow）动态形变更新：
+   * 1. 随呼吸微幅浮动；
+   * 2. 随行走迈步沿运动方向产生弹性质感微拉伸；
+   * 3. 随死亡倒地向侧后方自适应变扁平铺；
+   * 4. 离地浮空高度补偿（跳起/浮空时阴影缩小变淡）。
+   */
+  private updateBlobShadow(
+    _dt: number,
+    moving: boolean,
+    breath: number,
+    breathAmt: number,
+  ): void {
+    if (!this.blobShadow) return;
+
+    // 1. 基础正圆尺寸与呼吸/步态微律动
+    const breathScale = 1 + breath * 0.02 * breathAmt;
+    const walkBob = moving
+      ? Math.abs(Math.sin(this.walkPhase)) * 0.04 * this.walkWeight
+      : 0;
+
+    // 2. 死亡倒地自适应尺寸
+    const deathScale = 1 + this.deathAnimWeight * 0.3;
+
+    // 3. 身体离地浮空高度补偿（若被击飞或跳跃，阴影随高度变小变淡）
+    const heightOffset = Math.max(0, this.bodyRoot.position.y);
+    const heightDim = Math.max(0.45, 1 - heightOffset * 0.5);
+
+    // 严格保持正圆 (sx === sz)
+    const s = (1.0 + walkBob) * breathScale * deathScale * heightDim;
+
+    this.blobShadow.scaling.set(s, s, 1);
+    this.blobShadow.visibility = this.isDeadState
+      ? Math.max(0.38, 1 - this.deathAnimWeight * 0.35)
+      : heightDim;
   }
 
   /**
@@ -1207,7 +1277,7 @@ export class Minion {
       this.hatRoot = null;
     }
     if (style) {
-      this.hatRoot = attachHat(this.scene, this.torso, style, this.shadowGen);
+      this.hatRoot = attachHat(this.scene, this.torso, style);
     }
   }
 
@@ -1226,7 +1296,7 @@ export class Minion {
         this.scene,
         this.rightHand,
         style,
-        this.shadowGen,
+        undefined,
       );
     }
     this.rightHandRest.copyFrom(Minion.handRestFor(style));
