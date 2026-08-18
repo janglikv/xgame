@@ -16,9 +16,11 @@ import {
  * 主场地表面样式枚举。
  */
 export type FloorSurface =
+  | 'hubGrid'
+  | 'flameGrid'
+  | 'cyberGrid'
   | 'tiles'
   | 'dirtGrass'
-  | 'cyberGrid'
   | 'checker'
   | 'cobblestone'
   | 'sand'
@@ -36,6 +38,30 @@ export interface FloorSurfacePreset {
 }
 
 export const FLOOR_SURFACE_PRESETS: FloorSurfacePreset[] = [
+  {
+    id: 'hubGrid',
+    name: '静谧暖木大厅',
+    englishName: 'Cozy Haven',
+    description: '温润拼接胡桃木与静谧暖金微光',
+    uScale: 8,
+    vScale: 8,
+  },
+  {
+    id: 'flameGrid',
+    name: '烈焰熔岩裂隙',
+    englishName: 'Inferno Core',
+    description: '焦黑玄武岩与流淌炽热火光的熔岩地表',
+    uScale: 8,
+    vScale: 8,
+  },
+  {
+    id: 'cyberGrid',
+    name: '赛博网格',
+    englishName: 'Cyber Grid',
+    description: '霓虹发光与交叉点的竞技场网格',
+    uScale: 8,
+    vScale: 8,
+  },
   {
     id: 'tiles',
     name: '石砖瓷砖',
@@ -193,7 +219,7 @@ export class Floor {
   ) {
     this.scene = scene;
     this.root = new TransformNode('Floor', scene);
-    this.currentSurface = options.surface ?? 'tiles';
+    this.currentSurface = options.surface ?? 'cyberGrid';
     this.halfX = options.halfX ?? Floor.HALF_X;
     this.halfZ = options.halfZ ?? Floor.HALF_Z;
     this.minX = options.minX ?? -this.halfX;
@@ -253,9 +279,8 @@ export class Floor {
       { path: loopPath, bottomWidth: t, topWidth: 0.5, height: h, close: true },
       scene,
     );
-    wall.receiveShadows = true;
+    wall.receiveShadows = false;
     wall.parent = this.root;
-    shadowGenerator?.addShadowCaster(wall);
     this.wallMeshes.push(wall);
 
     // 中心围墙（标准 3×3 米闭合梯形围墙）
@@ -279,9 +304,8 @@ export class Floor {
         },
         scene,
       );
-      centerWall.receiveShadows = true;
+      centerWall.receiveShadows = false;
       centerWall.parent = this.root;
-      shadowGenerator?.addShadowCaster(centerWall);
       this.wallMeshes.push(centerWall);
     }
 
@@ -306,9 +330,8 @@ export class Floor {
           },
           scene,
         );
-        lWall.receiveShadows = true;
+        lWall.receiveShadows = false;
         lWall.parent = this.root;
-        shadowGenerator?.addShadowCaster(lWall);
         this.wallMeshes.push(lWall);
       }
     }
@@ -326,9 +349,8 @@ export class Floor {
         },
         scene,
       );
-      padCover.receiveShadows = true;
+      padCover.receiveShadows = false;
       padCover.parent = this.root;
-      shadowGenerator?.addShadowCaster(padCover);
       this.wallMeshes.push(padCover);
     }
 
@@ -396,6 +418,38 @@ function createMaterials(
   const vScale = preset.vScale * vMul;
 
   const wallMat = createWallMaterialForSurface(surface, scene);
+
+  if (surface === 'hubGrid') {
+    const floorMat = new StandardMaterial('floorMat_hubGrid', scene);
+    const tex = bakeHubGridTexture(scene, 512);
+    tex.uScale = uScale;
+    tex.vScale = vScale;
+    floorMat.diffuseTexture = tex;
+    // 温馨柔和的温润漫反射与微弱暖金环境光
+    floorMat.emissiveColor = new Color3(0.06, 0.04, 0.02);
+    floorMat.diffuseColor = new Color3(0.95, 0.90, 0.84);
+    floorMat.specularColor = new Color3(0.12, 0.09, 0.06);
+    floorMat.specularPower = 24;
+
+    const fallbackMat = mat(scene, 'fallbackMat_hubGrid', 0x140e0a);
+    return { floorMat, wallMat, fallbackMat };
+  }
+
+  if (surface === 'flameGrid') {
+    const floorMat = new StandardMaterial('floorMat_flameGrid', scene);
+    const tex = bakeFlameGridTexture(scene, 512);
+    tex.uScale = uScale;
+    tex.vScale = vScale;
+    floorMat.diffuseTexture = tex;
+    // 沉稳冷峻的暗黑玄武岩与幽暗深红地底熔岩流
+    floorMat.emissiveColor = new Color3(0.05, 0.02, 0.008);
+    floorMat.diffuseColor = new Color3(0.35, 0.28, 0.25);
+    floorMat.specularColor = new Color3(0.10, 0.05, 0.04);
+    floorMat.specularPower = 32;
+
+    const fallbackMat = mat(scene, 'fallbackMat_flameGrid', 0x060202);
+    return { floorMat, wallMat, fallbackMat };
+  }
 
   if (surface === 'tiles') {
     const floorMat = new StandardMaterial('floorMat_tiles', scene);
@@ -694,6 +748,17 @@ function createWallMaterialForSurface(
   wallMat.diffuseTexture = null;
 
   switch (surface) {
+    case 'hubGrid':
+      wallMat.diffuseColor = new Color3(0.20, 0.16, 0.12);
+      wallMat.specularColor = new Color3(0.25, 0.20, 0.15);
+      wallMat.emissiveColor = new Color3(0.04, 0.03, 0.02);
+      break;
+    case 'flameGrid':
+      wallMat.diffuseColor = new Color3(0.32, 0.20, 0.16);
+      wallMat.specularColor = new Color3(0.50, 0.30, 0.22);
+      wallMat.specularPower = 28;
+      wallMat.emissiveColor = new Color3(0.08, 0.035, 0.02);
+      break;
     case 'tiles':
       wallMat.diffuseColor = new Color3(0.18, 0.21, 0.25);
       wallMat.specularColor = new Color3(0.35, 0.40, 0.45);
@@ -803,6 +868,343 @@ function bakeDirtGrassTexture(scene: Scene, size: number): DynamicTexture {
   }
 
   ctx.putImageData(img, 0, 0);
+  tex.update(false);
+  return tex;
+}
+
+/** 0. 大厅专属温馨宁静暖木静谧地表（温润拼接木纹 + 暖金微光嵌条 + 柔和萤火星芒） */
+function bakeHubGridTexture(scene: Scene, size: number): DynamicTexture {
+  const tex = new DynamicTexture(
+    'hubGridTex',
+    { width: size, height: size },
+    scene,
+    false,
+  );
+  tex.wrapU = Texture.WRAP_ADDRESSMODE;
+  tex.wrapV = Texture.WRAP_ADDRESSMODE;
+
+  const ctx = tex.getContext() as unknown as CanvasRenderingContext2D;
+
+  // 1. 底层：温润深沉的炭木暖褐基础底色
+  const bgGrad = ctx.createRadialGradient(
+    size / 2,
+    size / 2,
+    size * 0.1,
+    size / 2,
+    size / 2,
+    size * 0.7,
+  );
+  bgGrad.addColorStop(0, '#241b14');
+  bgGrad.addColorStop(1, '#150f0b');
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, size, size);
+
+  const gridMeters = 5;
+  const step = size / gridMeters;
+  const slatsPerBlock = 4;
+  const slatSize = step / slatsPerBlock;
+
+  // 2. 绘制 1m x 1m 交错拼木（Parquet）木纹与温润木质肌理
+  for (let gx = 0; gx < gridMeters; gx++) {
+    for (let gy = 0; gy < gridMeters; gy++) {
+      const bx = gx * step;
+      const by = gy * step;
+      const isHorizontal = (gx + gy) % 2 === 0;
+
+      for (let s = 0; s < slatsPerBlock; s++) {
+        const sx = isHorizontal ? bx : bx + s * slatSize;
+        const sy = isHorizontal ? by + s * slatSize : by;
+        const sw = isHorizontal ? step : slatSize;
+        const sh = isHorizontal ? slatSize : step;
+
+        // 木条略带随机天然色差（深胡桃木、暖柚木、琥珀木）
+        const slatSeed = gx * 13 + gy * 7 + s * 19;
+        const toneVar = ((slatSeed % 5) - 2) * 0.035;
+        const rBase = Math.floor(36 + toneVar * 80);
+        const gBase = Math.floor(27 + toneVar * 60);
+        const bBase = Math.floor(20 + toneVar * 40);
+
+        ctx.fillStyle = `rgb(${rBase}, ${gBase}, ${bBase})`;
+        ctx.fillRect(sx, sy, sw, sh);
+
+        // 木纹内部渐变与柔和微噪高光
+        const woodGrad = isHorizontal
+          ? ctx.createLinearGradient(sx, sy, sx + sw, sy)
+          : ctx.createLinearGradient(sx, sy, sx, sy + sh);
+        woodGrad.addColorStop(0, 'rgba(255, 220, 180, 0.04)');
+        woodGrad.addColorStop(0.5, 'rgba(0, 0, 0, 0.0)');
+        woodGrad.addColorStop(1, 'rgba(0, 0, 0, 0.08)');
+        ctx.fillStyle = woodGrad;
+        ctx.fillRect(sx, sy, sw, sh);
+
+        // 柔和微细木纹线条（Organic Grain Lines）
+        ctx.strokeStyle = 'rgba(255, 230, 190, 0.03)';
+        ctx.lineWidth = 1;
+        const grainCount = 3;
+        for (let g = 1; g <= grainCount; g++) {
+          if (isHorizontal) {
+            const gyPos = sy + (sh / (grainCount + 1)) * g;
+            ctx.beginPath();
+            ctx.moveTo(sx + 2, gyPos);
+            ctx.lineTo(sx + sw - 2, gyPos);
+            ctx.stroke();
+          } else {
+            const gxPos = sx + (sw / (grainCount + 1)) * g;
+            ctx.beginPath();
+            ctx.moveTo(gxPos, sy + 2);
+            ctx.lineTo(gxPos, sy + sh - 2);
+            ctx.stroke();
+          }
+        }
+
+        // 木条细缝（Slat Seam）
+        ctx.strokeStyle = '#0e0a07';
+        ctx.lineWidth = 1.2;
+        ctx.strokeRect(sx, sy, sw, sh);
+      }
+
+      // 1m 网格边框（柔和暖暗棕）
+      ctx.strokeStyle = 'rgba(18, 12, 8, 0.95)';
+      ctx.lineWidth = 2.0;
+      ctx.strokeRect(bx, by, step, step);
+
+      // 边缘微弱暖木反光倒角
+      ctx.strokeStyle = 'rgba(255, 225, 185, 0.05)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(bx + 1, by + 1, step - 2, step - 2);
+    }
+  }
+
+  // 3. 温暖雅致的暖金嵌线与星芒节点（Warm Amber Glow & Brass Inlays）
+  // 3.1 暖金导光嵌线（细柔暖铜条感）
+  ctx.lineWidth = 1.2;
+  ctx.strokeStyle = 'rgba(225, 175, 95, 0.35)';
+  for (let i = 0; i <= gridMeters; i++) {
+    const p = i * step;
+    ctx.beginPath();
+    ctx.moveTo(p, 0);
+    ctx.lineTo(p, size);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(0, p);
+    ctx.lineTo(size, p);
+    ctx.stroke();
+  }
+
+  // 3.2 节点暖金光晕与静谧星芒
+  for (let x = 0; x <= gridMeters; x++) {
+    for (let y = 0; y <= gridMeters; y++) {
+      const px = x * step;
+      const py = y * step;
+      const isMajor = x % 5 === 0 && y % 5 === 0;
+
+      // 柔和漫射微光晕（Like soft lantern / warm firefly）
+      const glowRad = isMajor ? 10 : 6;
+      const glow = ctx.createRadialGradient(px, py, 0, px, py, glowRad);
+      glow.addColorStop(
+        0,
+        isMajor ? 'rgba(255, 200, 90, 0.28)' : 'rgba(255, 190, 80, 0.16)',
+      );
+      glow.addColorStop(1, 'rgba(255, 170, 60, 0.0)');
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.arc(px, py, glowRad, 0, Math.PI * 2);
+      ctx.fill();
+
+      // 中心温润暖金铜饰圆点
+      ctx.fillStyle = isMajor
+        ? 'rgba(255, 225, 130, 0.95)'
+        : 'rgba(240, 190, 95, 0.85)';
+      ctx.beginPath();
+      ctx.arc(px, py, isMajor ? 2.6 : 1.6, 0, Math.PI * 2);
+      ctx.fill();
+
+      // 微妙优雅的四向星芒小触角
+      if (isMajor) {
+        ctx.strokeStyle = 'rgba(255, 220, 120, 0.65)';
+        ctx.lineWidth = 1;
+        const arm = 4;
+        ctx.beginPath();
+        ctx.moveTo(px - arm, py);
+        ctx.lineTo(px + arm, py);
+        ctx.moveTo(px, py - arm);
+        ctx.lineTo(px, py + arm);
+        ctx.stroke();
+      }
+    }
+  }
+
+  tex.update(false);
+  return tex;
+}
+
+/** 1. 第一关专属暗黑火系玄武岩余烬地表（极暗黑炭石板 + 幽微深血红裂隙 + 低调暗火核） */
+function bakeFlameGridTexture(scene: Scene, size: number): DynamicTexture {
+  const tex = new DynamicTexture(
+    'flameGridTex',
+    { width: size, height: size },
+    scene,
+    false,
+  );
+  tex.wrapU = Texture.WRAP_ADDRESSMODE;
+  tex.wrapV = Texture.WRAP_ADDRESSMODE;
+
+  const ctx = tex.getContext() as unknown as CanvasRenderingContext2D;
+
+  // 1. 底层：近乎纯黑焦炭底色
+  const bgGrad = ctx.createRadialGradient(
+    size / 2,
+    size / 2,
+    size * 0.1,
+    size / 2,
+    size / 2,
+    size * 0.75,
+  );
+  bgGrad.addColorStop(0, '#0a0302');
+  bgGrad.addColorStop(1, '#020101');
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, size, size);
+
+  const gridMeters = 5;
+  const step = size / gridMeters;
+
+  // 2. 绘制 1m x 1m 极暗黑曜石板（Pitch-Black Obsidian / Basalt）
+  for (let gx = 0; gx < gridMeters; gx++) {
+    for (let gy = 0; gy < gridMeters; gy++) {
+      const bx = gx * step;
+      const by = gy * step;
+
+      // 石板内部极暗炭黑渐变
+      const slabGrad = ctx.createLinearGradient(bx, by, bx + step, by + step);
+      slabGrad.addColorStop(0, 'rgba(16, 6, 5, 0.45)');
+      slabGrad.addColorStop(0.5, 'rgba(8, 3, 2, 0.25)');
+      slabGrad.addColorStop(1, 'rgba(3, 1, 1, 0.85)');
+      ctx.fillStyle = slabGrad;
+      ctx.fillRect(bx + 2, by + 2, step - 4, step - 4);
+
+      // 板块内部隐约幽暗的深红细冷裂痕
+      ctx.strokeStyle = 'rgba(120, 15, 8, 0.12)';
+      ctx.lineWidth = 0.9;
+      ctx.beginPath();
+      const crackSeed = (gx * 7 + gy * 13) % 4;
+      if (crackSeed === 0) {
+        ctx.moveTo(bx + 16, by + 24);
+        ctx.lineTo(bx + step * 0.45, by + step * 0.5);
+        ctx.lineTo(bx + step - 18, by + step * 0.4);
+        ctx.moveTo(bx + step * 0.45, by + step * 0.5);
+        ctx.lineTo(bx + step * 0.6, by + step - 16);
+      } else if (crackSeed === 1) {
+        ctx.moveTo(bx + step * 0.5, by + 16);
+        ctx.lineTo(bx + step * 0.35, by + step * 0.6);
+        ctx.lineTo(bx + 20, by + step - 20);
+      } else if (crackSeed === 2) {
+        ctx.moveTo(bx + 22, by + step * 0.4);
+        ctx.lineTo(bx + step * 0.55, by + step * 0.45);
+        ctx.lineTo(bx + step - 16, by + step - 24);
+      }
+      ctx.stroke();
+
+      // 散落极微弱暗红余烬点
+      const emberX = bx + 12 + ((gx * 31 + gy * 17) % (step - 24));
+      const emberY = by + 12 + ((gy * 29 + gx * 23) % (step - 24));
+      ctx.fillStyle = 'rgba(160, 40, 10, 0.45)';
+      ctx.beginPath();
+      ctx.arc(emberX, emberY, 1.0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // 3. 熔岩沟槽：幽微细敛的深血红暗火
+  // 3.1 极暗深红光晕
+  ctx.lineWidth = 6;
+  ctx.strokeStyle = 'rgba(150, 18, 8, 0.12)';
+  for (let i = 0; i <= gridMeters; i++) {
+    const p = i * step;
+    ctx.beginPath();
+    ctx.moveTo(p, 0);
+    ctx.lineTo(p, size);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(0, p);
+    ctx.lineTo(size, p);
+    ctx.stroke();
+  }
+
+  // 3.2 幽暗深血红细线
+  ctx.lineWidth = 1.8;
+  ctx.strokeStyle = 'rgba(185, 30, 12, 0.55)';
+  for (let i = 0; i <= gridMeters; i++) {
+    const p = i * step;
+    ctx.beginPath();
+    ctx.moveTo(p, 0);
+    ctx.lineTo(p, size);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(0, p);
+    ctx.lineTo(size, p);
+    ctx.stroke();
+  }
+
+  // 3.3 极细暗赤橙火芯
+  ctx.lineWidth = 0.8;
+  ctx.strokeStyle = 'rgba(220, 75, 20, 0.70)';
+  for (let i = 0; i <= gridMeters; i++) {
+    const p = i * step;
+    ctx.beginPath();
+    ctx.moveTo(p, 0);
+    ctx.lineTo(p, size);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(0, p);
+    ctx.lineTo(size, p);
+    ctx.stroke();
+  }
+
+  // 4. 节点幽暗火核信标
+  for (let x = 0; x <= gridMeters; x++) {
+    for (let y = 0; y <= gridMeters; y++) {
+      const px = x * step;
+      const py = y * step;
+      const isMajor =
+        (x === 0 || x === gridMeters) && (y === 0 || y === gridMeters);
+
+      // 微光暗晕
+      const glowRad = isMajor ? 8 : 4.5;
+      const glow = ctx.createRadialGradient(px, py, 0, px, py, glowRad);
+      glow.addColorStop(0, 'rgba(170, 30, 15, 0.30)');
+      glow.addColorStop(1, 'rgba(0, 0, 0, 0.0)');
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.arc(px, py, glowRad, 0, Math.PI * 2);
+      ctx.fill();
+
+      // 暗火微小圆点
+      ctx.fillStyle = isMajor
+        ? 'rgba(225, 80, 25, 0.85)'
+        : 'rgba(185, 50, 15, 0.70)';
+      ctx.beginPath();
+      ctx.arc(px, py, isMajor ? 2.0 : 1.3, 0, Math.PI * 2);
+      ctx.fill();
+
+      // 极微细暗红微针
+      if (isMajor) {
+        ctx.strokeStyle = 'rgba(210, 65, 20, 0.55)';
+        ctx.lineWidth = 0.9;
+        const arm = 3.5;
+        ctx.beginPath();
+        ctx.moveTo(px - arm, py);
+        ctx.lineTo(px + arm, py);
+        ctx.moveTo(px, py - arm);
+        ctx.lineTo(px, py + arm);
+        ctx.stroke();
+      }
+    }
+  }
+
   tex.update(false);
   return tex;
 }

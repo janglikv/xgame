@@ -148,7 +148,7 @@ export class Level1World implements GameWorld {
     });
 
     const floor = new Floor(scene, shadowGen, {
-      surface: 'cyberGrid',
+      surface: 'flameGrid',
       halfX: half,
       halfZ: half,
       minX: LEVEL1_X_MIN,

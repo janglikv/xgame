@@ -251,7 +251,11 @@ export class WorldRouter {
     const prev = loadMinionState();
     const hub = this.spawns.hub;
     const level1 = this.spawns.level1;
+    const level2 = this.spawns.level2;
+    const warehouse = this.spawns.debugWarehouse;
     const isLevel1 = this.activeId === 'level1';
+    const isLevel2 = this.activeId === 'level2';
+    const isWarehouse = this.activeId === 'debugWarehouse';
     const isHub = this.activeId === 'hub';
 
     return {
@@ -261,6 +265,14 @@ export class WorldRouter {
       hubZ: isHub ? pos.z : (prev?.hubZ ?? hub.z),
       level1X: isLevel1 ? pos.x : (prev?.level1X ?? level1.x),
       level1Z: isLevel1 ? pos.z : (prev?.level1Z ?? level1.z),
+      level2X: isLevel2 ? pos.x : (prev?.level2X ?? level2.x),
+      level2Z: isLevel2 ? pos.z : (prev?.level2Z ?? level2.z),
+      debugWarehouseX: isWarehouse
+        ? pos.x
+        : (prev?.debugWarehouseX ?? warehouse.x),
+      debugWarehouseZ: isWarehouse
+        ? pos.z
+        : (prev?.debugWarehouseZ ?? warehouse.z),
     };
   }
 
@@ -277,6 +289,21 @@ export class WorldRouter {
       saved.level1Z ?? saved.blankZ ?? LEVEL1_LANDING_Z,
     );
     this.spawns.level1 = l1;
+    if (saved.level2X !== undefined && saved.level2Z !== undefined) {
+      this.spawns.level2 = {
+        x: saved.level2X,
+        z: saved.level2Z,
+      };
+    }
+    if (
+      saved.debugWarehouseX !== undefined &&
+      saved.debugWarehouseZ !== undefined
+    ) {
+      this.spawns.debugWarehouse = {
+        x: saved.debugWarehouseX,
+        z: saved.debugWarehouseZ,
+      };
+    }
   }
 
   private resolveSpawn(
@@ -332,7 +359,6 @@ export class WorldRouter {
         initialZ: spawn.z,
         getIsInvincible: this.ctx.getIsInvincible,
         onAppearanceChanged: hub?.getPlayer().onAppearanceChanged,
-        onFloorSurfaceChanged: (surface) => hub?.floor.setSurface(surface),
         onRequestLandingWarp: this.ctx.onLandingWarp,
       });
       this.wireWorld(warehouse);

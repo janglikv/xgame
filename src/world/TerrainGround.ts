@@ -117,9 +117,8 @@ export function createTerrainGround(
     );
     wall.position = new Vector3(0, wallY, z);
     wall.material = wallMat;
-    wall.receiveShadows = true;
+    wall.receiveShadows = false;
     wall.parent = root;
-    shadowGenerator?.addShadowCaster(wall);
   }
   for (const [i, x] of [-halfX - t / 2, halfX + t / 2].entries()) {
     const wall = MeshBuilder.CreateBox(
@@ -129,9 +128,8 @@ export function createTerrainGround(
     );
     wall.position = new Vector3(x, wallY, 0);
     wall.material = wallMat;
-    wall.receiveShadows = true;
+    wall.receiveShadows = false;
     wall.parent = root;
-    shadowGenerator?.addShadowCaster(wall);
   }
 
   return { root, terrain, material: terrainMaterial };

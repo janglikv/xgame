@@ -10,6 +10,12 @@ export interface MinionStateSnapshot {
   /** 第一关坐标 */
   level1X?: number;
   level1Z?: number;
+  /** 第二关坐标 */
+  level2X?: number;
+  level2Z?: number;
+  /** 测试仓库坐标 */
+  debugWarehouseX?: number;
+  debugWarehouseZ?: number;
   /** @deprecated 旧字段，读档时映射到 level1X/Z */
   blankX?: number;
   blankZ?: number;
@@ -27,6 +33,14 @@ export function loadMinionState(): MinionStateSnapshot | null {
 
     const level1X = firstFinite(data.level1X, data.blankX, data.x);
     const level1Z = firstFinite(data.level1Z, data.blankZ, data.z);
+    const level2X = isFiniteNumber(data.level2X) ? data.level2X : undefined;
+    const level2Z = isFiniteNumber(data.level2Z) ? data.level2Z : undefined;
+    const debugWarehouseX = isFiniteNumber(data.debugWarehouseX)
+      ? data.debugWarehouseX
+      : undefined;
+    const debugWarehouseZ = isFiniteNumber(data.debugWarehouseZ)
+      ? data.debugWarehouseZ
+      : undefined;
 
     return {
       x: data.x,
@@ -35,6 +49,10 @@ export function loadMinionState(): MinionStateSnapshot | null {
       hubZ: isFiniteNumber(data.hubZ) ? data.hubZ : data.z,
       level1X,
       level1Z,
+      level2X,
+      level2Z,
+      debugWarehouseX,
+      debugWarehouseZ,
       // 写回时仍带 blank 字段，兼容可能读旧 key 的中间版本
       blankX: level1X,
       blankZ: level1Z,
@@ -55,6 +73,10 @@ export function saveMinionState(state: MinionStateSnapshot): void {
       hubZ: state.hubZ,
       level1X,
       level1Z,
+      level2X: state.level2X,
+      level2Z: state.level2Z,
+      debugWarehouseX: state.debugWarehouseX,
+      debugWarehouseZ: state.debugWarehouseZ,
       blankX: level1X,
       blankZ: level1Z,
     };

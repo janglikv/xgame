@@ -13,15 +13,44 @@ import {
   Vector3,
 } from '@babylonjs/core';
 import { saveFloorSurfaceState } from '../storage/floorState';
-import {
-  Floor,
-  FLOOR_SURFACE_PRESETS,
-  type FloorSurface,
-  type FloorSurfacePreset,
-} from './Floor';
+import { Floor, type FloorSurface } from './Floor';
+
+export type LevelFloorId = 'hub' | 'level1' | 'level2';
+
+export interface LevelFloorPreset {
+  id: LevelFloorId;
+  name: string;
+  englishName: string;
+  description: string;
+  surface: FloorSurface;
+}
+
+export const LEVEL_FLOOR_PRESETS: LevelFloorPreset[] = [
+  {
+    id: 'hub',
+    name: '大厅',
+    englishName: 'Main Hub',
+    description: '温润拼接胡桃木与静谧暖金微光',
+    surface: 'hubGrid',
+  },
+  {
+    id: 'level1',
+    name: '第一关',
+    englishName: 'Level 1',
+    description: '焦黑玄武岩与炽热熔岩裂隙',
+    surface: 'flameGrid',
+  },
+  {
+    id: 'level2',
+    name: '第二关',
+    englishName: 'Level 2',
+    description: '进阶对决赛博网格',
+    surface: 'cyberGrid',
+  },
+];
 
 export interface FloorPickerGalleryOptions {
-  /** 展台中心 Z 坐标（默认 13） */
+  /** 展台中心 Z 坐标（默认 -14） */
   centerZ?: number;
   onSurfaceChanged?: (surface: FloorSurface) => void;
 }
@@ -30,7 +59,7 @@ export interface FloorPickerGalleryOptions {
  * 展台数据接口
  */
 interface PodiumData {
-  preset: FloorSurfacePreset;
+  preset: LevelFloorPreset;
   rootNode: TransformNode;
   cubeMesh: Mesh;
   podiumMesh: Mesh;
@@ -45,7 +74,7 @@ export class FloorPickerGallery {
   readonly floor: Floor;
   readonly root: TransformNode;
   private podiums: PodiumData[] = [];
-  private activeSurface: FloorSurface;
+  private activePresetId: LevelFloorId = 'hub';
   private animTime = 0;
   private isEKeyPressed = false;
   private eKeyHandler?: (e: KeyboardEvent) => void;
@@ -59,13 +88,12 @@ export class FloorPickerGallery {
     this.scene = scene;
     this.floor = floor;
     this.root = new TransformNode('FloorPickerGallery', scene);
-    this.activeSurface = floor.getSurface();
     this.onSurfaceChanged = options.onSurfaceChanged;
 
-    const presets = FLOOR_SURFACE_PRESETS;
-    const centerZ = options.centerZ ?? 13;
+    const presets = LEVEL_FLOOR_PRESETS;
+    const centerZ = options.centerZ ?? -14;
     const count = presets.length;
-    const spacing = 3.5;
+    const spacing = 2.4;
     const startX = -((count - 1) * spacing) / 2;
 
     presets.forEach((preset, index) => {
@@ -87,7 +115,7 @@ export class FloorPickerGallery {
               p.podiumMesh.name === pickedName,
           );
           if (found) {
-            this.selectSurface(found.preset.id);
+            this.selectPreset(found.preset.id);
           }
         }
       }
@@ -108,7 +136,7 @@ export class FloorPickerGallery {
    * 创建单座展台
    */
   private createPodium(
-    preset: FloorSurfacePreset,
+    preset: LevelFloorPreset,
     posX: number,
     posZ: number,
     index: number,
@@ -117,13 +145,13 @@ export class FloorPickerGallery {
     rootNode.position = new Vector3(posX, 0, posZ);
     rootNode.parent = this.root;
 
-    // 1. 基座台
+    // 1. 基座台（同步缩小一倍）
     const podiumMesh = MeshBuilder.CreateCylinder(
       `PodiumBase_${preset.id}`,
-      { height: 0.2, diameter: 1.8, tessellation: 24 },
+      { height: 0.1, diameter: 0.9, tessellation: 24 },
       this.scene,
     );
-    podiumMesh.position.y = 0.1;
+    podiumMesh.position.y = 0.05;
     podiumMesh.parent = rootNode;
 
     const baseMat = new StandardMaterial(`PodiumMat_${preset.id}`, this.scene);
@@ -131,51 +159,51 @@ export class FloorPickerGallery {
     baseMat.specularColor = new Color3(0.5, 0.5, 0.6);
     podiumMesh.material = baseMat;
 
-    // 2. 发光圈（选中高亮环）
+    // 2. 发光圈（选中高亮环，同步缩小一倍）
     const ringMesh = MeshBuilder.CreateTorus(
       `PodiumRing_${preset.id}`,
-      { diameter: 1.9, thickness: 0.05, tessellation: 32 },
+      { diameter: 0.95, thickness: 0.025, tessellation: 32 },
       this.scene,
     );
-    ringMesh.position.y = 0.21;
+    ringMesh.position.y = 0.105;
     ringMesh.parent = rootNode;
 
     const ringMat = new StandardMaterial(`RingMat_${preset.id}`, this.scene);
     ringMat.diffuseColor = Color3.Black();
-    ringMat.emissiveColor = new Color3(1.0, 0.75, 0.1);
+    ringMat.emissiveColor = new Color3(0.1, 0.85, 1.0);
     ringMat.specularColor = Color3.Black();
     ringMesh.material = ringMat;
 
-    // 3. 悬浮展示方块
+    // 3. 悬浮展示方块（尺寸 0.5）
     const cubeMesh = MeshBuilder.CreateBox(
       `PodiumCube_${preset.id}`,
-      { size: 1.0 },
+      { size: 0.5 },
       this.scene,
     );
-    const initialY = 1.0;
+    const initialY = 0.55;
     cubeMesh.position.y = initialY;
     cubeMesh.rotation.y = (index * Math.PI) / 4;
     cubeMesh.parent = rootNode;
 
-    // 立方体材质：赋予该预设对应材质
-    const cubeMat = this.createCubeMaterial(preset);
+    // 立方体材质：采用赛博网格材质
+    const cubeMat = this.createCyberCubeMaterial(preset.id);
     cubeMesh.material = cubeMat;
 
     // 指针 ActionManager
     cubeMesh.actionManager = new ActionManager(this.scene);
     cubeMesh.actionManager.registerAction(
       new ExecuteCodeAction(ActionManager.OnPickTrigger, () => {
-        this.selectSurface(preset.id);
+        this.selectPreset(preset.id);
       }),
     );
 
-    // 4. 浮空 Billboard 3D UI 标签
+    // 4. 浮空 Billboard 3D UI 标签（尺寸同步缩小一倍：宽 1.4，高 0.5）
     const labelMesh = MeshBuilder.CreatePlane(
       `PodiumLabel_${preset.id}`,
-      { width: 2.8, height: 1.0 },
+      { width: 1.4, height: 0.5 },
       this.scene,
     );
-    labelMesh.position.y = 2.2;
+    labelMesh.position.y = 1.15;
     labelMesh.billboardMode = Mesh.BILLBOARDMODE_ALL;
     labelMesh.parent = rootNode;
 
@@ -225,16 +253,16 @@ export class FloorPickerGallery {
     const ctx = tex.getContext() as unknown as CanvasRenderingContext2D;
     ctx.clearRect(0, 0, 512, 184);
 
-    // 背景半透明圆框
+    // 背景半透明圆角矩形框
     ctx.fillStyle = isActive
-      ? 'rgba(255, 170, 0, 0.85)'
+      ? 'rgba(0, 160, 230, 0.85)'
       : isNear
-      ? 'rgba(0, 180, 255, 0.85)'
+      ? 'rgba(0, 200, 180, 0.85)'
       : 'rgba(15, 20, 30, 0.75)';
     ctx.strokeStyle = isActive
-      ? '#ffcc00'
+      ? '#00e5ff'
       : isNear
-      ? '#66d9ff'
+      ? '#38bdf8'
       : 'rgba(255, 255, 255, 0.2)';
     ctx.lineWidth = 4;
 
@@ -243,23 +271,23 @@ export class FloorPickerGallery {
     ctx.fill();
     ctx.stroke();
 
-    // 标题（中文名）
+    // 标题（中文名：第一关 / 第二关 / 第三关）
     ctx.fillStyle = isActive || isNear ? '#ffffff' : '#e2e8f0';
     ctx.font = 'bold 34px sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(podium.preset.name, 256, 54);
 
-    // 英文名
-    ctx.fillStyle = isActive ? '#fff3cc' : isNear ? '#d4f4ff' : '#94a3b8';
+    // 英文名（Level 1 / Level 2 / Level 3）
+    ctx.fillStyle = isActive ? '#d4f4ff' : isNear ? '#e0f2fe' : '#94a3b8';
     ctx.font = '20px sans-serif';
     ctx.fillText(podium.preset.englishName, 256, 92);
 
     // 状态 / 按键提示
     if (isActive) {
-      ctx.fillStyle = '#111827';
+      ctx.fillStyle = '#061325';
       ctx.font = 'bold 24px sans-serif';
-      ctx.fillText('✓ 当前地板模式', 256, 136);
+      ctx.fillText('✓ 当前关卡地面', 256, 136);
     } else if (isNear) {
       ctx.fillStyle = '#ffffff';
       ctx.font = 'bold 24px sans-serif';
@@ -274,146 +302,195 @@ export class FloorPickerGallery {
   }
 
   /**
-   * 为悬浮预览方块创建缩略材质
+   * 为悬浮预览方块创建赛博网格材质
    */
-  private createCubeMaterial(preset: FloorSurfacePreset): StandardMaterial {
+  private createCyberCubeMaterial(id: string): StandardMaterial {
     const mat = new StandardMaterial(
-      `CubePreviewMat_${preset.id}`,
+      `CubePreviewMat_${id}`,
       this.scene,
     );
-    mat.diffuseColor = Color3.White();
-    mat.specularColor = new Color3(0.3, 0.3, 0.3);
+    mat.diffuseColor = new Color3(0.8, 0.9, 1.0);
+    mat.emissiveColor = new Color3(0.08, 0.14, 0.22);
+    mat.specularColor = new Color3(0.3, 0.4, 0.5);
 
-    if (preset.id === 'tiles') {
-      const tex = new Texture(
-        'https://www.babylonjs-playground.com/textures/albedo.png',
-        this.scene,
-        false,
-        true,
-      );
-      tex.uScale = 2;
-      tex.vScale = 2;
-      mat.diffuseTexture = tex;
-    } else {
-      // 通过辅助生成独立纹理
-      const tex = this.createPreviewTexture(preset.id);
-      tex.uScale = 2;
-      tex.vScale = 2;
-      mat.diffuseTexture = tex;
-      if (preset.id === 'cyberGrid') {
-        mat.emissiveColor = new Color3(0.1, 0.15, 0.2);
-      }
-    }
-
-    return mat;
-  }
-
-  private createPreviewTexture(id: FloorSurface): Texture {
-    // 快速生成贴图
     const tex = new DynamicTexture(
-      `PreviewTex_${id}`,
+      `CyberGridPreviewTex_${id}`,
       { width: 256, height: 256 },
       this.scene,
       false,
     );
     tex.wrapU = Texture.WRAP_ADDRESSMODE;
     tex.wrapV = Texture.WRAP_ADDRESSMODE;
+    tex.uScale = 1;
+    tex.vScale = 1;
 
     const ctx = tex.getContext() as unknown as CanvasRenderingContext2D;
 
-    if (id === 'cyberGrid') {
-      ctx.fillStyle = '#06040c';
+    if (id === 'hub') {
+      // 大厅专属温馨静谧暖木与金边方块贴图
+      ctx.fillStyle = '#221913';
       ctx.fillRect(0, 0, 256, 256);
-      ctx.strokeStyle = 'rgba(0, 160, 200, 0.4)';
+
+      // 交错拼木方格纹理
+      for (let r = 0; r < 2; r++) {
+        for (let c = 0; c < 2; c++) {
+          const bx = c * 128;
+          const by = r * 128;
+          const isH = (r + c) % 2 === 0;
+
+          ctx.fillStyle = (r + c) % 2 === 0 ? '#2c2018' : '#261b14';
+          ctx.fillRect(bx, by, 128, 128);
+
+          // 木纹内细线
+          ctx.strokeStyle = 'rgba(255, 225, 185, 0.05)';
+          ctx.lineWidth = 1;
+          for (let k = 1; k <= 3; k++) {
+            if (isH) {
+              ctx.beginPath();
+              ctx.moveTo(bx + 4, by + k * 32);
+              ctx.lineTo(bx + 124, by + k * 32);
+              ctx.stroke();
+            } else {
+              ctx.beginPath();
+              ctx.moveTo(bx + k * 32, by + 4);
+              ctx.lineTo(bx + k * 32, by + 124);
+              ctx.stroke();
+            }
+          }
+
+          ctx.strokeStyle = '#120d09';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(bx, by, 128, 128);
+        }
+      }
+
+      // 暖金微光外框
+      ctx.strokeStyle = 'rgba(230, 180, 100, 0.5)';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(4, 4, 248, 248);
+
+      // 节点中心暖金微光晶核
+      ctx.fillStyle = 'rgba(255, 210, 110, 0.95)';
+      ctx.beginPath();
+      ctx.arc(128, 128, 5, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (id === 'level1') {
+      // 第一关专属暗黑火系余烬方块贴图（极致暗黑）
+      ctx.fillStyle = '#060202';
+      ctx.fillRect(0, 0, 256, 256);
+
+      // 玄武岩焦黑石板块
+      ctx.fillStyle = '#0c0403';
+      ctx.fillRect(8, 8, 116, 116);
+      ctx.fillRect(132, 8, 116, 116);
+      ctx.fillRect(8, 132, 116, 116);
+      ctx.fillRect(132, 132, 116, 116);
+
+      // 深红暗火裂隙微晕
+      ctx.strokeStyle = 'rgba(120, 15, 8, 0.20)';
+      ctx.lineWidth = 6;
+      ctx.beginPath();
+      ctx.moveTo(128, 0);
+      ctx.lineTo(128, 256);
+      ctx.moveTo(0, 128);
+      ctx.lineTo(256, 128);
+      ctx.stroke();
+
+      // 幽暗深血红流线
+      ctx.strokeStyle = 'rgba(160, 25, 10, 0.45)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(128, 0);
+      ctx.lineTo(128, 256);
+      ctx.moveTo(0, 128);
+      ctx.lineTo(256, 128);
+      ctx.stroke();
+
+      // 极细暗赤橙火芯
+      ctx.strokeStyle = 'rgba(195, 60, 20, 0.65)';
+      ctx.lineWidth = 0.8;
+      ctx.beginPath();
+      ctx.moveTo(128, 0);
+      ctx.lineTo(128, 256);
+      ctx.moveTo(0, 128);
+      ctx.lineTo(256, 128);
+      ctx.stroke();
+
+      // 熔岩中心微小暗火晶体
+      ctx.fillStyle = 'rgba(210, 70, 20, 0.85)';
+      ctx.beginPath();
+      ctx.arc(128, 128, 3.5, 0, Math.PI * 2);
+      ctx.fill();
+
+      // 散落极微弱余烬火星
+      const embers = [
+        [40, 50],
+        [200, 40],
+        [60, 210],
+        [210, 190],
+      ];
+      ctx.fillStyle = 'rgba(175, 45, 15, 0.55)';
+      for (const [ex, ey] of embers) {
+        ctx.beginPath();
+        ctx.arc(ex, ey, 1.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    } else {
+      // 竞技场网格方块贴图
+      ctx.fillStyle = '#070814';
+      ctx.fillRect(0, 0, 256, 256);
+
+      ctx.strokeStyle = 'rgba(0, 190, 240, 0.45)';
       ctx.lineWidth = 2;
       for (let i = 0; i <= 256; i += 32) {
         ctx.beginPath();
         ctx.moveTo(i, 0);
         ctx.lineTo(i, 256);
         ctx.stroke();
+
         ctx.beginPath();
         ctx.moveTo(0, i);
         ctx.lineTo(256, i);
         ctx.stroke();
       }
-    } else if (id === 'checker') {
-      const step = 64;
-      for (let r = 0; r < 4; r++) {
-        for (let c = 0; c < 4; c++) {
-          ctx.fillStyle = (r + c) % 2 === 0 ? '#f0f4f8' : '#22262a';
-          ctx.fillRect(c * step, r * step, step, step);
-        }
-      }
-    } else if (id === 'sand') {
-      ctx.fillStyle = '#e6c280';
-      ctx.fillRect(0, 0, 256, 256);
-      ctx.strokeStyle = '#c29b53';
-      ctx.lineWidth = 6;
-      for (let y = 20; y < 256; y += 40) {
-        ctx.beginPath();
-        ctx.arc(128, y, 100, 0, Math.PI);
-        ctx.stroke();
-      }
-    } else if (id === 'marble') {
-      ctx.fillStyle = '#f8fafc';
-      ctx.fillRect(0, 0, 256, 256);
-      ctx.strokeStyle = '#94a3b8';
-      ctx.lineWidth = 5;
-      ctx.beginPath();
-      ctx.moveTo(0, 40);
-      ctx.bezierCurveTo(80, 120, 160, 20, 256, 200);
-      ctx.stroke();
-    } else if (id === 'woodPlanks') {
-      for (let p = 0; p < 4; p++) {
-        ctx.fillStyle = p % 2 === 0 ? '#b47b48' : '#8c592e';
-        ctx.fillRect(0, p * 64, 256, 64);
-        ctx.strokeStyle = '#4a2e1b';
-        ctx.lineWidth = 4;
-        ctx.strokeRect(0, p * 64, 256, 64);
-      }
-    } else if (id === 'cobblestone') {
-      ctx.fillStyle = '#332f2c';
-      ctx.fillRect(0, 0, 256, 256);
-      ctx.fillStyle = '#78716c';
-      for (let r = 0; r < 3; r++) {
-        for (let c = 0; c < 3; c++) {
+
+      // 交叉点发光微点
+      ctx.fillStyle = 'rgba(0, 230, 255, 0.8)';
+      for (let x = 0; x <= 256; x += 32) {
+        for (let y = 0; y <= 256; y += 32) {
           ctx.beginPath();
-          ctx.arc(c * 80 + 48, r * 80 + 48, 30, 0, Math.PI * 2);
+          ctx.arc(x, y, 2.5, 0, Math.PI * 2);
           ctx.fill();
         }
       }
-    } else if (id === 'dirtGrass') {
-      ctx.fillStyle = '#4d7c0f';
-      ctx.fillRect(0, 0, 256, 256);
-      ctx.fillStyle = '#78350f';
-      ctx.beginPath();
-      ctx.arc(80, 80, 50, 0, Math.PI * 2);
-      ctx.arc(180, 180, 60, 0, Math.PI * 2);
-      ctx.fill();
-    } else {
-      // dark
-      ctx.fillStyle = '#1e293b';
-      ctx.fillRect(0, 0, 256, 256);
     }
 
     tex.update(false);
-    return tex;
+    mat.diffuseTexture = tex;
+    return mat;
   }
 
   /**
-   * 选择并应用地板贴图
+   * 选择并应用关卡地面
    */
-  public selectSurface(surface: FloorSurface): void {
-    this.activeSurface = surface;
-    this.floor.setSurface(surface);
-    saveFloorSurfaceState(surface);
-    this.onSurfaceChanged?.(surface);
+  public selectPreset(presetId: LevelFloorId): void {
+    const targetPreset = LEVEL_FLOOR_PRESETS.find((p) => p.id === presetId);
+    if (!targetPreset) return;
+
+    this.activePresetId = presetId;
+    this.floor.setSurface(targetPreset.surface);
+    saveFloorSurfaceState(targetPreset.surface);
+    this.onSurfaceChanged?.(targetPreset.surface);
     this.updateActiveVisuals();
+  }
+
+  public getActivePresetId(): LevelFloorId {
+    return this.activePresetId;
   }
 
   private updateActiveVisuals(): void {
     this.podiums.forEach((podium) => {
-      const isActive = podium.preset.id === this.activeSurface;
+      const isActive = podium.preset.id === this.activePresetId;
       podium.ringMesh.isVisible = isActive;
       this.renderLabelText(podium, isActive, false);
     });
@@ -426,14 +503,15 @@ export class FloorPickerGallery {
     this.animTime += 0.02;
 
     this.podiums.forEach((podium) => {
-      const isActive = podium.preset.id === this.activeSurface;
+      const isActive = podium.preset.id === this.activePresetId;
 
       // 旋转
       podium.cubeMesh.rotation.y += 0.012;
 
       // 上下轻微浮动 (Sine 波)
-      const floatOffset = Math.sin(this.animTime * 2.5 + podium.cubeMesh.position.x) * 0.12;
-      const targetY = podium.initialY + (isActive ? 0.3 : 0) + floatOffset;
+      const floatOffset =
+        Math.sin(this.animTime * 2.5 + podium.cubeMesh.position.x) * 0.04;
+      const targetY = podium.initialY + (isActive ? 0.15 : 0) + floatOffset;
       podium.cubeMesh.position.y = targetY;
 
       // 距离判定
@@ -444,12 +522,12 @@ export class FloorPickerGallery {
           new Vector3(minionPosition.x, 0, minionPosition.z),
           new Vector3(podWorldPos.x, 0, podWorldPos.z),
         );
-        if (dist <= 2.2) {
+        if (dist <= 1.6) {
           isNear = true;
 
           // 若按下 E 键，触发选用
           if (this.isEKeyPressed && !isActive) {
-            this.selectSurface(podium.preset.id);
+            this.selectPreset(podium.preset.id);
           }
         }
       }
@@ -487,4 +565,3 @@ function drawRoundedRect(
   ctx.lineTo(x, y + radius);
   ctx.arcTo(x, y, x + radius, y, radius);
 }
-

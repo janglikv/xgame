@@ -7,6 +7,8 @@ export function loadFloorSurfaceState(): FloorSurface {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (
+      raw === 'hubGrid' ||
+      raw === 'flameGrid' ||
       raw === 'tiles' ||
       raw === 'dirtGrass' ||
       raw === 'cyberGrid' ||
@@ -19,9 +21,9 @@ export function loadFloorSurfaceState(): FloorSurface {
     ) {
       return raw;
     }
-    return 'tiles';
+    return 'hubGrid';
   } catch {
-    return 'tiles';
+    return 'hubGrid';
   }
 }
 

@@ -10,7 +10,6 @@ import {
   loadCameraState,
   type CameraStateSnapshot,
 } from '../../storage/cameraState';
-import { loadFloorSurfaceState } from '../../storage/floorState';
 import { loadMinionAppearanceState } from '../../storage/minionAppearanceState';
 import type { CameraMode } from '../../storage/settingsState';
 import type {
@@ -134,9 +133,8 @@ export class HubWorld implements GameWorld {
       half: 32,
     });
 
-    const initialFloorSurface = loadFloorSurfaceState();
     const floor = new Floor(scene, shadowGen, {
-      surface: initialFloorSurface,
+      surface: 'hubGrid',
     });
     buildArenaColliders(scene, {});
     const spatialAxesGrid = new SpatialAxesGrid(scene);
