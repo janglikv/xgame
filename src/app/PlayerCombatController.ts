@@ -35,6 +35,14 @@ export class PlayerCombatController {
   private meleeCooldown = 0;
   private isPointerDown = false;
   private pointerOverCanvas = false;
+  /** 开火待决状态：点击或按住时激活，即使鼠标提前松开，也会在平滑转身到位后坚决开火 */
+  private pendingFire = false;
+  /** 待决开火的目标世界坐标点 */
+  private pendingAimPoint: Vector3 | null = null;
+  /** 待决开火超时保护（秒，最多等待 1.2 秒旋转，防止卡死） */
+  private pendingFireTimeout = 0;
+  /** 本次鼠标按下期间已击发子弹的次数（0 代表一发都还没打出） */
+  private shotsFiredInCurrentPress = 0;
   /** 手枪当前散布角（弧度，0 = 最大精度） */
   private pistolSpread = 0;
   /** 手枪停止开火恢复倒计时（达到 1s 恢复最大精度） */
@@ -57,10 +65,19 @@ export class PlayerCombatController {
     const onDown = (e: PointerEvent): void => {
       if (e.button === 0 || e.button === 2) {
         this.isPointerDown = true;
+        this.pendingFire = true;
+        this.pendingFireTimeout = 1.2;
+        this.shotsFiredInCurrentPress = 0;
       }
     };
     const onUp = (): void => {
       this.isPointerDown = false;
+      // 若在本次按下期间已经打出过至少一枪，则松手立即停火；
+      // 若一枪都还没开出来（如单次点击或在开枪前松开），保留 pendingFire 让转身到位后只打这 1 枪！
+      if (this.shotsFiredInCurrentPress > 0) {
+        this.pendingFire = false;
+        this.pendingAimPoint = null;
+      }
     };
     const onEnter = (): void => {
       this.pointerOverCanvas = true;
@@ -71,6 +88,10 @@ export class PlayerCombatController {
     const onLeave = (): void => {
       this.pointerOverCanvas = false;
       this.isPointerDown = false;
+      if (this.shotsFiredInCurrentPress > 0) {
+        this.pendingFire = false;
+        this.pendingAimPoint = null;
+      }
     };
 
     canvas.addEventListener('pointerdown', onDown);
@@ -104,6 +125,15 @@ export class PlayerCombatController {
     this.shootCooldown = Math.max(0, this.shootCooldown - dt);
     this.meleeCooldown = Math.max(0, this.meleeCooldown - dt);
 
+    // 超时计时
+    if (this.pendingFireTimeout > 0) {
+      this.pendingFireTimeout = Math.max(0, this.pendingFireTimeout - dt);
+      if (this.pendingFireTimeout <= 0 && !this.isPointerDown) {
+        this.pendingFire = false;
+        this.pendingAimPoint = null;
+      }
+    }
+
     // 精度恢复机制：停止开火满 1s 后恢复最大精度（散布归零）
     if (this.pistolRecoveryTimer > 0) {
       this.pistolRecoveryTimer = Math.max(0, this.pistolRecoveryTimer - dt);
@@ -114,69 +144,64 @@ export class PlayerCombatController {
 
     const { scene, camera, player, spellSystem, menuOpen } = opts;
 
-    if (!this.isPointerDown || !this.pointerOverCanvas || menuOpen || player.isDead()) {
-      player.setAimTarget(null);
-      return;
-    }
-
-    const ray = scene.createPickingRay(
-      scene.pointerX,
-      scene.pointerY,
-      Matrix.Identity(),
-      camera,
-    );
-    const planeY = player.root.position.y;
-    if (Math.abs(ray.direction.y) <= 1e-5) {
-      player.setAimTarget(null);
-      return;
-    }
-
-    const t = (planeY - ray.origin.y) / ray.direction.y;
-    if (t <= 0) {
-      player.setAimTarget(null);
-      return;
-    }
-
-    const aimPoint = ray.origin.add(ray.direction.scale(t));
-
-    // 有法杖 / 枪械：
-    if (player.hasStaff()) {
-      player.setAimTarget(aimPoint);
-
-      const style = player.getStaffStyle() ?? 'arcane';
-      const isPistol = isGunStyle(style);
-
-      // 计算角色中心点到指针位置的向量与法杖朝向向量
-      const lineVec = aimPoint.subtract(player.root.position);
-      lineVec.y = 0;
-      let lineDir = player.getForwardVector();
-      let isParallel = false;
-      if (lineVec.lengthSquared() > 1e-6) {
-        lineDir = lineVec.normalize();
-        const staffDir = player.getStaffForwardVector();
-        const dot = Vector3.Dot(staffDir, lineDir);
-        // 点积 >= 0.992 （夹角约 <= 7.2°），判定为法杖朝向与【中心->指针】逻辑线平行
-        isParallel = dot >= 0.992;
+    // 当鼠标按下时，实时通过射线拾取更新最新的瞄准目标点
+    if (this.isPointerDown && this.pointerOverCanvas && !menuOpen && !player.isDead()) {
+      const ray = scene.createPickingRay(
+        scene.pointerX,
+        scene.pointerY,
+        Matrix.Identity(),
+        camera,
+      );
+      const planeY = player.root.position.y;
+      if (Math.abs(ray.direction.y) > 1e-5) {
+        const t = (planeY - ray.origin.y) / ray.direction.y;
+        if (t > 0) {
+          this.pendingAimPoint = ray.origin.add(ray.direction.scale(t));
+          this.pendingFire = true;
+          this.pendingFireTimeout = 1.2;
+        }
       }
+    }
 
-      // 开火时先向目标方向转向
-      const aimDx = aimPoint.x - player.root.position.x;
-      const aimDz = aimPoint.z - player.root.position.z;
+    // 若无待决开火意图，或菜单开启/角色死亡，收起瞄准并退出
+    if (!this.pendingFire || !this.pendingAimPoint || menuOpen || player.isDead()) {
+      player.setAimTarget(null);
+      return;
+    }
+
+    const aimPoint = this.pendingAimPoint;
+    const aimDx = aimPoint.x - player.root.position.x;
+    const aimDz = aimPoint.z - player.root.position.z;
+    const lineVec = new Vector3(aimDx, 0, aimDz);
+    let lineDir = player.getForwardVector();
+    if (lineVec.lengthSquared() > 1e-6) {
+      lineDir = lineVec.normalize();
+    }
+
+    // 1. 有法杖 / 枪械：
+    if (player.hasStaff()) {
+      // 保持瞄准并平滑旋转朝向目标点（先旋转）
+      player.setAimTarget(aimPoint);
       if (aimDx * aimDx + aimDz * aimDz > 1e-6) {
         player.faceToward(aimDx, aimDz);
       }
 
-      // 计算角色身体当前朝向与目标开火方向的对齐程度（点积 >= 0.94 代表夹角约 <= 20°）
-      const playerForward = player.getForwardVector();
-      const isFacingTarget = Vector3.Dot(playerForward, lineDir) >= 0.94;
+      const style = player.getStaffStyle() ?? 'arcane';
+      const isPistol = isGunStyle(style);
 
-      // 1. 手枪分支：若方向不一致先转向，转向正确对齐且冷却完毕后再开火
+      // 1.1 手枪分支：必须平滑转向对齐（夹角 <= 20°），且冷却完毕后开枪（后开枪）
       if (isPistol) {
+        const playerForward = player.getForwardVector();
+        const isFacingTarget = Vector3.Dot(playerForward, lineDir) >= 0.94;
+
         if (!isFacingTarget || this.shootCooldown > 0) {
+          // 还在旋转中或冷却中，等待对齐
           return;
         }
 
+        // 转到位了，立即开火！
         this.shootCooldown = this.shootInterval * 1.5;
+        this.shotsFiredInCurrentPress++;
         const tipPos = player.getStaffTipWorldPos();
 
         // 精度机制：根据当前累积散布计算发射方向（第1发绝对精准，连发精度逐渐降低）
@@ -193,17 +218,30 @@ export class PlayerCombatController {
         playSfx('/audio/bullet_fire.mp3', 0.5);
         spellSystem.spawnOrb(tipPos, shootDir, style, player);
         player.triggerStaffShootFx();
+
+        // 消费掉本次开火意图
+        this.pendingFire = false;
+
+        // 如果用户在开枪前就已经松开了鼠标，或者此时鼠标未按住，彻底清除瞄准点
+        if (!this.isPointerDown) {
+          this.pendingAimPoint = null;
+          player.setAimTarget(null);
+        }
         return;
       }
 
-      // 2. 传统法杖分支：法杖方向必须与逻辑线平行，且法杖举平，且冷却完毕方可发射
+      // 1.2 传统法杖分支：必须法杖方向与逻辑线平行且举平，冷却完毕后发射
+      const staffDir = player.getStaffForwardVector();
+      const isParallel = Vector3.Dot(staffDir, lineDir) >= 0.985;
+
       if (this.shootCooldown > 0 || !player.isStaffHorizontal() || !isParallel) {
         return;
       }
 
       this.shootCooldown = this.shootInterval;
+      this.shotsFiredInCurrentPress++;
       const tipPos = player.getStaffTipWorldPos();
-      const shootDir = player.getStaffForwardVector();
+      const shootDir = staffDir;
       playSfx(
         style === 'storm'
           ? '/audio/staff_storm_fire.mp3'
@@ -212,18 +250,27 @@ export class PlayerCombatController {
       );
       spellSystem.spawnOrb(tipPos, shootDir, style, player);
       player.triggerStaffShootFx();
+
+      // 消费掉本次开火意图
+      this.pendingFire = false;
+
+      if (!this.isPointerDown) {
+        this.pendingAimPoint = null;
+        player.setAimTarget(null);
+      }
       return;
     }
 
-    // 空手（无法杖）：转向鼠标点并执行近战挥拳与拳头落点打击
+    // 2. 空手（无法杖）：平滑转向目标点，转到位后执行近战挥拳
     player.setAimTarget(null);
-    const aimDx = aimPoint.x - player.root.position.x;
-    const aimDz = aimPoint.z - player.root.position.z;
     if (aimDx * aimDx + aimDz * aimDz > 1e-6) {
       player.faceToward(aimDx, aimDz);
     }
 
-    if (this.meleeCooldown > 0) return;
+    const playerForward = player.getForwardVector();
+    const isFacingTarget = Vector3.Dot(playerForward, lineDir) >= 0.90;
+
+    if (!isFacingTarget || this.meleeCooldown > 0) return;
 
     const triggered = player.triggerMeleePunch(() => {
       this.performMeleePunchAttack(scene, player, opts.cameraFollow);
@@ -231,6 +278,11 @@ export class PlayerCombatController {
 
     if (triggered) {
       this.meleeCooldown = this.meleeInterval;
+      this.shotsFiredInCurrentPress++;
+      this.pendingFire = false;
+      if (!this.isPointerDown) {
+        this.pendingAimPoint = null;
+      }
     }
   }
 

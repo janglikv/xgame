@@ -220,6 +220,10 @@ export class GameApp {
     });
 
     this.combat.bindCanvas(this.canvas);
+    this.cameraFollow.bindCanvas(
+      this.canvas,
+      () => this.settingsPanel.isOpen() || this.cameraMode !== 'fixed',
+    );
     this.bindInput();
 
     {

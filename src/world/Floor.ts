@@ -214,7 +214,7 @@ export class Floor {
 
   constructor(
     scene: Scene,
-    shadowGenerator?: ShadowGenerator,
+    _shadowGenerator?: ShadowGenerator,
     options: FloorOptions = {},
   ) {
     this.scene = scene;

@@ -35,7 +35,7 @@ export interface TerrainGroundResult {
  */
 export function createTerrainGround(
   scene: Scene,
-  shadowGenerator?: ShadowGenerator,
+  _shadowGenerator?: ShadowGenerator,
   options?: {
     /** 地表贴图平铺次数（越大纹样越小） */
     textureScale?: number;

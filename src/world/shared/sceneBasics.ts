@@ -146,11 +146,11 @@ export function createFollowCamera(
   return camera;
 }
 
-/** 固定俯视：锁 α/β/半径与窄 FOV */
-export function lockFixedOrbit(camera: ArcRotateCamera): void {
+/** 固定俯视：锁 α/β 与窄 FOV，支持传入滚轮缩放半径 */
+export function lockFixedOrbit(camera: ArcRotateCamera, radius?: number): void {
   camera.alpha = FIXED_CAMERA.alpha;
   camera.beta = FIXED_CAMERA.beta;
-  camera.radius = FIXED_CAMERA.radius;
+  camera.radius = radius ?? camera.radius ?? FIXED_CAMERA.radius;
   camera.fov = FIXED_CAMERA.fov;
 }
 
@@ -163,7 +163,7 @@ export function applyCameraMode(
 ): void {
   if (mode === 'fixed') {
     camera.detachControl();
-    lockFixedOrbit(camera);
+    lockFixedOrbit(camera, camera.radius);
   } else {
     camera.fov = FREE_CAMERA_FOV;
     if (attachIfFree) {

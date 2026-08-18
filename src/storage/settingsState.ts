@@ -44,8 +44,12 @@ export const FIXED_CAMERA = {
   beta: 0.9553,
   /** 垂直 FOV：0.24 */
   fov: 0.24,
-  /** 跟拍距离：匹配 0.24 FOV 的显示比例 */
+  /** 跟拍距离基准值：匹配 0.24 FOV 的显示比例 */
   radius: 30.0,
+  /** 滚轮拉近最小半径（角色特写） */
+  minRadius: 8.0,
+  /** 滚轮拉远最大半径（广角宏观俯瞰） */
+  maxRadius: 75.0,
   /** 注视高度相对身体中心的比例 */
   focusHeightScale: 0.35,
 } as const;
