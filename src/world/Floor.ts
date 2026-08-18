@@ -599,9 +599,20 @@ function createTrapezoidExtrudedWall(
   const closed = options.close ?? true;
   const y0 = 0.01;
 
-  const verts = unwrapPath(options.path, closed);
-  if (verts.length < 2) {
+  const rawVerts = unwrapPath(options.path, closed);
+  if (rawVerts.length < 2) {
     return MeshBuilder.CreateBox(name, { size: 0.01 }, scene);
+  }
+
+  // 闭合时追加起点以单调递增展开 UV，避免末段拉伸
+  const verts = closed ? [...rawVerts, rawVerts[0]!] : rawVerts;
+  const ringLen = verts.length;
+
+  // 沿折线计算累积弧长（米数）
+  const arcLengths: number[] = [0];
+  for (let i = 1; i < ringLen; i++) {
+    const d = Vector3.Distance(verts[i - 1]!, verts[i]!);
+    arcLengths.push(arcLengths[i - 1]! + d);
   }
 
   const innerBot: Vector3[] = [];
@@ -609,9 +620,9 @@ function createTrapezoidExtrudedWall(
   const outerTop: Vector3[] = [];
   const outerBot: Vector3[] = [];
 
-  for (let i = 0; i < verts.length; i++) {
+  for (let i = 0; i < ringLen; i++) {
     const p = verts[i]!;
-    const inward = pathVertexInward(verts, i, closed);
+    const inward = pathVertexInward(rawVerts, i % rawVerts.length, closed);
     innerBot.push(
       new Vector3(p.x + inward.x * (bottomW / 2), y0, p.z + inward.z * (bottomW / 2)),
     );
@@ -627,13 +638,18 @@ function createTrapezoidExtrudedWall(
   }
 
   const rings = [innerBot, innerTop, outerTop, outerBot];
-  const ringLen = innerBot.length;
+  const vCoords = [0.0, 0.35, 0.65, 1.0];
   const positions: number[] = [];
+  const uvs: number[] = [];
   const indices: number[] = [];
 
-  for (const ring of rings) {
-    for (const v of ring) {
-      positions.push(v.x, v.y, v.z);
+  for (let r = 0; r < rings.length; r++) {
+    const ring = rings[r]!;
+    const v = vCoords[r]!;
+    for (let i = 0; i < ringLen; i++) {
+      const vert = ring[i]!;
+      positions.push(vert.x, vert.y, vert.z);
+      uvs.push(arcLengths[i]!, v);
     }
   }
 
@@ -642,9 +658,9 @@ function createTrapezoidExtrudedWall(
     indices.push(a, b, c, a, c, d);
   };
 
-  const segs = closed ? ringLen : ringLen - 1;
+  const segs = ringLen - 1;
   for (let i = 0; i < segs; i++) {
-    const j = closed ? (i + 1) % ringLen : i + 1;
+    const j = i + 1;
     for (let r = 0; r < rings.length; r++) {
       const r2 = (r + 1) % rings.length;
       quad(ringIndex(r, i), ringIndex(r, j), ringIndex(r2, j), ringIndex(r2, i));
@@ -652,9 +668,23 @@ function createTrapezoidExtrudedWall(
   }
 
   if (!closed) {
-    quad(ringIndex(0, 0), ringIndex(1, 0), ringIndex(2, 0), ringIndex(3, 0));
+    // 为开口围墙两端的切面（End Caps）生成独立顶点，UV 映射到无缝纯暗岩区（u=0.25），彻底消除切面上的亮橙发光缝
+    const baseIdx0 = positions.length / 3;
+    const p0 = [innerBot[0]!, innerTop[0]!, outerTop[0]!, outerBot[0]!];
+    for (const p of p0) {
+      positions.push(p.x, p.y, p.z);
+    }
+    uvs.push(0.25, 0.05, 0.25, 0.30, 0.35, 0.30, 0.35, 0.05);
+    quad(baseIdx0 + 0, baseIdx0 + 1, baseIdx0 + 2, baseIdx0 + 3);
+
+    const baseIdx1 = positions.length / 3;
     const e = ringLen - 1;
-    quad(ringIndex(0, e), ringIndex(3, e), ringIndex(2, e), ringIndex(1, e));
+    const pe = [innerBot[e]!, outerBot[e]!, outerTop[e]!, innerTop[e]!];
+    for (const p of pe) {
+      positions.push(p.x, p.y, p.z);
+    }
+    uvs.push(0.25, 0.05, 0.35, 0.05, 0.35, 0.30, 0.25, 0.30);
+    quad(baseIdx1 + 0, baseIdx1 + 1, baseIdx1 + 2, baseIdx1 + 3);
   }
 
   const normals = new Array<number>(positions.length).fill(0);
@@ -664,6 +694,7 @@ function createTrapezoidExtrudedWall(
   vertexData.positions = positions;
   vertexData.indices = indices;
   vertexData.normals = normals;
+  vertexData.uvs = uvs;
 
   const wallMesh = new Mesh(name, scene);
   vertexData.applyToMesh(wallMesh);
@@ -731,8 +762,123 @@ function pathVertexInward(verts: Vector3[], i: number, closed: boolean): Vector3
 
 
 
+/** 为围墙烘焙每 1 米一段的竖向分割缝与立体转折边缘贴图 */
+function bakeWallTexture(surface: FloorSurface, scene: Scene): DynamicTexture {
+  const size = 256;
+  const tex = new DynamicTexture(
+    `wallTex_${surface}`,
+    { width: size, height: size },
+    scene,
+    false,
+  );
+  tex.wrapU = Texture.WRAP_ADDRESSMODE;
+  tex.wrapV = Texture.WRAP_ADDRESSMODE;
+
+  const ctx = tex.getContext() as unknown as CanvasRenderingContext2D;
+
+  // 1. 根据不同主题底色填充
+  let baseColor = '#1e2128';
+  let seamGlowColor = 'rgba(255, 255, 255, 0.20)';
+  let accentColor = 'rgba(255, 255, 255, 0.5)';
+
+  if (surface === 'hubGrid') {
+    // 宁静暖木：温润胡桃木色 + 暖金嵌槽
+    baseColor = '#362217';
+    seamGlowColor = 'rgba(235, 185, 110, 0.55)';
+    accentColor = 'rgba(255, 210, 120, 0.90)';
+  } else if (surface === 'flameGrid') {
+    // 烈焰熔岩：明朗红褐火山玄武岩 + 炽热金橙熔岩嵌缝
+    baseColor = '#4e3026';
+    seamGlowColor = 'rgba(255, 100, 30, 0.95)';
+    accentColor = 'rgba(255, 220, 90, 1.0)';
+  } else if (surface === 'cyberGrid') {
+    // 赛博科技：深蓝钛合金 + 青蓝发光缝
+    baseColor = '#121c2e';
+    seamGlowColor = 'rgba(0, 220, 255, 0.70)';
+    accentColor = 'rgba(0, 245, 255, 0.95)';
+  }
+
+  // 基础底色
+  ctx.fillStyle = baseColor;
+  ctx.fillRect(0, 0, size, size);
+
+  // 2. 绘制 1m 主分割缝（位于 x=0 与 x=256）与 0.5m 次级分割线（位于 x=128）
+  const drawVerticalSeam = (x: number, isMain: boolean) => {
+    // 阴影凹槽
+    ctx.fillStyle = 'rgba(15, 6, 4, 0.7)';
+    const grooveW = isMain ? 5 : 2.5;
+    ctx.fillRect(x - grooveW / 2, 0, grooveW, size);
+
+    // 炽亮导光 / 材质嵌线
+    ctx.strokeStyle = seamGlowColor;
+    ctx.lineWidth = isMain ? 2.2 : 1.1;
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, size);
+    ctx.stroke();
+
+    // 槽左侧受光面倒角高光
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.30)';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(x - grooveW / 2 - 1, 0);
+    ctx.lineTo(x - grooveW / 2 - 1, size);
+    ctx.stroke();
+
+    // 槽右侧阴影过渡
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.35)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x + grooveW / 2 + 1, 0);
+    ctx.lineTo(x + grooveW / 2 + 1, size);
+    ctx.stroke();
+
+    // 顶面连接处发光晶核（y 处于顶面中心 128）
+    if (isMain) {
+      ctx.fillStyle = accentColor;
+      ctx.beginPath();
+      ctx.arc(x, 128, 3.0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  };
+
+  // 两侧边界主缝（无缝平铺接缝）
+  drawVerticalSeam(0, true);
+  drawVerticalSeam(size, true);
+  // 中间 0.5m 辅助分割槽
+  drawVerticalSeam(size / 2, false);
+
+  // 3. 梯形顶面与内外侧坡面的水平转折倒角线（y=89 对应内顶折角，y=166 对应外顶折角）
+  // 顶面区域（y: 89 ~ 166）明朗平台走道质感
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.14)';
+  ctx.fillRect(0, 89, size, 77);
+
+  // 水平棱角高光线
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.38)';
+  ctx.lineWidth = 1.8;
+  ctx.beginPath();
+  ctx.moveTo(0, 89);
+  ctx.lineTo(size, 89);
+  ctx.moveTo(0, 166);
+  ctx.lineTo(size, 166);
+  ctx.stroke();
+
+  // 水平棱角下阴影线
+  ctx.strokeStyle = 'rgba(0, 0, 0, 0.35)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(0, 91);
+  ctx.lineTo(size, 91);
+  ctx.moveTo(0, 168);
+  ctx.lineTo(size, 168);
+  ctx.stroke();
+
+  tex.update(false);
+  return tex;
+}
+
 /**
- * 根据当前地板 Presets 样式匹配纯色深色系围墙材质（无贴图，色调与地板主题呼应，依赖 Flat Shading 折光）
+ * 根据当前地板 Presets 样式匹配带有 1 米分割缝的围墙材质
  */
 function createWallMaterialForSurface(
   surface: FloorSurface,
@@ -745,63 +891,65 @@ function createWallMaterialForSurface(
   }
 
   const wallMat = new StandardMaterial(matName, scene);
-  wallMat.diffuseTexture = null;
+  const wallTex = bakeWallTexture(surface, scene);
+  wallMat.diffuseTexture = wallTex;
+  wallMat.diffuseColor = Color3.White();
 
   switch (surface) {
     case 'hubGrid':
-      wallMat.diffuseColor = new Color3(0.20, 0.16, 0.12);
-      wallMat.specularColor = new Color3(0.25, 0.20, 0.15);
-      wallMat.emissiveColor = new Color3(0.04, 0.03, 0.02);
+      wallMat.diffuseColor = new Color3(0.95, 0.90, 0.85);
+      wallMat.specularColor = new Color3(0.30, 0.22, 0.16);
+      wallMat.emissiveColor = new Color3(0.06, 0.035, 0.02);
       break;
     case 'flameGrid':
-      wallMat.diffuseColor = new Color3(0.32, 0.20, 0.16);
-      wallMat.specularColor = new Color3(0.50, 0.30, 0.22);
-      wallMat.specularPower = 28;
-      wallMat.emissiveColor = new Color3(0.08, 0.035, 0.02);
+      wallMat.diffuseColor = new Color3(1.15, 1.05, 1.0);
+      wallMat.specularColor = new Color3(0.60, 0.40, 0.30);
+      wallMat.specularPower = 22;
+      wallMat.emissiveColor = new Color3(0.28, 0.14, 0.08);
       break;
     case 'tiles':
-      wallMat.diffuseColor = new Color3(0.18, 0.21, 0.25);
+      wallMat.diffuseColor = new Color3(0.85, 0.88, 0.90);
       wallMat.specularColor = new Color3(0.35, 0.40, 0.45);
       wallMat.emissiveColor = new Color3(0.04, 0.05, 0.06);
       break;
     case 'dirtGrass':
-      wallMat.diffuseColor = new Color3(0.16, 0.22, 0.15);
+      wallMat.diffuseColor = new Color3(0.85, 0.90, 0.85);
       wallMat.specularColor = new Color3(0.28, 0.35, 0.25);
       wallMat.emissiveColor = new Color3(0.03, 0.05, 0.03);
       break;
     case 'cyberGrid':
-      wallMat.diffuseColor = new Color3(0.14, 0.18, 0.28);
-      wallMat.specularColor = new Color3(0.35, 0.45, 0.65);
-      wallMat.emissiveColor = new Color3(0.04, 0.06, 0.10);
+      wallMat.diffuseColor = new Color3(0.85, 0.90, 0.98);
+      wallMat.specularColor = new Color3(0.40, 0.50, 0.70);
+      wallMat.emissiveColor = new Color3(0.06, 0.08, 0.12);
       break;
     case 'checker':
-      wallMat.diffuseColor = new Color3(0.18, 0.18, 0.22);
+      wallMat.diffuseColor = new Color3(0.88, 0.88, 0.92);
       wallMat.specularColor = new Color3(0.35, 0.35, 0.40);
       wallMat.emissiveColor = new Color3(0.04, 0.04, 0.05);
       break;
     case 'cobblestone':
-      wallMat.diffuseColor = new Color3(0.22, 0.18, 0.15);
+      wallMat.diffuseColor = new Color3(0.90, 0.85, 0.82);
       wallMat.specularColor = new Color3(0.35, 0.30, 0.25);
       wallMat.emissiveColor = new Color3(0.05, 0.04, 0.03);
       break;
     case 'sand':
-      wallMat.diffuseColor = new Color3(0.25, 0.20, 0.15);
+      wallMat.diffuseColor = new Color3(0.95, 0.90, 0.85);
       wallMat.specularColor = new Color3(0.40, 0.32, 0.24);
       wallMat.emissiveColor = new Color3(0.06, 0.04, 0.03);
       break;
     case 'marble':
-      wallMat.diffuseColor = new Color3(0.22, 0.24, 0.28);
+      wallMat.diffuseColor = new Color3(0.90, 0.92, 0.95);
       wallMat.specularColor = new Color3(0.45, 0.48, 0.52);
       wallMat.emissiveColor = new Color3(0.05, 0.06, 0.07);
       break;
     case 'woodPlanks':
-      wallMat.diffuseColor = new Color3(0.22, 0.15, 0.10);
+      wallMat.diffuseColor = new Color3(0.92, 0.85, 0.80);
       wallMat.specularColor = new Color3(0.35, 0.25, 0.18);
       wallMat.emissiveColor = new Color3(0.05, 0.03, 0.02);
       break;
     default:
     case 'dark':
-      wallMat.diffuseColor = new Color3(0.16, 0.17, 0.20);
+      wallMat.diffuseColor = new Color3(0.85, 0.85, 0.88);
       wallMat.specularColor = new Color3(0.30, 0.32, 0.38);
       wallMat.emissiveColor = new Color3(0.04, 0.04, 0.05);
       break;
@@ -1039,7 +1187,7 @@ function bakeHubGridTexture(scene: Scene, size: number): DynamicTexture {
   return tex;
 }
 
-/** 1. 第一关专属暗黑火系玄武岩余烬地表（极暗黑炭石板 + 幽微深血红裂隙 + 低调暗火核） */
+/** 1. 第一关专属暗黑火系玄武岩余烬地表（深黑焦炭石板 + 幽暗深血红裂隙 + 暗火核） */
 function bakeFlameGridTexture(scene: Scene, size: number): DynamicTexture {
   const tex = new DynamicTexture(
     'flameGridTex',
@@ -1052,7 +1200,7 @@ function bakeFlameGridTexture(scene: Scene, size: number): DynamicTexture {
 
   const ctx = tex.getContext() as unknown as CanvasRenderingContext2D;
 
-  // 1. 底层：近乎纯黑焦炭底色
+  // 1. 底层：深渊黑炭与极暗血红底色
   const bgGrad = ctx.createRadialGradient(
     size / 2,
     size / 2,
@@ -1061,15 +1209,15 @@ function bakeFlameGridTexture(scene: Scene, size: number): DynamicTexture {
     size / 2,
     size * 0.75,
   );
-  bgGrad.addColorStop(0, '#0a0302');
-  bgGrad.addColorStop(1, '#020101');
+  bgGrad.addColorStop(0, '#0e0403');
+  bgGrad.addColorStop(1, '#040101');
   ctx.fillStyle = bgGrad;
   ctx.fillRect(0, 0, size, size);
 
   const gridMeters = 5;
   const step = size / gridMeters;
 
-  // 2. 绘制 1m x 1m 极暗黑曜石板（Pitch-Black Obsidian / Basalt）
+  // 2. 绘制 1m x 1m 暗黑玄武岩石板（Dark Basalt / Ash Slabs）
   for (let gx = 0; gx < gridMeters; gx++) {
     for (let gy = 0; gy < gridMeters; gy++) {
       const bx = gx * step;
@@ -1077,15 +1225,15 @@ function bakeFlameGridTexture(scene: Scene, size: number): DynamicTexture {
 
       // 石板内部极暗炭黑渐变
       const slabGrad = ctx.createLinearGradient(bx, by, bx + step, by + step);
-      slabGrad.addColorStop(0, 'rgba(16, 6, 5, 0.45)');
-      slabGrad.addColorStop(0.5, 'rgba(8, 3, 2, 0.25)');
-      slabGrad.addColorStop(1, 'rgba(3, 1, 1, 0.85)');
+      slabGrad.addColorStop(0, 'rgba(24, 8, 6, 0.55)');
+      slabGrad.addColorStop(0.5, 'rgba(12, 4, 3, 0.35)');
+      slabGrad.addColorStop(1, 'rgba(5, 2, 1, 0.80)');
       ctx.fillStyle = slabGrad;
       ctx.fillRect(bx + 2, by + 2, step - 4, step - 4);
 
       // 板块内部隐约幽暗的深红细冷裂痕
-      ctx.strokeStyle = 'rgba(120, 15, 8, 0.12)';
-      ctx.lineWidth = 0.9;
+      ctx.strokeStyle = 'rgba(160, 25, 12, 0.18)';
+      ctx.lineWidth = 1.0;
       ctx.beginPath();
       const crackSeed = (gx * 7 + gy * 13) % 4;
       if (crackSeed === 0) {
@@ -1105,12 +1253,17 @@ function bakeFlameGridTexture(scene: Scene, size: number): DynamicTexture {
       }
       ctx.stroke();
 
+      // 微弱暗琥珀火痕
+      ctx.strokeStyle = 'rgba(210, 75, 20, 0.25)';
+      ctx.lineWidth = 0.6;
+      ctx.stroke();
+
       // 散落极微弱暗红余烬点
       const emberX = bx + 12 + ((gx * 31 + gy * 17) % (step - 24));
       const emberY = by + 12 + ((gy * 29 + gx * 23) % (step - 24));
-      ctx.fillStyle = 'rgba(160, 40, 10, 0.45)';
+      ctx.fillStyle = 'rgba(210, 80, 20, 0.65)';
       ctx.beginPath();
-      ctx.arc(emberX, emberY, 1.0, 0, Math.PI * 2);
+      ctx.arc(emberX, emberY, 1.2, 0, Math.PI * 2);
       ctx.fill();
     }
   }
@@ -1118,7 +1271,7 @@ function bakeFlameGridTexture(scene: Scene, size: number): DynamicTexture {
   // 3. 熔岩沟槽：幽微细敛的深血红暗火
   // 3.1 极暗深红光晕
   ctx.lineWidth = 6;
-  ctx.strokeStyle = 'rgba(150, 18, 8, 0.12)';
+  ctx.strokeStyle = 'rgba(160, 20, 10, 0.14)';
   for (let i = 0; i <= gridMeters; i++) {
     const p = i * step;
     ctx.beginPath();
@@ -1134,7 +1287,7 @@ function bakeFlameGridTexture(scene: Scene, size: number): DynamicTexture {
 
   // 3.2 幽暗深血红细线
   ctx.lineWidth = 1.8;
-  ctx.strokeStyle = 'rgba(185, 30, 12, 0.55)';
+  ctx.strokeStyle = 'rgba(195, 32, 12, 0.60)';
   for (let i = 0; i <= gridMeters; i++) {
     const p = i * step;
     ctx.beginPath();
@@ -1150,7 +1303,7 @@ function bakeFlameGridTexture(scene: Scene, size: number): DynamicTexture {
 
   // 3.3 极细暗赤橙火芯
   ctx.lineWidth = 0.8;
-  ctx.strokeStyle = 'rgba(220, 75, 20, 0.70)';
+  ctx.strokeStyle = 'rgba(235, 95, 25, 0.75)';
   for (let i = 0; i <= gridMeters; i++) {
     const p = i * step;
     ctx.beginPath();
@@ -1175,7 +1328,7 @@ function bakeFlameGridTexture(scene: Scene, size: number): DynamicTexture {
       // 微光暗晕
       const glowRad = isMajor ? 8 : 4.5;
       const glow = ctx.createRadialGradient(px, py, 0, px, py, glowRad);
-      glow.addColorStop(0, 'rgba(170, 30, 15, 0.30)');
+      glow.addColorStop(0, 'rgba(190, 30, 15, 0.35)');
       glow.addColorStop(1, 'rgba(0, 0, 0, 0.0)');
       ctx.fillStyle = glow;
       ctx.beginPath();
@@ -1184,15 +1337,15 @@ function bakeFlameGridTexture(scene: Scene, size: number): DynamicTexture {
 
       // 暗火微小圆点
       ctx.fillStyle = isMajor
-        ? 'rgba(225, 80, 25, 0.85)'
-        : 'rgba(185, 50, 15, 0.70)';
+        ? 'rgba(240, 90, 25, 0.90)'
+        : 'rgba(200, 60, 18, 0.75)';
       ctx.beginPath();
       ctx.arc(px, py, isMajor ? 2.0 : 1.3, 0, Math.PI * 2);
       ctx.fill();
 
       // 极微细暗红微针
       if (isMajor) {
-        ctx.strokeStyle = 'rgba(210, 65, 20, 0.55)';
+        ctx.strokeStyle = 'rgba(225, 75, 25, 0.60)';
         ctx.lineWidth = 0.9;
         const arm = 3.5;
         ctx.beginPath();
