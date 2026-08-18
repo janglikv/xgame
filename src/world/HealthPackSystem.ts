@@ -52,18 +52,23 @@ export class HealthPackSystem {
   }
 
   /**
-   * 延迟生成/复用小加号“+”粒子纹理
+   * 延迟生成/复用高清小加号“+”粒子纹理
    */
   private getPlusTexture(): Texture {
     if (!this.plusTexture) {
-      const dynTex = new DynamicTexture('plusParticleTex', 64, this.scene, false);
+      const dynTex = new DynamicTexture('plusParticleTex', 128, this.scene, false);
       const ctx = dynTex.getContext() as CanvasRenderingContext2D;
-      ctx.clearRect(0, 0, 64, 64);
+      ctx.clearRect(0, 0, 128, 128);
       ctx.fillStyle = '#ffffff';
-      ctx.font = 'bold 48px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText('+', 32, 32);
+
+      // 绘制纯正工整的十字加号
+      const w = 22;
+      const h = 74;
+      // 水平条
+      ctx.fillRect((128 - h) / 2, (128 - w) / 2, h, w);
+      // 垂直条
+      ctx.fillRect((128 - w) / 2, (128 - h) / 2, w, h);
+
       dynTex.update(false);
       dynTex.hasAlpha = true;
       this.plusTexture = dynTex;
@@ -155,32 +160,34 @@ export class HealthPackSystem {
     crossH.isPickable = false;
 
     // 3. 环绕飘浮小“+”号粒子系统 (Floating "+" Particle System)
-    const ps = new ParticleSystem(`plusPS_${x}_${z}`, 25, scene);
+    const ps = new ParticleSystem(`plusPS_${x}_${z}`, 30, scene);
     ps.particleTexture = this.getPlusTexture();
-    ps.emitter = crossV;
-    ps.minEmitBox = new Vector3(-0.35, -0.15, -0.35);
-    ps.maxEmitBox = new Vector3(0.35, 0.25, 0.35);
+    ps.emitter = new Vector3(x, 0.45, z);
+    ps.minEmitBox = new Vector3(-0.30, -0.20, -0.30);
+    ps.maxEmitBox = new Vector3(0.30, 0.20, 0.30);
 
-    ps.color1 = new Color4(0.25, 0.95, 0.45, 0.85);
-    ps.color2 = new Color4(0.12, 0.8, 0.35, 0.85);
-    ps.colorDead = new Color4(0.05, 0.5, 0.2, 0.0);
+    ps.color1 = new Color4(0.35, 1.0, 0.55, 0.95);
+    ps.color2 = new Color4(0.15, 0.9, 0.4, 0.85);
+    ps.colorDead = new Color4(0.05, 0.55, 0.2, 0.0);
 
-    ps.minSize = 0.22;
-    ps.maxSize = 0.38;
+    ps.minSize = 0.12;
+    ps.maxSize = 0.20;
 
-    ps.minLifeTime = 0.8;
-    ps.maxLifeTime = 1.4;
+    ps.minLifeTime = 1.0;
+    ps.maxLifeTime = 1.8;
 
-    ps.emitRate = 4;
+    ps.emitRate = 8;
 
     ps.blendMode = ParticleSystem.BLENDMODE_STANDARD;
 
-    ps.gravity = new Vector3(0, 0.35, 0);
-    ps.direction1 = new Vector3(-0.08, 0.4, -0.08);
-    ps.direction2 = new Vector3(0.08, 0.7, 0.08);
+    ps.gravity = new Vector3(0, 0.25, 0);
+    ps.direction1 = new Vector3(-0.12, 0.25, -0.12);
+    ps.direction2 = new Vector3(0.12, 0.55, 0.12);
 
-    ps.minAngularSpeed = -0.5;
-    ps.maxAngularSpeed = 0.5;
+    ps.minAngularSpeed = -0.6;
+    ps.maxAngularSpeed = 0.6;
+
+    ps.targetStopDuration = 0;
 
     ps.start();
 
@@ -218,13 +225,19 @@ export class HealthPackSystem {
         const currentHp = playerHealthBar.getHp();
         const maxHp = playerHealthBar.getMaxHp();
 
-        // 玩家靠近且未满血时触发拾取 (即使已满血靠近也会优雅回复，保证良好手感)
+        // 玩家靠近时触发拾取检测
         if (dist <= PICKUP_RADIUS && !player.isDead()) {
           const newHp = Math.min(maxHp, currentHp + HEAL_AMOUNT);
+          const actualHealed = newHp - currentHp;
           playerHealthBar.setHp(newHp);
 
+          // 拾取时播放音效反馈
           playSfx('/audio/heal.mp3', 0.55);
-          this.triggerHealFx(playerPos);
+
+          // 视觉特效受实际恢复量影响（满血恢复量为 0 则无视觉特效）
+          if (actualHealed > 0) {
+            this.triggerHealFx(playerPos, actualHealed);
+          }
 
           // 消耗血包，进入刷新倒计时并暂停粒子发射
           pack.isActive = false;
@@ -238,6 +251,9 @@ export class HealthPackSystem {
         if (pack.respawnTimer <= 0) {
           pack.isActive = true;
           pack.node.setEnabled(true);
+          pack.node.computeWorldMatrix(true);
+          pack.modelNode.computeWorldMatrix(true);
+          pack.particleSystem.reset();
           pack.particleSystem.start();
           // 重新出现时的刷新光亮特效
           this.triggerRespawnFx(new Vector3(pack.x, 0.05, pack.z));
@@ -247,50 +263,53 @@ export class HealthPackSystem {
   }
 
   /**
-   * 玩家拾取血包时的绿色/金光环形治疗气浪特效
+   * 玩家拾取血包时的小加号“+”粒子喷涌升腾特效
+   * @param healAmount 实际恢复的生命值点数
    */
-  private triggerHealFx(playerPos: Vector3): void {
+  private triggerHealFx(playerPos: Vector3, healAmount: number): void {
+    if (healAmount <= 0) return;
+
     const scene = this.scene;
-    const DURATION = 0.35;
 
-    // 1. 脚下向上扩散升腾的绿光气浪盘
-    const ring = MeshBuilder.CreateDisc(
-      'healRing',
-      { radius: 0.8, tessellation: 24 },
-      scene,
-    );
-    ring.rotation.x = Math.PI / 2;
-    ring.position = playerPos.clone();
-    ring.position.y += 0.05;
-    ring.isPickable = false;
+    // 加号粒子数量由恢复量决定 (最大 40 点对应 12 个，恢复量较小时至少 2 个)
+    const plusCount = Math.max(2, Math.min(12, Math.round((healAmount / HEAL_AMOUNT) * 12)));
 
-    const mat = new StandardMaterial('healMat', scene);
-    const healColor = new Color3(0.1, 0.95, 0.45);
-    mat.diffuseColor = healColor;
-    mat.emissiveColor = healColor;
-    mat.disableLighting = true;
-    mat.backFaceCulling = false;
-    mat.alpha = 0.85;
-    ring.material = mat;
+    // 喷涌升腾的小加号“+”粒子特效 (数量由恢复量动态决定)
+    const ps = new ParticleSystem('healBurstPlusFx', plusCount + 2, scene);
+    ps.particleTexture = this.getPlusTexture();
+    ps.emitter = playerPos.clone().add(new Vector3(0, 0.2, 0));
+    ps.minEmitBox = new Vector3(-0.25, -0.1, -0.25);
+    ps.maxEmitBox = new Vector3(0.25, 0.25, 0.25);
 
-    let elapsed = 0;
+    // 鲜艳明亮的治疗翡翠绿与亮白绿渐变
+    ps.color1 = new Color4(0.35, 1.0, 0.55, 0.95);
+    ps.color2 = new Color4(0.15, 0.9, 0.4, 0.85);
+    ps.colorDead = new Color4(0.05, 0.55, 0.2, 0.0);
 
-    const observer = scene.onBeforeRenderObservable.add(() => {
-      const dt = scene.getEngine().getDeltaTime() / 1000;
-      elapsed += dt;
-      const p = Math.min(1, elapsed / DURATION);
+    ps.minSize = 0.10;
+    ps.maxSize = 0.18;
 
-      ring.position.y = playerPos.y + 0.05 + p * 0.75;
-      const s = 0.4 + p * 0.9;
-      ring.scaling.set(s, s, s);
-      mat.alpha = 0.85 * (1 - p);
+    ps.minLifeTime = 0.55;
+    ps.maxLifeTime = 0.95;
 
-      if (p >= 1) {
-        scene.onBeforeRenderObservable.remove(observer);
-        mat.dispose();
-        ring.dispose();
-      }
-    });
+    // 单次爆发发射对应数量的小加号
+    ps.manualEmitCount = plusCount;
+    ps.minEmitPower = 0.8;
+    ps.maxEmitPower = 1.8;
+
+    // 向上升腾加速度与随机向外微散
+    ps.gravity = new Vector3(0, 1.4, 0);
+    ps.direction1 = new Vector3(-0.35, 1.2, -0.35);
+    ps.direction2 = new Vector3(0.35, 2.0, 0.35);
+
+    ps.minAngularSpeed = -1.0;
+    ps.maxAngularSpeed = 1.0;
+
+    ps.blendMode = ParticleSystem.BLENDMODE_STANDARD;
+
+    ps.targetStopDuration = 0.15;
+    ps.disposeOnStop = true;
+    ps.start();
   }
 
   /**
