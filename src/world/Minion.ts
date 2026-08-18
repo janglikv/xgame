@@ -177,11 +177,11 @@ export class Minion {
 
   static readonly HAND_REST_EMPTY = new Vector3(-0.5, 0.5, 0.05);
   static readonly HAND_REST_STAFF = new Vector3(-0.52, 0.68, 0.28);
-  /** 手枪闲置：靠髋、略低，不再按法杖高举 */
-  static readonly HAND_REST_PISTOL = new Vector3(-0.5, 0.46, 0.16);
+  /** 手枪闲置：向前平举就绪，直接处于可攻击姿态 */
+  static readonly HAND_REST_PISTOL = new Vector3(-0.36, 0.54, 0.52);
   static readonly AIM_HAND_STAFF = new Vector3(-0.42, 0.72, 0.42);
-  /** 手枪瞄准：手臂更前伸、略低 */
-  static readonly AIM_HAND_PISTOL = new Vector3(-0.36, 0.56, 0.58);
+  /** 手枪瞄准：手臂微幅前送稳固指向 */
+  static readonly AIM_HAND_PISTOL = new Vector3(-0.36, 0.54, 0.56);
 
   private static handRestFor(style: StaffStyle | null | undefined): Vector3 {
     if (isGunStyle(style)) return Minion.HAND_REST_PISTOL;
@@ -257,11 +257,11 @@ export class Minion {
     -0.32,
     0.1,
   );
-  /** 手枪闲置：枪口略前倾，贴在身侧 */
+  /** 手枪闲置：直接横握向前，枪口水平平指，默认处于可攻击就绪姿态 */
   private readonly defaultPistolQuat = Quaternion.RotationYawPitchRoll(
     0,
-    -0.1,
-    0.06,
+    Math.PI / 2,
+    0,
   );
 
   private walkPhase = 0;
@@ -450,6 +450,11 @@ export class Minion {
       this.lastAimTarget = target.clone();
     }
     this.aimTarget = target ? target.clone() : null;
+  }
+
+  /** 是否存在有效瞄准目标（用于移动时保持面向瞄准目标） */
+  hasAimTarget(): boolean {
+    return this.aimTarget !== null;
   }
 
   /** 设置角色死亡倒地造型/状态 */
@@ -897,8 +902,9 @@ export class Minion {
 
     // 瞄准动画过渡权重（手持法杖且设置了 aimTarget 时渐增；收起时按 5.5 平滑放低）
     const isAiming = this.aimTarget !== null && this.appearance.staff !== null;
+    const isPistolWeapon = isGunStyle(this.appearance.staff);
     const aimTargetWeight = isAiming ? 1 : 0;
-    const aimBlendSpeed = isAiming ? 14 : 5.5;
+    const aimBlendSpeed = isAiming ? (isPistolWeapon ? 30 : 14) : 5.5;
     this.aimWeight +=
       (aimTargetWeight - this.aimWeight) * Math.min(1, dt * aimBlendSpeed);
 
@@ -1023,10 +1029,10 @@ export class Minion {
       // 2. 手枪后座：枪口上跳，仅枪械
       const isPistol = isGunStyle(this.staffFx.style);
       if (isPistol && this.pistolRecoilT > 0) {
-        this.pistolRecoilT = Math.max(0, this.pistolRecoilT - dt * 8);
+        this.pistolRecoilT = Math.max(0, this.pistolRecoilT - dt * 11);
       }
       const recoilPitch = isPistol
-        ? Math.sin(this.pistolRecoilT * Math.PI) * 0.26
+        ? Math.sin(this.pistolRecoilT * Math.PI) * 0.22
         : 0;
       const totalPitch = this.staffRetractPitch + recoilPitch;
 

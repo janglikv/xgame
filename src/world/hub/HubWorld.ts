@@ -427,7 +427,9 @@ export class HubWorld implements GameWorld {
     this.minionPhys.syncToTarget();
 
     if (isMoving) {
-      this.minion.faceToward(moveWish.dirX, moveWish.dirZ);
+      if (!this.minion.hasAimTarget()) {
+        this.minion.faceToward(moveWish.dirX, moveWish.dirZ);
+      }
       this.onPlayerMoved?.();
     }
     this.minionPhys.setHorizontalVelocity(

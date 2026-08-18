@@ -575,7 +575,9 @@ export class Level1World implements GameWorld {
     }
 
     if (isMoving) {
-      this.minion.faceToward(moveWish.dirX, moveWish.dirZ);
+      if (!this.minion.hasAimTarget()) {
+        this.minion.faceToward(moveWish.dirX, moveWish.dirZ);
+      }
       this.onPlayerMoved?.();
     }
     this.minionPhys.setHorizontalVelocity(

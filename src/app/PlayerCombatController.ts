@@ -11,14 +11,16 @@ import type { CameraFollow } from './CameraFollow';
  * 1. 有法杖：瞄准 + 当法杖方向与【角色中心点 -> 指针位置】逻辑线平行时，沿法杖前向发射子弹；
  * 2. 空手（无法杖）：按住/点击鼠标触发近战空手挥拳动画与拳头落点打击。
  */
-/** 手枪连发水平最大偏角（弧度，约 16°） */
+/** 手枪连续射击水平最大偏角（弧度，约 16°） */
 const PISTOL_SPREAD_MAX = 0.28;
-/** 连发至少偏这么多，避免看起来仍像精准弹 */
-const PISTOL_SPREAD_MIN = 0.09;
+/** 手枪每次连续射击增加的散布偏角（弧度，约 4°，打 4~5 发达到最大散布） */
+const PISTOL_SPREAD_GROWTH = 0.07;
+/** 手枪停火精度完全恢复所需间隔时间（秒） */
+const PISTOL_RECOVERY_TIME = 1.0;
 
-function yawJitter(dir: Vector3, minRad: number, maxRad: number): Vector3 {
-  const sign = Math.random() < 0.5 ? -1 : 1;
-  const angle = sign * (minRad + Math.random() * (maxRad - minRad));
+function applySpread(dir: Vector3, spreadRad: number): Vector3 {
+  if (spreadRad <= 1e-4) return dir.clone();
+  const angle = (Math.random() * 2 - 1) * spreadRad;
   const c = Math.cos(angle);
   const s = Math.sin(angle);
   const x = dir.x * c - dir.z * s;
@@ -33,8 +35,10 @@ export class PlayerCombatController {
   private meleeCooldown = 0;
   private isPointerDown = false;
   private pointerOverCanvas = false;
-  /** 本次按下是否已经打出第一发精准弹 */
-  private pistolBurstShot = false;
+  /** 手枪当前散布角（弧度，0 = 最大精度） */
+  private pistolSpread = 0;
+  /** 手枪停止开火恢复倒计时（达到 1s 恢复最大精度） */
+  private pistolRecoveryTimer = 0;
 
   constructor(
     private readonly shootInterval = 0.2,
@@ -53,14 +57,10 @@ export class PlayerCombatController {
     const onDown = (e: PointerEvent): void => {
       if (e.button === 0 || e.button === 2) {
         this.isPointerDown = true;
-        this.shootCooldown = 0;
-        this.meleeCooldown = 0;
-        this.pistolBurstShot = false;
       }
     };
     const onUp = (): void => {
       this.isPointerDown = false;
-      this.pistolBurstShot = false;
     };
     const onEnter = (): void => {
       this.pointerOverCanvas = true;
@@ -71,7 +71,6 @@ export class PlayerCombatController {
     const onLeave = (): void => {
       this.pointerOverCanvas = false;
       this.isPointerDown = false;
-      this.pistolBurstShot = false;
     };
 
     canvas.addEventListener('pointerdown', onDown);
@@ -105,10 +104,17 @@ export class PlayerCombatController {
     this.shootCooldown = Math.max(0, this.shootCooldown - dt);
     this.meleeCooldown = Math.max(0, this.meleeCooldown - dt);
 
+    // 精度恢复机制：停止开火满 1s 后恢复最大精度（散布归零）
+    if (this.pistolRecoveryTimer > 0) {
+      this.pistolRecoveryTimer = Math.max(0, this.pistolRecoveryTimer - dt);
+      if (this.pistolRecoveryTimer <= 0) {
+        this.pistolSpread = 0;
+      }
+    }
+
     const { scene, camera, player, spellSystem, menuOpen } = opts;
 
     if (!this.isPointerDown || !this.pointerOverCanvas || menuOpen || player.isDead()) {
-      this.pistolBurstShot = false;
       player.setAimTarget(null);
       return;
     }
@@ -133,40 +139,71 @@ export class PlayerCombatController {
 
     const aimPoint = ray.origin.add(ray.direction.scale(t));
 
-    // 有法杖：计算法杖方向与【角色中心点 -> 指针位置】逻辑线是否平行
+    // 有法杖 / 枪械：
     if (player.hasStaff()) {
       player.setAimTarget(aimPoint);
+
+      const style = player.getStaffStyle() ?? 'arcane';
+      const isPistol = isGunStyle(style);
 
       // 计算角色中心点到指针位置的向量与法杖朝向向量
       const lineVec = aimPoint.subtract(player.root.position);
       lineVec.y = 0;
+      let lineDir = player.getForwardVector();
       let isParallel = false;
       if (lineVec.lengthSquared() > 1e-6) {
-        const lineDir = lineVec.normalize();
+        lineDir = lineVec.normalize();
         const staffDir = player.getStaffForwardVector();
         const dot = Vector3.Dot(staffDir, lineDir);
         // 点积 >= 0.992 （夹角约 <= 7.2°），判定为法杖朝向与【中心->指针】逻辑线平行
         isParallel = dot >= 0.992;
       }
 
-      // 法杖方向必须与逻辑线平行，且法杖举平，且冷却完毕方可发射
+      // 开火时先向目标方向转向
+      const aimDx = aimPoint.x - player.root.position.x;
+      const aimDz = aimPoint.z - player.root.position.z;
+      if (aimDx * aimDx + aimDz * aimDz > 1e-6) {
+        player.faceToward(aimDx, aimDz);
+      }
+
+      // 计算角色身体当前朝向与目标开火方向的对齐程度（点积 >= 0.94 代表夹角约 <= 20°）
+      const playerForward = player.getForwardVector();
+      const isFacingTarget = Vector3.Dot(playerForward, lineDir) >= 0.94;
+
+      // 1. 手枪分支：若方向不一致先转向，转向正确对齐且冷却完毕后再开火
+      if (isPistol) {
+        if (!isFacingTarget || this.shootCooldown > 0) {
+          return;
+        }
+
+        this.shootCooldown = this.shootInterval * 1.5;
+        const tipPos = player.getStaffTipWorldPos();
+
+        // 精度机制：根据当前累积散布计算发射方向（第1发绝对精准，连发精度逐渐降低）
+        const shootDir = applySpread(lineDir, this.pistolSpread);
+
+        // 连续发射散布逐渐扩大，最多到 PISTOL_SPREAD_MAX
+        this.pistolSpread = Math.min(
+          PISTOL_SPREAD_MAX,
+          this.pistolSpread + PISTOL_SPREAD_GROWTH,
+        );
+        // 重置 1s 精度恢复倒计时
+        this.pistolRecoveryTimer = PISTOL_RECOVERY_TIME;
+
+        playSfx('/audio/bullet_fire.mp3', 0.5);
+        spellSystem.spawnOrb(tipPos, shootDir, style, player);
+        player.triggerStaffShootFx();
+        return;
+      }
+
+      // 2. 传统法杖分支：法杖方向必须与逻辑线平行，且法杖举平，且冷却完毕方可发射
       if (this.shootCooldown > 0 || !player.isStaffHorizontal() || !isParallel) {
         return;
       }
 
-      const style = player.getStaffStyle() ?? 'arcane';
-      this.shootCooldown = isGunStyle(style)
-        ? this.shootInterval * 1.9
-        : this.shootInterval;
+      this.shootCooldown = this.shootInterval;
       const tipPos = player.getStaffTipWorldPos();
-      // 子弹方向沿用法杖前向向量向前发射；手枪仅首发精准，连发水平随机偏移
-      let shootDir = player.getStaffForwardVector();
-      if (isGunStyle(style)) {
-        if (this.pistolBurstShot) {
-          shootDir = yawJitter(shootDir, PISTOL_SPREAD_MIN, PISTOL_SPREAD_MAX);
-        }
-        this.pistolBurstShot = true;
-      }
+      const shootDir = player.getStaffForwardVector();
       playSfx(
         style === 'storm'
           ? '/audio/staff_storm_fire.mp3'
