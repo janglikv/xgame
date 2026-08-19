@@ -92,5 +92,10 @@ export interface GameWorld {
    */
   update(ctx: WorldFrameContext): WorldTransition;
 
+  /**
+   * 开发者调试：一键秒杀击败全场所有敌军
+   */
+  defeatAllEnemies?(): void;
+
   dispose(): void;
 }

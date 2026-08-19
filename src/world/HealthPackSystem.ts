@@ -80,9 +80,9 @@ export class HealthPackSystem {
    * 初始化地图角落的固定血包刷新点（仅保留屏幕正上方血包）
    */
   private initCornerPacks(): void {
-    // 20×20 地图内角位置 (仅保留屏幕正上方血包，左右及下方已移除/改为传送阵)
+    // 关卡最中心位置 (0, 0)
     const cornerCoords = [
-      { x: 7.8, z: 7.8 },   // 屏幕正上方 (直角坐标右上)
+      { x: 0, z: 0 },   // 关卡正中心
     ];
 
     for (const pos of cornerCoords) {

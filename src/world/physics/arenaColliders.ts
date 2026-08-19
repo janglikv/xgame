@@ -22,8 +22,10 @@ export interface ArenaColliderOptions {
   maxX?: number;
   minZ?: number;
   maxZ?: number;
-  /** 是否生成中心围墙物理碰撞（指定边长米数，如 3 表示 3×3 米围墙） */
+  /** 是否生成中心/指定位置方形围墙物理碰撞（指定边长米数，如 3 表示 3×3 米围墙） */
   centerWallSize?: number;
+  /** 方形围墙中心偏移坐标（默认 { x: 0, z: 0 }） */
+  centerWallOffset?: { x: number; z: number };
   /** 是否生成右下角 L 型围墙物理碰撞 */
   addLWall?: boolean;
   /** 是否生成传送阵朝场地内侧开口方围的物理碰撞 */
@@ -183,15 +185,17 @@ export function buildArenaColliders(
     root,
   );
 
-  // 2. 中心“口”字墙：算法自动根据中心 3x3 米路径解析生成
+  // 2. 中心/指定位置“口”字墙：算法自动根据指定位置 3x3 米路径解析生成
   if (options.centerWallSize && options.centerWallSize > 0) {
     const cHalf = options.centerWallSize / 2;
+    const ox = options.centerWallOffset?.x ?? 0;
+    const oz = options.centerWallOffset?.z ?? 0;
     const centerLoopPath = [
-      new Vector3(-cHalf, 0, -cHalf),
-      new Vector3(cHalf, 0, -cHalf),
-      new Vector3(cHalf, 0, cHalf),
-      new Vector3(-cHalf, 0, cHalf),
-      new Vector3(-cHalf, 0, -cHalf),
+      new Vector3(ox - cHalf, 0, oz - cHalf),
+      new Vector3(ox + cHalf, 0, oz - cHalf),
+      new Vector3(ox + cHalf, 0, oz + cHalf),
+      new Vector3(ox - cHalf, 0, oz + cHalf),
+      new Vector3(ox - cHalf, 0, oz - cHalf),
     ];
     createCollidersFromExtrudePath(
       'PhysWall_Center',

@@ -13,6 +13,7 @@ import {
   type GraphicsQuality,
 } from '../storage/graphicsQuality';
 import {
+  FIXED_CAMERA,
   loadSettingsState,
   saveSettingsState,
   type BulletBounceCount,
@@ -248,6 +249,9 @@ export class GameApp {
           targetZ: cam.target.z,
         };
       },
+      onInstantKillAll: () => {
+        this.router.active.defeatAllEnemies?.();
+      },
       onOpenChange: (open) => this.onMenuOpenChange(open),
     });
 
@@ -291,6 +295,12 @@ export class GameApp {
       if (this.settingsPanel.isOpen()) return;
       if (isTypingTarget(e.target)) return;
 
+      if (e.code === 'Space' || key === ' ' || key === 'spacebar') {
+        e.preventDefault();
+        this.resetZoom();
+        return;
+      }
+
       if (key === 'e' || key === 'r') {
         const warehouse = this.router.getDebugWarehouse();
         if (!warehouse || this.router.activeWorldId !== 'debugWarehouse') return;
@@ -319,6 +329,16 @@ export class GameApp {
         warehouse.hoverOutline.updateFromScenePick(warehouse.scene);
       }
     });
+  }
+
+  private resetZoom(): void {
+    if (this.cameraMode === 'fixed') {
+      this.cameraFollow.resetZoom();
+    } else {
+      const cam = this.router.active.camera;
+      cam.radius = FIXED_CAMERA.radius;
+      this.scheduleSaveCamera();
+    }
   }
 
   private bindLifecycle(): void {

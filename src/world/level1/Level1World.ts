@@ -157,7 +157,6 @@ export class Level1World implements GameWorld {
       minZ: LEVEL1_Z_MIN,
       maxZ: LEVEL1_Z_MAX,
       extend: LEVEL1_FLOOR_EXTEND,
-      centerWallSize: 3,
       addLWall: true,
       hexagonCut: LEVEL1_HEXAGON_CUT,
     });
@@ -169,7 +168,6 @@ export class Level1World implements GameWorld {
       maxX: LEVEL1_X_MAX,
       minZ: LEVEL1_Z_MIN,
       maxZ: LEVEL1_Z_MAX,
-      centerWallSize: 3,
       addLWall: true,
       hexagonCut: LEVEL1_HEXAGON_CUT,
     });
@@ -185,6 +183,8 @@ export class Level1World implements GameWorld {
       TeleportPad.RADIUS,
       { theme: TeleportPairTheme.hubLevel1 },
     );
+    // 进关后往回走的传送阵默认封印隐藏，通关后再解封
+    teleportPad.setVisible(false);
     teleportPad.disarmUntilLeave();
 
     const bossExitPad = new TeleportPad(
@@ -256,20 +256,21 @@ export class Level1World implements GameWorld {
       projectileSpeed?: number;
     }[] = [
       // 1. 远程法术敌军 (共 2 名，左右各 1 名)
-      { spawnX: -5.5, spawnZ: 3.0, groupState: wizardGroupState, rotY: Math.PI, staff: 'flame' },
-      { spawnX: 5.5, spawnZ: 3.0, groupState: wizardGroupState, rotY: Math.PI, staff: 'flame' },
+      { spawnX: -3.5, spawnZ: 2.0, groupState: wizardGroupState, rotY: Math.PI, staff: 'flame' },
+      { spawnX: 2.0, spawnZ: -3.5, groupState: wizardGroupState, rotY: Math.PI, staff: 'flame' },
 
       // 2. 近战肉搏敌军 (共 4 名，无法杖，每个敌人仇恨独立，不共享)
-      { spawnX: -2.5, spawnZ: 1.8, groupState: undefined, rotY: Math.PI, staff: null },
-      { spawnX: 2.5, spawnZ: 1.8, groupState: undefined, rotY: Math.PI, staff: null },
-      { spawnX: -1.8, spawnZ: 5.5, groupState: undefined, rotY: Math.PI, staff: null },
-      { spawnX: 1.8, spawnZ: 5.5, groupState: undefined, rotY: Math.PI, staff: null },
+      { spawnX: -1.8, spawnZ: 0.8, groupState: undefined, rotY: Math.PI, staff: null },
+      { spawnX: 0.8, spawnZ: -1.8, groupState: undefined, rotY: Math.PI, staff: null },
+      { spawnX: -0.8, spawnZ: 3.2, groupState: undefined, rotY: Math.PI, staff: null },
+      { spawnX: 3.2, spawnZ: -0.8, groupState: undefined, rotY: Math.PI, staff: null },
     ];
 
     const enemies: Level1Enemy[] = [];
     const checkAllDefeated = () => {
       if (enemies.length > 0 && enemies.every((e) => e.ai.isDefeated())) {
         bossExitPad.setVisible(true);
+        teleportPad.setVisible(true);
       }
     };
 
@@ -457,8 +458,19 @@ export class Level1World implements GameWorld {
     this.minion.setDead(false);
   }
 
+  /** 开发者调试：一键秒杀击败全场所有敌军并通关解封传送阵 */
+  defeatAllEnemies(): void {
+    for (const e of this.enemies) {
+      if (!e.ai.isDefeated()) {
+        e.ai.takeDamage(999999);
+      }
+    }
+  }
+
   getTeleportCharge01(): number {
-    const hub = this.teleportPad.getVisualCharge01();
+    const hub = this.teleportPad.isVisible()
+      ? this.teleportPad.getVisualCharge01()
+      : 0;
     const boss = this.bossExitPad.isVisible()
       ? this.bossExitPad.getVisualCharge01()
       : 0;
@@ -518,7 +530,7 @@ export class Level1World implements GameWorld {
       this.camera.setTarget(focus);
     }
     // 出生在阵上：须先离开再站上才重新蓄力
-    this.teleportPad.disarmUntilLeave();
+    if (this.teleportPad.isVisible()) this.teleportPad.disarmUntilLeave();
     if (this.bossExitPad.isVisible()) this.bossExitPad.disarmUntilLeave();
   }
 
@@ -577,9 +589,11 @@ export class Level1World implements GameWorld {
 
     if (!isDead) {
       const p = this.minion.root.position;
-      const onHubPad = this.teleportPad.contains(p.x, p.z);
-      if (this.teleportPad.update(dt, onHubPad && !menuOpen)) {
-        return { type: 'goto', world: 'hub' };
+      if (this.teleportPad.isVisible()) {
+        const onHubPad = this.teleportPad.contains(p.x, p.z);
+        if (this.teleportPad.update(dt, onHubPad && !menuOpen)) {
+          return { type: 'goto', world: 'hub' };
+        }
       }
       if (this.bossExitPad.isVisible()) {
         const onBossPad = this.bossExitPad.contains(p.x, p.z);

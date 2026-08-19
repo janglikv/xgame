@@ -156,9 +156,13 @@ export interface FloorOptions {
    */
   extend?: number;
   /**
-   * 是否在场地中心 (0,0) 生成方形围墙（指定边长米数，如 3 表示 3×3 米围墙）。
+   * 是否在场地中心 (0,0) 或指定偏移位置生成方形围墙（指定边长米数，如 3 表示 3×3 米围墙）。
    */
   centerWallSize?: number;
+  /**
+   * 方形围墙中心偏移坐标（默认 { x: 0, z: 0 }）。
+   */
+  centerWallOffset?: { x: number; z: number };
   /**
    * 是否在四角生成 L 型梯形围墙（路径见 {@link Floor.L_WALL_CORNER_PATHS}）。
    */
@@ -200,14 +204,13 @@ export class Floor {
     new Vector3(1.5, 0, -5.5),
   ];
   /**
-   * 四角围墙路径（1 格 = 1 米）。
-   * 固定俯视下：上下仍是 L（TR / BL）；左右（TL / BR）向中心靠 3 格后改为直墙。
+   * 四角围墙路径（1 格 = 1 米）：在 14×14 正方形场地的 4 个角落靠近外边沿处，距离边墙 2 格（5 米处），形成网格对齐的 1 米臂长 L 型掩体。
    */
   static readonly L_WALL_CORNER_PATHS = [
-    { name: 'BR', path: [new Vector3(5, 0, -2), new Vector3(2, 0, -5)] },
-    { name: 'TR', path: [new Vector3(8, 0, 5), new Vector3(5, 0, 5), new Vector3(5, 0, 8)] },
-    { name: 'TL', path: [new Vector3(-5, 0, 2), new Vector3(-2, 0, 5)] },
-    { name: 'BL', path: [new Vector3(-8, 0, -5), new Vector3(-5, 0, -5), new Vector3(-5, 0, -8)] },
+    { name: 'BR', path: [new Vector3(4, 0, -5), new Vector3(5, 0, -5), new Vector3(5, 0, -4)] },
+    { name: 'TR', path: [new Vector3(4, 0, 5), new Vector3(5, 0, 5), new Vector3(5, 0, 4)] },
+    { name: 'TL', path: [new Vector3(-4, 0, 5), new Vector3(-5, 0, 5), new Vector3(-5, 0, 4)] },
+    { name: 'BL', path: [new Vector3(-4, 0, -5), new Vector3(-5, 0, -5), new Vector3(-5, 0, -4)] },
   ];
 
   /**
@@ -379,15 +382,17 @@ export class Floor {
     wall.parent = this.root;
     this.wallMeshes.push(wall);
 
-    // 中心围墙（标准 3×3 米闭合梯形围墙）
+    // 中心/指定位置方形围墙（闭合梯形围墙）
     if (options.centerWallSize && options.centerWallSize > 0) {
       const cHalf = options.centerWallSize / 2;
+      const ox = options.centerWallOffset?.x ?? 0;
+      const oz = options.centerWallOffset?.z ?? 0;
       const centerLoopPath = [
-        new Vector3(-cHalf, 0, -cHalf),
-        new Vector3(cHalf, 0, -cHalf),
-        new Vector3(cHalf, 0, cHalf),
-        new Vector3(-cHalf, 0, cHalf),
-        new Vector3(-cHalf, 0, -cHalf),
+        new Vector3(ox - cHalf, 0, oz - cHalf),
+        new Vector3(ox + cHalf, 0, oz - cHalf),
+        new Vector3(ox + cHalf, 0, oz + cHalf),
+        new Vector3(ox - cHalf, 0, oz + cHalf),
+        new Vector3(ox - cHalf, 0, oz - cHalf),
       ];
       const centerWall = createTrapezoidExtrudedWall(
         `RenderWall_Center_${options.centerWallSize}x${options.centerWallSize}`,

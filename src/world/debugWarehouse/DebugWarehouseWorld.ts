@@ -133,12 +133,17 @@ export class DebugWarehouseWorld implements GameWorld {
 
     const floor = new Floor(scene, shadowGen, {
       surface: loadFloorSurfaceState(),
+      centerWallSize: 2,
+      centerWallOffset: { x: 0, z: -17 },
     });
     const floorPickerGallery = new FloorPickerGallery(scene, floor, {
       centerZ: -14,
       onSurfaceChanged: options.onFloorSurfaceChanged,
     });
-    buildArenaColliders(scene, {});
+    buildArenaColliders(scene, {
+      centerWallSize: 2,
+      centerWallOffset: { x: 0, z: -17 },
+    });
     const spatialAxesGrid = new SpatialAxesGrid(scene);
 
     const teleportPad = new TeleportPad(

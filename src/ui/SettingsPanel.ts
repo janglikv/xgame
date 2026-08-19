@@ -57,6 +57,7 @@ export interface SettingsPanelDeps {
   getHitSfxId: () => HitSfxId;
   setHitSfxId: (id: HitSfxId) => void;
   getCameraInfo: () => SettingsCameraInfo;
+  onInstantKillAll?: () => void;
   onOpenChange?: (open: boolean) => void;
 }
 
@@ -351,6 +352,21 @@ export class SettingsPanel {
 
     // —— 左列：战斗功能、显示、掉血音效 ——
     this.addSection(leftCol, 'secGameplay', '战斗与功能');
+
+    const killAllBtn = this.makeNavButton(
+      'killAllBtn',
+      '⚡ 一键通关（秒杀全场敌军）',
+      () => {
+        this.deps.onInstantKillAll?.();
+      },
+      { width: '100%', height: '34px', fontSize: 13 },
+    );
+    killAllBtn.background = 'rgba(239, 68, 68, 0.25)';
+    killAllBtn.color = '#fca5a5';
+    leftCol.addControl(killAllBtn);
+
+    leftCol.addControl(this.spacer(6));
+
     const invincibleRow = this.makeToggleRow(
       'invincibleRow',
       '角色无敌（不受伤害）',
@@ -528,8 +544,8 @@ export class SettingsPanel {
 
   private modeHintText(mode: CameraMode): string {
     return mode === 'fixed'
-      ? '略倾俯视锁定：角色居中，可看侧身，不可拖拽'
-      : '调试用轨道相机：可拖拽旋转与滚轮缩放';
+      ? '略倾俯视锁定：角色居中，可看侧身，不可拖拽（滚轮缩放 / 空格回正）'
+      : '调试用轨道相机：可拖拽旋转与滚轮缩放（空格回正）';
   }
 
   private applyBounceCountFromUi(count: BulletBounceCount): void {

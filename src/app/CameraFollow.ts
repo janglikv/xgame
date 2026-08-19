@@ -58,6 +58,14 @@ export class CameraFollow {
     }
   }
 
+  /** 重置缩放半径为默认基准值（30.0） */
+  resetZoom(): void {
+    if (Math.abs(this.targetRadius - FIXED_CAMERA.radius) > 1e-4) {
+      this.targetRadius = FIXED_CAMERA.radius;
+      this.onRadiusChanged?.(this.targetRadius);
+    }
+  }
+
   /** 绑定画布滚轮缩放 */
   bindCanvas(canvas: HTMLCanvasElement, isBlocked?: () => boolean): () => void {
     const onWheel = (e: WheelEvent): void => {
