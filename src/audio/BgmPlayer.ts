@@ -15,6 +15,7 @@ export class BgmPlayer {
   private unlocked = false;
   private unlockBound = false;
   private src = HUB_BGM;
+  private volumeScale = 1.0;
 
   constructor() {
     this.audio.preload = 'auto';
@@ -53,6 +54,19 @@ export class BgmPlayer {
       return;
     }
     if (this.unlocked) void this.playCurrent();
+  }
+
+  /** 游戏结束/死亡等场景下音量衰减 (如 ducked=true 时背景音乐大小减半为 50%) */
+  setDucked(ducked: boolean): void {
+    this.setVolumeScale(ducked ? 0.5 : 1.0);
+  }
+
+  /** 设置音量缩放比例 (0 ~ 1) */
+  setVolumeScale(scale: number): void {
+    const clamped = Math.max(0, Math.min(1, scale));
+    if (Math.abs(this.volumeScale - clamped) < 0.001) return;
+    this.volumeScale = clamped;
+    this.audio.volume = DEFAULT_VOLUME * this.volumeScale;
   }
 
   dispose(): void {

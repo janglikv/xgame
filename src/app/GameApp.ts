@@ -428,6 +428,9 @@ export class GameApp {
 
     this.handleTeleport(dt, transition);
 
+    const isPlayerDead = world.getPlayer().isDead();
+    this.bgm.setDucked(isPlayerDead);
+
     if (this.showFps) this.fpsOverlay.update();
     this.settingsPanel.update();
     world.scene.render();

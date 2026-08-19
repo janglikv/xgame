@@ -23,22 +23,19 @@ interface HealthPackItem {
   x: number;
   z: number;
   isActive: boolean;
-  respawnTimer: number;
 }
 
 /** 拾取距离（米） */
 const PICKUP_RADIUS = 0.85;
 /** 恢复生命值（点） */
 const HEAL_AMOUNT = 40;
-/** 刷新冷却时间（秒） */
-const RESPAWN_INTERVAL = 12.0;
 
 /**
- * 3D 地图固定刷新血包系统：
- * 1. 地图顶部 (屏幕正上方) 悬浮旋转 3D 纯深绿色十字架（其余角落已移除或设为传送阵）；
+ * 3D 地图血包系统：
+ * 1. 关卡中心 (0, 0) 悬浮旋转 3D 纯深绿色十字架；
  * 2. 正立直观视角 + 环绕浮空小加号“+”粒子特效；
  * 3. 附带地面动态阴影（随沉浮上下缩放，强化空间悬浮立体感）；
- * 4. 主角靠近 0.85 米内恢复 +40 HP，拾取后 12 秒重新刷新。
+ * 4. 主角靠近 0.85 米且未满血时恢复 +40 HP，只刷新一次，吃掉后彻底消失不再刷新。
  */
 export class HealthPackSystem {
   private readonly scene: Scene;
@@ -77,7 +74,7 @@ export class HealthPackSystem {
   }
 
   /**
-   * 初始化地图角落的固定血包刷新点（仅保留屏幕正上方血包）
+   * 初始化地图固定血包刷新点（仅保留关卡中心血包）
    */
   private initCornerPacks(): void {
     // 关卡最中心位置 (0, 0)
@@ -196,65 +193,50 @@ export class HealthPackSystem {
       x,
       z,
       isActive: true,
-      respawnTimer: 0,
     };
   }
 
   /**
-   * 每帧更新血包旋转浮空动画 + 距离检测 + 治疗拾取与刷新倒计时
+   * 每帧更新血包旋转浮空动画 + 距离检测 + 治疗拾取（单次拾取，吃掉即消失）
    */
   update(dt: number, player: Minion, playerHealthBar: HealthBar): void {
     this.animTime += dt;
     const playerPos = player.root.position;
 
     for (const pack of this.packs) {
-      if (pack.isActive) {
-        // 浮空上下沉浮与自转
-        pack.modelNode.rotation.y += dt * 1.8;
-        const bobOffset = Math.sin(this.animTime * 2.5) * 0.08;
-        pack.modelNode.position.y = 0.42 + bobOffset;
-        // 地面悬浮阴影随高低沉浮动态微缩放，强化立体真实感
-        const shadowScale = 0.85 - bobOffset * 1.5;
-        pack.shadowDisc.scaling.set(shadowScale, shadowScale, shadowScale);
+      if (!pack.isActive) continue;
 
-        // 拾取距离检测
-        const dist = Math.hypot(playerPos.x - pack.x, playerPos.z - pack.z);
-        const currentHp = playerHealthBar.getHp();
-        const maxHp = playerHealthBar.getMaxHp();
+      // 浮空上下沉浮与自转
+      pack.modelNode.rotation.y += dt * 1.8;
+      const bobOffset = Math.sin(this.animTime * 2.5) * 0.08;
+      pack.modelNode.position.y = 0.42 + bobOffset;
+      // 地面悬浮阴影随高低沉浮动态微缩放，强化立体真实感
+      const shadowScale = 0.85 - bobOffset * 1.5;
+      pack.shadowDisc.scaling.set(shadowScale, shadowScale, shadowScale);
 
-        // 玩家靠近时触发拾取检测
-        if (dist <= PICKUP_RADIUS && !player.isDead()) {
-          const newHp = Math.min(maxHp, currentHp + HEAL_AMOUNT);
-          const actualHealed = newHp - currentHp;
-          playerHealthBar.setHp(newHp);
+      // 拾取距离与生命值检测
+      const dist = Math.hypot(playerPos.x - pack.x, playerPos.z - pack.z);
+      const currentHp = playerHealthBar.getHp();
+      const maxHp = playerHealthBar.getMaxHp();
 
-          // 拾取时播放音效反馈
-          playSfx('/audio/heal.mp3', 0.55);
+      // 玩家靠近且未满血时触发拾取（未满血避免路过误消耗）
+      if (dist <= PICKUP_RADIUS && !player.isDead() && currentHp < maxHp) {
+        const newHp = Math.min(maxHp, currentHp + HEAL_AMOUNT);
+        const actualHealed = newHp - currentHp;
+        playerHealthBar.setHp(newHp);
 
-          // 视觉特效受实际恢复量影响（满血恢复量为 0 则无视觉特效）
-          if (actualHealed > 0) {
-            this.triggerHealFx(playerPos, actualHealed);
-          }
+        // 拾取时播放音效反馈
+        playSfx('/audio/heal.mp3', 0.55);
 
-          // 消耗血包，进入刷新倒计时并暂停粒子发射
-          pack.isActive = false;
-          pack.respawnTimer = RESPAWN_INTERVAL;
-          pack.node.setEnabled(false);
-          pack.particleSystem.stop();
+        // 视觉特效
+        if (actualHealed > 0) {
+          this.triggerHealFx(playerPos, actualHealed);
         }
-      } else {
-        // 倒计时刷新
-        pack.respawnTimer -= dt;
-        if (pack.respawnTimer <= 0) {
-          pack.isActive = true;
-          pack.node.setEnabled(true);
-          pack.node.computeWorldMatrix(true);
-          pack.modelNode.computeWorldMatrix(true);
-          pack.particleSystem.reset();
-          pack.particleSystem.start();
-          // 重新出现时的刷新光亮特效
-          this.triggerRespawnFx(new Vector3(pack.x, 0.05, pack.z));
-        }
+
+        // 消耗血包：仅刷新一次，吃掉后彻底消失不再刷新
+        pack.isActive = false;
+        pack.node.setEnabled(false);
+        pack.particleSystem.stop();
       }
     }
   }
@@ -309,49 +291,6 @@ export class HealthPackSystem {
     ps.start();
   }
 
-  /**
-   * 血包重新刷新生成时的爆红光晕特效
-   */
-  private triggerRespawnFx(pos: Vector3): void {
-    const scene = this.scene;
-    const DURATION = 0.25;
-
-    const disc = MeshBuilder.CreateDisc(
-      'respawnFx',
-      { radius: 0.7, tessellation: 20 },
-      scene,
-    );
-    disc.rotation.x = Math.PI / 2;
-    disc.position.copyFrom(pos);
-    disc.isPickable = false;
-
-    const mat = new StandardMaterial('respawnMat', scene);
-    const col = Color3.FromHexString('#00e676');
-    mat.diffuseColor = col;
-    mat.emissiveColor = col;
-    mat.disableLighting = true;
-    mat.backFaceCulling = false;
-    mat.alpha = 0.9;
-    disc.material = mat;
-
-    let elapsed = 0;
-
-    const observer = scene.onBeforeRenderObservable.add(() => {
-      const dt = scene.getEngine().getDeltaTime() / 1000;
-      elapsed += dt;
-      const p = Math.min(1, elapsed / DURATION);
-
-      const s = 0.2 + p * 1.1;
-      disc.scaling.set(s, s, s);
-      mat.alpha = 0.9 * (1 - p);
-
-      if (p >= 1) {
-        scene.onBeforeRenderObservable.remove(observer);
-        mat.dispose();
-        disc.dispose();
-      }
-    });
-  }
 
   dispose(): void {
     for (const pack of this.packs) {

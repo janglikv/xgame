@@ -7,6 +7,7 @@ import {
   StackPanel,
   TextBlock,
 } from '@babylonjs/gui';
+import { playSfx } from '../audio/Sfx';
 
 const UI_FONT = 'PingFang SC, Microsoft YaHei, Noto Sans SC, Segoe UI, sans-serif';
 
@@ -14,7 +15,7 @@ const UI_FONT = 'PingFang SC, Microsoft YaHei, Noto Sans SC, Segoe UI, sans-seri
  * 极简死亡半透明黑场与复活转场 UI（Babylon GUI 全屏 ADT）。
  *
  * 死亡流程：
- * 1. 死亡淡入：从 0 平滑过渡到 0.72 半透明黑场，显示「已 阵 亡」与【重 生】按钮。
+ * 1. 死亡淡入：从 0 平滑过渡到 0.72 半透明黑场，显示「已 阵 亡」与【重 生】按钮，播放失败音效。
  * 2. 点击【重 生】：UI 面板消失，背景在 0.15s 内转为纯黑屏；
  * 3. 完全纯黑时刻：触发 onRespawnClick（完成传送阵瞬移、满血与起立）；
  * 4. 逐渐明亮：纯黑遮罩在 0.5s 内平滑淡出（1 -> 0），呈现明亮的传送阵复活画面。
@@ -47,6 +48,7 @@ export class DeathOverlay {
     this.veil.isVisible = true;
     this.veil.isPointerBlocker = true;
     this.tex.rootContainer.isHitTestVisible = true;
+    playSfx('/audio/game_over.mp3', 0.65);
   }
 
   /** 点击复活：先变完全纯黑屏，再逐渐明亮 */

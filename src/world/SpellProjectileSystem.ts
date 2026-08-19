@@ -12,7 +12,6 @@ import {
   VertexBuffer,
   VertexData,
 } from '@babylonjs/core';
-import { playSfx } from '../audio/Sfx';
 import type { Minion } from './Minion';
 import { isGunStyle, type StaffStyle } from './minion/staff';
 
@@ -546,9 +545,6 @@ export class SpellProjectileSystem {
           minionHit.hitMinion.physicsProxy.applyHitKnockback(b.direction, 2.0);
         }
         minionHit.hitMinion.takeDamage(b.damage, b.direction);
-        if (!(player && minionHit.hitMinion === player)) {
-          playSfx('/audio/bullet_hit.mp3', 0.55);
-        }
         this.triggerExplosionFx(nextPos, b.style, b.powerScale);
         this.retireBullet(i);
         continue;
