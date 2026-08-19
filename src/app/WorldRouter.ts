@@ -26,6 +26,7 @@ import { LEVEL2_LANDING_X, LEVEL2_LANDING_Z } from '../world/level2/config';
 import { TeleportPad } from '../world/TeleportPad';
 import type { Minion, MinionAppearance } from '../world/Minion';
 import type { MinionPhysicsProxy } from '../world/physics/MinionPhysicsProxy';
+import { lockFixedOrbit } from '../world/shared/sceneBasics';
 import type { CameraFollow } from './CameraFollow';
 
 export interface WorldRouterContext {
@@ -412,6 +413,9 @@ export class WorldRouter {
       (out) => world.getPlayer().getFocusPoint(out),
       this.ctx.getCameraMode(),
     );
+    if (this.ctx.getCameraMode() === 'fixed') {
+      lockFixedOrbit(world.camera, this.ctx.cameraFollow.getRadius());
+    }
   }
 }
 

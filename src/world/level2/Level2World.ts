@@ -153,6 +153,7 @@ export class Level2World implements GameWorld {
 
     const appearance = options.appearance;
     const minion = new Minion(scene, spawn.x, spawn.z, {
+      isPlayer: true,
       facePositiveX: false,
       shadowGenerator: shadowGen,
       face: appearance.face,

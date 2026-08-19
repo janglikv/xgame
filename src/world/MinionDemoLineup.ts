@@ -11,7 +11,12 @@ import {
 } from './Minion';
 import type { FaceStyle } from './minion/faces';
 import { HAT_LABELS, HAT_STYLES } from './minion/hat';
-import { GUN_STYLES, STAFF_LABELS, STAFF_STYLES } from './minion/staff';
+import {
+  GUN_STYLES,
+  isGunStyle,
+  STAFF_LABELS,
+  STAFF_STYLES,
+} from './minion/staff';
 import { MinionPhysicsProxy } from './physics/MinionPhysicsProxy';
 
 import { HealthBar } from './HealthBar';
@@ -93,7 +98,7 @@ export const DEMO_ROWS: readonly DemoRow[] = [
   },
   {
     category: '武器',
-    presets: STAFF_STYLES.filter((style) => style !== 'pistol').map((style) => ({
+    presets: STAFF_STYLES.filter((style) => !isGunStyle(style)).map((style) => ({
       label: STAFF_LABELS[style],
       options: { staff: style },
     })),

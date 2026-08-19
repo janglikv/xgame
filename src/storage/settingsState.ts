@@ -4,9 +4,12 @@ import { isGraphicsQuality, type GraphicsQuality } from './graphicsQuality';
 export type { HitSfxId };
 
 /** localStorage 键；改字段结构时递增版本 */
-const STORAGE_KEY = 'luolu.settings.v5';
+const STORAGE_KEY = 'luolu.settings.v7';
 
 export type { GraphicsQuality };
+
+/** 子弹墙体反弹次数选项：0（关闭） | 1 | 2 | 3 */
+export type BulletBounceCount = 0 | 1 | 2 | 3;
 
 /** 镜头模式：自由轨道（调试）/ 略倾俯视固定 */
 export type CameraMode = 'free' | 'fixed';
@@ -20,6 +23,8 @@ export interface SettingsStateSnapshot {
   showColliders: boolean;
   /** 是否开启角色无敌（不扣血） */
   isInvincible: boolean;
+  /** 子弹墙体反弹次数（0: 关闭 / 1 / 2 / 3，开发者调试） */
+  bulletBounceCount: BulletBounceCount;
   /** 镜头模式（默认固定略倾俯视） */
   cameraMode: CameraMode;
   /** 固定视角是否允许广角拉远缩小（开发者调试选项，默认关闭） */
@@ -61,6 +66,7 @@ const DEFAULTS: SettingsStateSnapshot = {
   showGrid: true,
   showColliders: false,
   isInvincible: false,
+  bulletBounceCount: 0,
   cameraMode: 'fixed',
   allowZoomOut: false,
   bgmEnabled: true,
@@ -72,6 +78,8 @@ export function loadSettingsState(): SettingsStateSnapshot {
   try {
     const raw =
       localStorage.getItem(STORAGE_KEY) ??
+      localStorage.getItem('luolu.settings.v6') ??
+      localStorage.getItem('luolu.settings.v5') ??
       localStorage.getItem('luolu.settings.v4') ??
       localStorage.getItem('luolu.settings.v3') ??
       localStorage.getItem('luolu.settings.v1');
@@ -79,11 +87,16 @@ export function loadSettingsState(): SettingsStateSnapshot {
 
     const data = JSON.parse(raw) as Partial<SettingsStateSnapshot>;
     const mode = data.cameraMode;
+    const bounceCount = data.bulletBounceCount;
     return {
       showFps: typeof data.showFps === 'boolean' ? data.showFps : DEFAULTS.showFps,
       showGrid: typeof data.showGrid === 'boolean' ? data.showGrid : DEFAULTS.showGrid,
       showColliders: typeof data.showColliders === 'boolean' ? data.showColliders : DEFAULTS.showColliders,
       isInvincible: typeof data.isInvincible === 'boolean' ? data.isInvincible : DEFAULTS.isInvincible,
+      bulletBounceCount:
+        bounceCount === 0 || bounceCount === 1 || bounceCount === 2 || bounceCount === 3
+          ? bounceCount
+          : DEFAULTS.bulletBounceCount,
       cameraMode: mode === 'free' || mode === 'fixed' ? mode : DEFAULTS.cameraMode,
       allowZoomOut: typeof data.allowZoomOut === 'boolean' ? data.allowZoomOut : DEFAULTS.allowZoomOut,
       bgmEnabled: typeof data.bgmEnabled === 'boolean' ? data.bgmEnabled : DEFAULTS.bgmEnabled,

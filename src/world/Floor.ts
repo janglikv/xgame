@@ -160,13 +160,18 @@ export interface FloorOptions {
    */
   centerWallSize?: number;
   /**
-   * 是否在右下角 (5, -5) 生成 L 型梯形围墙。
+   * 是否在四角生成 L 型梯形围墙（路径见 {@link Floor.L_WALL_CORNER_PATHS}）。
    */
   addLWall?: boolean;
   /**
    * 是否用朝屏幕下方（+X，固定镜头所在一侧）开口的方围把传送阵围起来。
    */
   addPadCoverWall?: boolean;
+  /**
+   * 沿边切除米数：切去固定俯视下屏幕左右两角（TL / BR），正方形变成六边形。
+   * 0 或不设则保持矩形外墙。
+   */
+  hexagonCut?: number;
 }
 
 const OFFICIAL_TEX_BASE =
@@ -194,6 +199,96 @@ export class Floor {
     new Vector3(1.5, 0, -8.5),
     new Vector3(1.5, 0, -5.5),
   ];
+  /**
+   * 四角围墙路径（1 格 = 1 米）。
+   * 固定俯视下：上下仍是 L（TR / BL）；左右（TL / BR）向中心靠 3 格后改为直墙。
+   */
+  static readonly L_WALL_CORNER_PATHS = [
+    { name: 'BR', path: [new Vector3(5, 0, -2), new Vector3(2, 0, -5)] },
+    { name: 'TR', path: [new Vector3(8, 0, 5), new Vector3(5, 0, 5), new Vector3(5, 0, 8)] },
+    { name: 'TL', path: [new Vector3(-5, 0, 2), new Vector3(-2, 0, 5)] },
+    { name: 'BL', path: [new Vector3(-8, 0, -5), new Vector3(-5, 0, -5), new Vector3(-5, 0, -8)] },
+  ];
+
+  /**
+   * 可玩区外轮廓顶点（不含闭合重复点）。
+   * hexagonCut > 0 时切去屏幕左右两角，矩形变为六边形。
+   */
+  static playableOutline(
+    minX: number,
+    maxX: number,
+    minZ: number,
+    maxZ: number,
+    hexagonCut = 0,
+  ): Vector3[] {
+    if (hexagonCut > 0) {
+      const cut = Math.min(hexagonCut, maxX - minX, maxZ - minZ);
+      return [
+        new Vector3(minX, 0, minZ),
+        new Vector3(maxX - cut, 0, minZ),
+        new Vector3(maxX, 0, minZ + cut),
+        new Vector3(maxX, 0, maxZ),
+        new Vector3(minX + cut, 0, maxZ),
+        new Vector3(minX, 0, maxZ - cut),
+      ];
+    }
+    return [
+      new Vector3(minX, 0, minZ),
+      new Vector3(maxX, 0, minZ),
+      new Vector3(maxX, 0, maxZ),
+      new Vector3(minX, 0, maxZ),
+    ];
+  }
+
+  /**
+   * 外围墙中心线（闭合，末点重复起点）。墙体内侧贴齐可玩边界。
+   */
+  static outerWallCenterPath(
+    minX: number,
+    maxX: number,
+    minZ: number,
+    maxZ: number,
+    thickness: number,
+    hexagonCut = 0,
+  ): Vector3[] {
+    const inner = Floor.playableOutline(minX, maxX, minZ, maxZ, hexagonCut);
+    const dist = thickness / 2;
+    const n = inner.length;
+    const center: Vector3[] = [];
+    for (let i = 0; i < n; i++) {
+      const prev = inner[(i - 1 + n) % n]!;
+      const curr = inner[i]!;
+      const next = inner[(i + 1) % n]!;
+      const e1x = curr.x - prev.x;
+      const e1z = curr.z - prev.z;
+      const e2x = next.x - curr.x;
+      const e2z = next.z - curr.z;
+      const l1 = Math.hypot(e1x, e1z) || 1;
+      const l2 = Math.hypot(e2x, e2z) || 1;
+      // 外法线：CCW 路径右侧 (dx, dz) → (dz, -dx)
+      const n1x = e1z / l1;
+      const n1z = -e1x / l1;
+      const n2x = e2z / l2;
+      const n2z = -e2x / l2;
+      let mx = n1x + n2x;
+      let mz = n1z + n2z;
+      const ml = Math.hypot(mx, mz) || 1;
+      mx /= ml;
+      mz /= ml;
+      const denom = mx * n1x + mz * n1z;
+      const miter = Math.abs(denom) < 1e-4 ? 1 : 1 / denom;
+      const clamped = Math.min(Math.abs(miter), 4) * Math.sign(miter || 1);
+      center.push(
+        new Vector3(
+          curr.x + mx * dist * clamped,
+          0,
+          curr.z + mz * dist * clamped,
+        ),
+      );
+    }
+    center.push(center[0]!.clone());
+    return center;
+  }
 
   readonly root: TransformNode;
   readonly scene: Scene;
@@ -265,14 +360,15 @@ export class Floor {
     const minZ = this.minZ;
     const maxZ = this.maxZ;
 
-    // 单条首尾闭合路径：绕场地四周一整圈，4点梯形截面 Extrude 挤压无缝连贯
-    const loopPath = [
-      new Vector3(minX - t / 2, 0, minZ - t / 2),
-      new Vector3(maxX + t / 2, 0, minZ - t / 2),
-      new Vector3(maxX + t / 2, 0, maxZ + t / 2),
-      new Vector3(minX - t / 2, 0, maxZ + t / 2),
-      new Vector3(minX - t / 2, 0, minZ - t / 2),
-    ];
+    // 单条首尾闭合路径：矩形或六边形外墙，梯形截面 Extrude
+    const loopPath = Floor.outerWallCenterPath(
+      minX,
+      maxX,
+      minZ,
+      maxZ,
+      t,
+      options.hexagonCut ?? 0,
+    );
 
     const wall = createTrapezoidExtrudedWall(
       'RenderWall_ClosedLoop',
@@ -311,14 +407,7 @@ export class Floor {
 
     // 四角 L 型围墙（位于左上、右上、左下、右下四个象限，单条平滑管道）
     if (options.addLWall) {
-      const cornerConfigs = [
-        { name: 'BR', path: [new Vector3(8, 0, -5), new Vector3(5, 0, -5), new Vector3(5, 0, -8)] },
-        { name: 'TR', path: [new Vector3(8, 0, 5), new Vector3(5, 0, 5), new Vector3(5, 0, 8)] },
-        { name: 'TL', path: [new Vector3(-8, 0, 5), new Vector3(-5, 0, 5), new Vector3(-5, 0, 8)] },
-        { name: 'BL', path: [new Vector3(-8, 0, -5), new Vector3(-5, 0, -5), new Vector3(-5, 0, -8)] },
-      ];
-
-      for (const config of cornerConfigs) {
+      for (const config of Floor.L_WALL_CORNER_PATHS) {
         const lWall = createTrapezoidExtrudedWall(
           `RenderWall_L_${config.name}`,
           {

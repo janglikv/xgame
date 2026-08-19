@@ -133,6 +133,8 @@ export interface MinionOptions {
   breathIdle?: boolean;
   /** 法杖特效降级（敌军小兵跳过火星/光晕逐帧动画） */
   liteStaffFx?: boolean;
+  /** 是否为玩家控制的主角单位 */
+  isPlayer?: boolean;
   /**
    * 战斗阵营。同阵营子弹互不造成伤害（穿过）。
    * 未设则不参与友伤过滤。
@@ -247,6 +249,9 @@ export class Minion {
   /** 绑定的物理代理 */
   public physicsProxy?: MinionPhysicsProxy;
 
+  /** 是否为玩家控制的主角单位 */
+  readonly isPlayer: boolean;
+
   /** 战斗阵营，同阵营子弹互不造成伤害 */
   readonly combatTeam?: string;
 
@@ -323,6 +328,7 @@ export class Minion {
     const scale = Minion.SCALE * appearance.scaleMultiplier;
 
     this.scene = scene;
+    this.isPlayer = options.isPlayer === true;
     this.combatTeam = options.combatTeam;
     this.appearance = { ...appearance };
     this.partialSlots = options.partialSlots ? [...options.partialSlots] : null;
@@ -1060,8 +1066,9 @@ export class Minion {
       if (isPistol && this.pistolRecoilT > 0) {
         this.pistolRecoilT = Math.max(0, this.pistolRecoilT - dt * 11);
       }
+      const recoilAmt = this.staffFx.style === 'shotgun' ? 0.38 : 0.22;
       const recoilPitch = isPistol
-        ? Math.sin(this.pistolRecoilT * Math.PI) * 0.22
+        ? Math.sin(this.pistolRecoilT * Math.PI) * recoilAmt
         : 0;
       const totalPitch = this.staffRetractPitch + recoilPitch;
 

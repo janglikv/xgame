@@ -28,6 +28,7 @@ const STYLE_COLORS: Record<StaffStyle, Color3> = {
   storm: Color3.FromHexString('#00e5ff'),  // 风暴青
   holy: Color3.FromHexString('#ffcc00'),   // 圣光黄
   pistol: Color3.FromHexString('#ff8800'), // 战术高能橙
+  shotgun: Color3.FromHexString('#ffcc55'), // 黄铜霰弹
 };
 
 const BASE_BULLET_DAMAGE = 25;
@@ -37,7 +38,7 @@ const BASE_EXPLOSION_R = 0.32;
 /** 弹道飞行高度上限：须低于视觉围墙（0.5m），避免大体型杖尖从墙顶穿过 */
 const MAX_SHOT_Y = 0.38;
 /** 同时存活子弹上限，超出回收最旧的一条 */
-const MAX_LIVE_BULLETS = 28;
+const MAX_LIVE_BULLETS = 56;
 const MAX_LIVE_EXPLOSIONS = 6;
 
 interface Bullet {
@@ -51,6 +52,7 @@ interface Bullet {
   posBuffer: Float32Array;
   powerScale: number;
   damage: number;
+  remainingBounces: number;
 }
 
 /**
@@ -68,6 +70,7 @@ export class SpellProjectileSystem {
   private readonly bullets: Bullet[] = [];
   private readonly meshPool: Mesh[] = [];
   private liveExplosions = 0;
+  private maxBounces = 0;
   private bounds = { minX: -19.8, maxX: 19.8, minZ: -19.8, maxZ: 19.8 };
   private readonly tmpNext = new Vector3();
   private readonly tmpSeg = new Vector3();
@@ -79,6 +82,14 @@ export class SpellProjectileSystem {
 
   constructor(scene: Scene) {
     this.scene = scene;
+  }
+
+  setBounceCount(count: number): void {
+    this.maxBounces = Math.max(0, Math.floor(count));
+  }
+
+  getBounceCount(): number {
+    return this.maxBounces;
   }
 
   setBounds(bounds: {
@@ -264,20 +275,6 @@ export class SpellProjectileSystem {
     this.bullets.splice(index, 1);
   }
 
-  /** 内墙/L 墙/传送方围附近才做射线，Boss 区远弹跳过 pick */
-  private mightHitInnerWall(a: Vector3, b: Vector3): boolean {
-    return this.nearInnerObstacle(a.x, a.z) || this.nearInnerObstacle(b.x, b.z);
-  }
-
-  private nearInnerObstacle(x: number, z: number): boolean {
-    if (Math.abs(x) <= 2.4 && Math.abs(z) <= 2.4) return true;
-    const ax = Math.abs(x);
-    const az = Math.abs(z);
-    if (ax >= 4.4 && ax <= 8.6 && az >= 4.4 && az <= 8.6) return true;
-    if (Math.abs(x) <= 2.2 && z <= -5 && z >= -9.2) return true;
-    return false;
-  }
-
   /**
    * 构建可实时更新顶点的拖尾带 Quad Mesh (4 Vertices, 2 Triangles)
    */
@@ -349,7 +346,10 @@ export class SpellProjectileSystem {
 
     const powerScale = Math.max(0.2, shooter?.getStaffPowerScale() ?? 1);
     const pistol = isGunStyle(style);
-    const fireSpeed = (pistol ? speed * 1.55 : speed) / Math.max(0.4, powerScale);
+    const shotgun = style === 'shotgun';
+    const speedMul = shotgun ? 1.2 : pistol ? 1.55 : 1;
+    const damageMul = shotgun ? 0.36 : pistol ? 0.6 : 1;
+    const fireSpeed = (speed * speedMul) / Math.max(0.4, powerScale);
 
     if (this.bullets.length >= MAX_LIVE_BULLETS) {
       this.retireBullet(0);
@@ -360,6 +360,10 @@ export class SpellProjectileSystem {
     mesh.isPickable = false;
     mesh.renderingGroupId = 1;
 
+    const isPlayerShooter =
+      shooter?.isPlayer === true ||
+      (shooter !== undefined && shooter.combatTeam !== 'enemy');
+    const bulletBounces = isPlayerShooter ? this.maxBounces : 0;
     const posBuffer = new Float32Array(12);
 
     const bullet: Bullet = {
@@ -372,7 +376,8 @@ export class SpellProjectileSystem {
       style,
       posBuffer,
       powerScale,
-      damage: Math.round(BASE_BULLET_DAMAGE * powerScale * (pistol ? 0.6 : 1)),
+      damage: Math.round(BASE_BULLET_DAMAGE * powerScale * damageMul),
+      remainingBounces: bulletBounces,
     };
 
     this.updateTrailMeshVertices(bullet);
@@ -386,9 +391,11 @@ export class SpellProjectileSystem {
     const H = bullet.position;
     const stepDist = Vector3.Distance(bullet.position, bullet.lastPos);
     const pistol = isGunStyle(bullet.style);
+    const shotgun = bullet.style === 'shotgun';
+    const trailMul = shotgun ? 0.7 : pistol ? 1.2 : 1;
     const trailLen = Math.max(
-      BASE_TRAIL_LEN * bullet.powerScale * (pistol ? 1.2 : 1),
-      stepDist * (pistol ? 1.55 : 1.3),
+      BASE_TRAIL_LEN * bullet.powerScale * trailMul,
+      stepDist * (shotgun ? 1.15 : pistol ? 1.55 : 1.3),
     );
 
     const T = this.tmpTail;
@@ -423,7 +430,8 @@ export class SpellProjectileSystem {
     }
     side.normalize();
 
-    const width = BASE_TRAIL_WIDTH * bullet.powerScale * (pistol ? 0.4 : 1);
+    const widthMul = shotgun ? 0.28 : pistol ? 0.4 : 1;
+    const width = BASE_TRAIL_WIDTH * bullet.powerScale * widthMul;
     const halfW = width * 0.5;
 
     const sideX = side.x * halfW;
@@ -454,44 +462,86 @@ export class SpellProjectileSystem {
       );
 
       const raySegment = this.tmpSeg;
-      nextPos.subtractToRef(b.lastPos, raySegment);
+      nextPos.subtractToRef(b.position, raySegment);
       const moveDist = raySegment.length();
 
       let wallHitDist = Infinity;
+      let wallHitNormal: Vector3 | undefined;
 
-      // 仅在可能碰到内墙时做射线，避开全图 multiPick
-      if (moveDist > 1e-4 && this.mightHitInnerWall(b.lastPos, nextPos)) {
+      // 墙体/障碍物扫掠检测
+      if (moveDist > 1e-4) {
         const rayDir = this.tmpDir;
         raySegment.scaleToRef(1 / moveDist, rayDir);
-        this.sweepRay.origin.copyFrom(b.lastPos);
+        this.sweepRay.origin.copyFrom(b.position);
         this.sweepRay.direction.copyFrom(rayDir);
         this.sweepRay.length = moveDist + 0.05;
         const wallRes = this.tryHitWallRay(this.sweepRay);
-        if (wallRes.hit) {
+        if (wallRes.hit && wallRes.distance <= moveDist + 0.05) {
           wallHitDist = wallRes.distance;
+          wallHitNormal = wallRes.normal;
         }
+      }
+
+      // 外边界碰撞检测
+      let boundHitDist = Infinity;
+      let boundHitNormal: Vector3 | undefined;
+      const { minX, maxX, minZ, maxZ } = this.bounds;
+      const curX = b.position.x;
+      const curZ = b.position.z;
+      const dirX = b.direction.x;
+      const dirZ = b.direction.z;
+
+      if (dirX > 1e-5 && nextPos.x >= maxX) {
+        const d = (maxX - curX) / dirX;
+        if (d >= 0 && d < boundHitDist) {
+          boundHitDist = d;
+          boundHitNormal = new Vector3(-1, 0, 0);
+        }
+      } else if (dirX < -1e-5 && nextPos.x <= minX) {
+        const d = (minX - curX) / dirX;
+        if (d >= 0 && d < boundHitDist) {
+          boundHitDist = d;
+          boundHitNormal = new Vector3(1, 0, 0);
+        }
+      }
+
+      if (dirZ > 1e-5 && nextPos.z >= maxZ) {
+        const d = (maxZ - curZ) / dirZ;
+        if (d >= 0 && d < boundHitDist) {
+          boundHitDist = d;
+          boundHitNormal = new Vector3(0, 0, -1);
+        }
+      } else if (dirZ < -1e-5 && nextPos.z <= minZ) {
+        const d = (minZ - curZ) / dirZ;
+        if (d >= 0 && d < boundHitDist) {
+          boundHitDist = d;
+          boundHitNormal = new Vector3(0, 0, 1);
+        }
+      }
+
+      // 汇总最先发生的障碍物撞击
+      let obstacleHitDist = Infinity;
+      let obstacleNormal: Vector3 | undefined;
+      if (wallHitDist < boundHitDist) {
+        obstacleHitDist = wallHitDist;
+        obstacleNormal = wallHitNormal;
+      } else if (boundHitDist < Infinity) {
+        obstacleHitDist = boundHitDist;
+        obstacleNormal = boundHitNormal;
       }
 
       // 小兵圆柱体扫掠求交检测
       const minionHit = this.checkMinionCylinderHit(
-        b.lastPos,
+        b.position,
         nextPos,
         b.shooter,
         targetMinions,
       );
 
-      const { minX, maxX, minZ, maxZ } = this.bounds;
-      const outOfBounds =
-        nextPos.x <= minX ||
-        nextPos.x >= maxX ||
-        nextPos.z <= minZ ||
-        nextPos.z >= maxZ;
+      const minionDist = minionHit ? Math.sqrt(minionHit.distSq) : Infinity;
 
-      const hitMinion =
-        minionHit &&
-        (wallHitDist === Infinity || Math.sqrt(minionHit.distSq) <= wallHitDist);
-
-      if (hitMinion && minionHit) {
+      // 击中小兵：在障碍物之前命中
+      if (minionHit && minionDist <= obstacleHitDist && minionDist <= moveDist + 0.05) {
         if (minionHit.hitMinion.physicsProxy) {
           minionHit.hitMinion.physicsProxy.applyHitKnockback(b.direction, 2.0);
         }
@@ -504,18 +554,65 @@ export class SpellProjectileSystem {
         continue;
       }
 
-      if (wallHitDist !== Infinity || outOfBounds) {
-        let impactPos = nextPos;
-        if (wallHitDist !== Infinity) {
-          impactPos = b.lastPos.add(this.tmpDir.scale(wallHitDist));
+      // 撞击障碍物（墙体 / 边界）
+      if (obstacleHitDist !== Infinity && obstacleHitDist <= moveDist + 0.05) {
+        const actualHitDist = Math.min(obstacleHitDist, moveDist);
+        const impactPos = b.position.add(b.direction.scale(actualHitDist));
+        impactPos.y = b.position.y;
+
+        // 如果还可以反弹
+        if (b.remainingBounces > 0) {
+          b.remainingBounces -= 1;
+
+          let normal = obstacleNormal;
+          if (!normal || normal.lengthSquared() < 1e-4) {
+            if (impactPos.x <= minX + 0.1) normal = new Vector3(1, 0, 0);
+            else if (impactPos.x >= maxX - 0.1) normal = new Vector3(-1, 0, 0);
+            else if (impactPos.z <= minZ + 0.1) normal = new Vector3(0, 0, 1);
+            else if (impactPos.z >= maxZ - 0.1) normal = new Vector3(0, 0, -1);
+            else normal = b.direction.scale(-1);
+          }
+          normal = new Vector3(normal.x, 0, normal.z).normalize();
+
+          // 确保法线逆着入射方向：D · N < 0
+          const dot = Vector3.Dot(b.direction, normal);
+          if (dot > 0) {
+            normal.scaleInPlace(-1);
+          }
+
+          // 计算反射向量 R = D - 2 * (D · N) * N
+          const newDot = Vector3.Dot(b.direction, normal);
+          const reflectDir = b.direction.subtract(normal.scale(2 * newDot));
+          reflectDir.y = 0;
+          if (reflectDir.lengthSquared() < 1e-4) {
+            reflectDir.copyFrom(b.direction).scaleInPlace(-1);
+          }
+          reflectDir.normalize();
+
+          // 反弹时的火花撞击特效
+          this.triggerWallImpactFx(impactPos, b.style, b.powerScale);
+
+          // 沿反射方向推进剩余位移并确保处于安全边界内
+          const remainingStep = Math.max(0.04, moveDist - actualHitDist);
+          const newPos = impactPos.add(reflectDir.scale(remainingStep));
+          newPos.x = Math.max(minX + 0.02, Math.min(maxX - 0.02, newPos.x));
+          newPos.z = Math.max(minZ + 0.02, Math.min(maxZ - 0.02, newPos.z));
+
+          b.lastPos.copyFrom(impactPos);
+          b.position.copyFrom(newPos);
+          b.direction.copyFrom(reflectDir);
+          this.updateTrailMeshVertices(b);
+          continue;
         }
-        // 命中墙体：触发爆裂与火花溅射视觉特效，但不播放命中音效
+
+        // 无反弹次数：常规撞墙爆裂销毁
         this.triggerExplosionFx(impactPos, b.style, b.powerScale);
         this.triggerWallImpactFx(impactPos, b.style, b.powerScale);
         this.retireBullet(i);
         continue;
       }
 
+      // 未发生任何碰撞：平滑飞行
       b.lastPos.copyFrom(b.position);
       b.position.copyFrom(nextPos);
 
@@ -607,10 +704,20 @@ export class SpellProjectileSystem {
   /**
    * 检测子弹轨迹线段是否击中墙体/遮挡物体
    */
-  private tryHitWallRay(ray: Ray): { hit: boolean; distance: number } {
+  private tryHitWallRay(
+    ray: Ray,
+  ): { hit: boolean; distance: number; normal?: Vector3 } {
     const pick = this.scene.pickWithRay(ray, (mesh) => this.isWallTarget(mesh));
     if (pick?.hit && pick.pickedMesh) {
-      return { hit: true, distance: pick.distance };
+      const rawNormal = pick.getNormal(true);
+      let normal: Vector3 | undefined;
+      if (rawNormal) {
+        const hNormal = new Vector3(rawNormal.x, 0, rawNormal.z);
+        if (hNormal.lengthSquared() > 1e-4) {
+          normal = hNormal.normalize();
+        }
+      }
+      return { hit: true, distance: pick.distance, normal };
     }
     return { hit: false, distance: Infinity };
   }

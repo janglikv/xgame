@@ -155,6 +155,7 @@ export class DebugWarehouseWorld implements GameWorld {
 
     const appearance = options.appearance;
     const minion = new Minion(scene, spawnX, spawnZ, {
+      isPlayer: true,
       facePositiveX: false,
       shadowGenerator: shadowGen,
       face: appearance.face,

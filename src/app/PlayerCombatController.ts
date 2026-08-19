@@ -17,10 +17,15 @@ const PISTOL_SPREAD_MAX = 0.28;
 const PISTOL_SPREAD_GROWTH = 0.07;
 /** 手枪停火精度完全恢复所需间隔时间（秒） */
 const PISTOL_RECOVERY_TIME = 1.0;
+/** 散弹枪一次射出的弹丸数 */
+const SHOTGUN_PELLET_COUNT = 6;
+/** 散弹枪扇形半角（弧度，约 15°） */
+const SHOTGUN_CONE = 0.26;
+/** 相对默认射击间隔的泵动冷却倍率 */
+const SHOTGUN_COOLDOWN_MUL = 4.0;
 
-function applySpread(dir: Vector3, spreadRad: number): Vector3 {
-  if (spreadRad <= 1e-4) return dir.clone();
-  const angle = (Math.random() * 2 - 1) * spreadRad;
+function rotateYaw(dir: Vector3, angle: number): Vector3 {
+  if (Math.abs(angle) <= 1e-4) return dir.clone();
   const c = Math.cos(angle);
   const s = Math.sin(angle);
   const x = dir.x * c - dir.z * s;
@@ -28,6 +33,10 @@ function applySpread(dir: Vector3, spreadRad: number): Vector3 {
   const out = new Vector3(x, 0, z);
   if (out.lengthSquared() < 1e-8) return dir.clone();
   return out.normalize();
+}
+
+function applySpread(dir: Vector3, spreadRad: number): Vector3 {
+  return rotateYaw(dir, (Math.random() * 2 - 1) * spreadRad);
 }
 
 export class PlayerCombatController {
@@ -189,7 +198,7 @@ export class PlayerCombatController {
       const style = player.getStaffStyle() ?? 'arcane';
       const isPistol = isGunStyle(style);
 
-      // 1.1 手枪分支：必须平滑转向对齐（夹角 <= 20°），且冷却完毕后开枪（后开枪）
+      // 1.1 枪械分支：必须平滑转向对齐（夹角 <= 20°），且冷却完毕后开枪（后开枪）
       if (isPistol) {
         const playerForward = player.getForwardVector();
         const isFacingTarget = Vector3.Dot(playerForward, lineDir) >= 0.94;
@@ -200,23 +209,36 @@ export class PlayerCombatController {
         }
 
         // 转到位了，立即开火！
-        this.shootCooldown = this.shootInterval * 1.5;
         this.shotsFiredInCurrentPress++;
         const tipPos = player.getStaffTipWorldPos();
 
-        // 精度机制：根据当前累积散布计算发射方向（第1发绝对精准，连发精度逐渐降低）
-        const shootDir = applySpread(lineDir, this.pistolSpread);
-
-        // 连续发射散布逐渐扩大，最多到 PISTOL_SPREAD_MAX
-        this.pistolSpread = Math.min(
-          PISTOL_SPREAD_MAX,
-          this.pistolSpread + PISTOL_SPREAD_GROWTH,
-        );
-        // 重置 1s 精度恢复倒计时
-        this.pistolRecoveryTimer = PISTOL_RECOVERY_TIME;
-
-        playSfx('/audio/bullet_fire.mp3', 0.5);
-        spellSystem.spawnOrb(tipPos, shootDir, style, player);
+        if (style === 'shotgun') {
+          this.shootCooldown = this.shootInterval * SHOTGUN_COOLDOWN_MUL;
+          playSfx('/audio/bullet_fire.mp3', 0.72);
+          const n = SHOTGUN_PELLET_COUNT;
+          for (let i = 0; i < n; i++) {
+            const t = n <= 1 ? 0 : i / (n - 1);
+            const fan = (t * 2 - 1) * SHOTGUN_CONE;
+            const jitter = (Math.random() * 2 - 1) * 0.03;
+            spellSystem.spawnOrb(
+              tipPos,
+              rotateYaw(lineDir, fan + jitter),
+              style,
+              player,
+            );
+          }
+        } else {
+          this.shootCooldown = this.shootInterval * 1.5;
+          // 精度机制：根据当前累积散布计算发射方向（第1发绝对精准，连发精度逐渐降低）
+          const shootDir = applySpread(lineDir, this.pistolSpread);
+          this.pistolSpread = Math.min(
+            PISTOL_SPREAD_MAX,
+            this.pistolSpread + PISTOL_SPREAD_GROWTH,
+          );
+          this.pistolRecoveryTimer = PISTOL_RECOVERY_TIME;
+          playSfx('/audio/bullet_fire.mp3', 0.5);
+          spellSystem.spawnOrb(tipPos, shootDir, style, player);
+        }
         player.triggerStaffShootFx();
 
         // 消费掉本次开火意图

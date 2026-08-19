@@ -2,6 +2,7 @@ import { Color3, Engine, Scene, StandardMaterial, Vector3 } from '@babylonjs/cor
 import {
   loadCameraState,
   saveCameraState,
+  saveFixedRadius,
   type CameraStateSnapshot,
 } from '../storage/cameraState';
 import { saveMinionAppearanceState } from '../storage/minionAppearanceState';
@@ -14,6 +15,7 @@ import {
 import {
   loadSettingsState,
   saveSettingsState,
+  type BulletBounceCount,
   type CameraMode,
 } from '../storage/settingsState';
 import { loadWorldState, saveWorldState } from '../storage/worldState';
@@ -47,6 +49,7 @@ export class GameApp {
   private showGrid = true;
   private showColliders = false;
   private isInvincible = false;
+  private bulletBounceCount: BulletBounceCount = 0;
   private bgmEnabled = true;
   private graphicsQuality: GraphicsQuality = 'medium';
   private hitSfxId: HitSfxId = 'original';
@@ -63,6 +66,7 @@ export class GameApp {
   private teleportFlow!: TeleportFlow;
 
   private camSaveTimer: ReturnType<typeof setTimeout> | null = null;
+  private fixedCamSaveTimer: ReturnType<typeof setTimeout> | null = null;
   private minionSaveTimer: ReturnType<typeof setTimeout> | null = null;
 
   async start(container: HTMLElement): Promise<void> {
@@ -84,13 +88,15 @@ export class GameApp {
     this.showGrid = settings.showGrid;
     this.showColliders = settings.showColliders;
     this.isInvincible = settings.isInvincible;
-    // 正式包没有调试入口：关掉网格/无敌/自由镜头/超广角拉远，避免沿用本地存档
+    this.bulletBounceCount = settings.bulletBounceCount;
+    // 正式包没有调试入口：关掉网格/无敌/自由镜头/超广角拉远/子弹反弹，避免沿用本地存档
     if (!import.meta.env.DEV) {
       this.cameraMode = 'fixed';
       this.allowZoomOut = false;
       this.showGrid = false;
       this.showColliders = false;
       this.isInvincible = false;
+      this.bulletBounceCount = 0;
     }
     this.cameraFollow.setAllowZoomOut(this.allowZoomOut);
     this.bgmEnabled = settings.bgmEnabled;
@@ -102,6 +108,13 @@ export class GameApp {
     this.bgm.armUnlock();
 
     const savedCam = loadCameraState();
+    if (savedCam?.fixedRadius !== undefined) {
+      this.cameraFollow.setRadius(savedCam.fixedRadius);
+    }
+    this.cameraFollow.setOnRadiusChanged((radius) => {
+      this.scheduleSaveFixedRadius(radius);
+    });
+
     const savedWorld = loadWorldState();
 
     this.router = new WorldRouter({
@@ -123,6 +136,7 @@ export class GameApp {
         this.settingsPanel.rebind(world.scene);
         this.fpsOverlay.rebind(world.scene);
         applyCollidersVisibility(world.scene, this.showColliders);
+        world.getSpellSystem().setBounceCount(this.bulletBounceCount);
         this.bgm.setTrack(
           world.id === 'hub' || world.id === 'debugWarehouse'
             ? HUB_BGM
@@ -152,6 +166,7 @@ export class GameApp {
       onAppearanceChanged: (a) => saveMinionAppearanceState(a),
     });
 
+    hub.getSpellSystem().setBounceCount(this.bulletBounceCount);
     applyCollidersVisibility(hub.scene, this.showColliders);
 
     if (this.cameraMode === 'free') {
@@ -193,6 +208,12 @@ export class GameApp {
         }
         this.persistSettings();
       },
+      getBulletBounceCount: () => this.bulletBounceCount,
+      setBulletBounceCount: (count) => {
+        this.bulletBounceCount = count;
+        this.applyBulletBounceConfig();
+        this.persistSettings();
+      },
       getBgmEnabled: () => this.bgmEnabled,
       setBgmEnabled: (enabled) => {
         this.bgmEnabled = enabled;
@@ -208,6 +229,7 @@ export class GameApp {
         this.allowZoomOut = allow;
         this.cameraFollow.setAllowZoomOut(allow);
         this.persistSettings();
+        saveFixedRadius(this.cameraFollow.getRadius());
       },
       getHitSfxId: () => this.hitSfxId,
       setHitSfxId: (id) => {
@@ -413,10 +435,19 @@ export class GameApp {
       alpha: cam.alpha,
       beta: cam.beta,
       radius: cam.radius,
+      fixedRadius: this.cameraFollow.getRadius(),
       targetX: cam.target.x,
       targetY: cam.target.y,
       targetZ: cam.target.z,
     };
+  }
+
+  private scheduleSaveFixedRadius(radius: number): void {
+    if (this.fixedCamSaveTimer !== null) clearTimeout(this.fixedCamSaveTimer);
+    this.fixedCamSaveTimer = setTimeout(() => {
+      this.fixedCamSaveTimer = null;
+      saveFixedRadius(radius);
+    }, 200);
   }
 
   private scheduleSaveCamera(): void {
@@ -445,12 +476,17 @@ export class GameApp {
       showGrid: this.showGrid,
       showColliders: this.showColliders,
       isInvincible: this.isInvincible,
+      bulletBounceCount: this.bulletBounceCount,
       cameraMode: this.cameraMode,
       allowZoomOut: this.allowZoomOut,
       bgmEnabled: this.bgmEnabled,
       graphicsQuality: this.graphicsQuality,
       hitSfxId: this.hitSfxId,
     });
+  }
+
+  private applyBulletBounceConfig(): void {
+    this.router.forEach((w) => w.getSpellSystem().setBounceCount(this.bulletBounceCount));
   }
 
   private setGraphicsQuality(quality: GraphicsQuality): void {

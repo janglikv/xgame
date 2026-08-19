@@ -33,6 +33,7 @@ import { TeleportPad, TeleportPairTheme } from '../TeleportPad';
 import { DeathOverlay } from '../../ui/DeathOverlay';
 import {
   LEVEL1_FLOOR_EXTEND,
+  LEVEL1_HEXAGON_CUT,
   LEVEL1_LANDING_X,
   LEVEL1_LANDING_Z,
   LEVEL1_MAP_HALF,
@@ -70,7 +71,7 @@ export interface CreateLevel1WorldOptions {
 }
 
 /**
- * 第一关：20×20 场地，+Z 再扩 10m Boss 区 + 双小队敌军 + 回程传送阵。
+ * 第一关：20×20 外接、切左右两角的六边形场地 + 敌军小队 + 回程及下关传送阵。
  * 实现 GameWorld，由 GameApp 统一驱动。
  */
 export class Level1World implements GameWorld {
@@ -158,6 +159,7 @@ export class Level1World implements GameWorld {
       extend: LEVEL1_FLOOR_EXTEND,
       centerWallSize: 3,
       addLWall: true,
+      hexagonCut: LEVEL1_HEXAGON_CUT,
     });
     buildArenaColliders(scene, {
       includeFloor: true,
@@ -169,6 +171,7 @@ export class Level1World implements GameWorld {
       maxZ: LEVEL1_Z_MAX,
       centerWallSize: 3,
       addLWall: true,
+      hexagonCut: LEVEL1_HEXAGON_CUT,
     });
     const spatialAxesGrid = new SpatialAxesGrid(scene, {
       extentX: half,
@@ -200,6 +203,7 @@ export class Level1World implements GameWorld {
 
     const appearance = options.appearance;
     const minion = new Minion(scene, spawn.x, spawn.z, {
+      isPlayer: true,
       facePositiveX: false,
       shadowGenerator: shadowGen,
       face: appearance.face,
@@ -250,7 +254,6 @@ export class Level1World implements GameWorld {
       attackRange?: number;
       burstCount?: number;
       projectileSpeed?: number;
-      isBoss?: boolean;
     }[] = [
       // 1. 远程法术敌军 (共 2 名，左右各 1 名)
       { spawnX: -5.5, spawnZ: 3.0, groupState: wizardGroupState, rotY: Math.PI, staff: 'flame' },
@@ -261,46 +264,16 @@ export class Level1World implements GameWorld {
       { spawnX: 2.5, spawnZ: 1.8, groupState: undefined, rotY: Math.PI, staff: null },
       { spawnX: -1.8, spawnZ: 5.5, groupState: undefined, rotY: Math.PI, staff: null },
       { spawnX: 1.8, spawnZ: 5.5, groupState: undefined, rotY: Math.PI, staff: null },
-
-      // 3. Boss：+Z 区，远程造型，体型 ×2 + 阵法
-      {
-        spawnX: 0,
-        spawnZ: 15,
-        rotY: Math.PI,
-        staff: 'flame',
-        scale: 2,
-        formation: 'void',
-        maxHp: 400,
-        patrolRadius: 1.6,
-        patrolAxis: 'x',
-        attackRange: 10,
-        burstCount: 3,
-        projectileSpeed: 7,
-        isBoss: true,
-      },
     ];
 
-    // 4. Boss 两侧各 1 名缩小远程小兵
-    {
-      const ringR = 3.4;
-      const addScale = 1.1;
-      for (let i = 0; i < 2; i++) {
-        const ang = Math.PI / 2 + i * Math.PI;
-        enemyConfigs.push({
-          spawnX: Math.sin(ang) * ringR,
-          spawnZ: 15 + Math.cos(ang) * ringR,
-          rotY: Math.PI,
-          staff: 'flame',
-          scale: addScale,
-          maxHp: 60,
-          patrolRadius: 0.35,
-          patrolAxis: 'x',
-          attackRange: 8,
-        });
+    const enemies: Level1Enemy[] = [];
+    const checkAllDefeated = () => {
+      if (enemies.length > 0 && enemies.every((e) => e.ai.isDefeated())) {
+        bossExitPad.setVisible(true);
       }
-    }
+    };
 
-    const enemies: Level1Enemy[] = enemyConfigs.map((cfg) => {
+    for (const cfg of enemyConfigs) {
       const scale = cfg.scale ?? 1;
       const wantShadow =
         gfx.enemyShadows === 'all' ||
@@ -358,15 +331,13 @@ export class Level1World implements GameWorld {
         burstCount: cfg.burstCount,
         projectileSpeed: cfg.projectileSpeed,
         hideHealthUntilHit: gfx.hideHealthUntilHit && scale < 1,
-        onDefeated: cfg.isBoss
-          ? () => {
-              bossExitPad.setVisible(true);
-            }
-          : undefined,
+        onDefeated: () => {
+          checkAllDefeated();
+        },
       });
 
-      return { minion: eMinion, phys: ePhys, ai: eAI };
-    });
+      enemies.push({ minion: eMinion, phys: ePhys, ai: eAI });
+    }
 
     const focusTarget = new Vector3(spawn.x, defaultFocusY(appearance.scaleMultiplier), spawn.z);
     const camera = createFollowCamera(scene, {

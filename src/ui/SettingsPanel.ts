@@ -19,7 +19,7 @@ import {
   GRAPHICS_LABELS,
   type GraphicsQuality,
 } from '../storage/graphicsQuality';
-import type { CameraMode } from '../storage/settingsState';
+import type { BulletBounceCount, CameraMode } from '../storage/settingsState';
 
 /**
  * ESC 全屏半透明设置面板（Babylon GUI 全屏 ADT，非 HTML DOM）。
@@ -44,6 +44,8 @@ export interface SettingsPanelDeps {
   setShowColliders: (show: boolean) => void;
   getIsInvincible: () => boolean;
   setIsInvincible: (invincible: boolean) => void;
+  getBulletBounceCount: () => BulletBounceCount;
+  setBulletBounceCount: (count: BulletBounceCount) => void;
   getBgmEnabled: () => boolean;
   setBgmEnabled: (enabled: boolean) => void;
   getGraphicsQuality: () => GraphicsQuality;
@@ -75,6 +77,7 @@ export class SettingsPanel {
   private panel!: Rectangle;
   private mainStack!: StackPanel;
   private debugStack?: StackPanel;
+  private backToSettingsBtn?: Button;
   private page: 'main' | 'debug' = 'main';
 
   private bgmCheck!: Checkbox;
@@ -86,6 +89,7 @@ export class SettingsPanel {
   private gridCheck?: Checkbox;
   private collidersCheck?: Checkbox;
   private invincibleCheck?: Checkbox;
+  private readonly bulletBounceCountChecks = new Map<BulletBounceCount, Checkbox>();
   private freeCheck?: Checkbox;
   private fixedCheck?: Checkbox;
   private zoomOutCheck?: Checkbox;
@@ -101,6 +105,7 @@ export class SettingsPanel {
   private syncingModeUi = false;
   private syncingGfxUi = false;
   private syncingHitSfxUi = false;
+  private syncingBounceUi = false;
   private disposed = false;
 
   constructor(
@@ -157,10 +162,10 @@ export class SettingsPanel {
 
     const contentBox = new Rectangle('settingsContentBox');
     contentBox.width = '100%';
-    contentBox.height = '100%';
     contentBox.thickness = 0;
     contentBox.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
     contentBox.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+    contentBox.adaptHeightToChildren = true;
     scrollViewer.addControl(contentBox);
 
     this.mainStack = this.makePageStack('settingsMain', '520px');
@@ -168,12 +173,27 @@ export class SettingsPanel {
     this.buildMainPage(this.mainStack);
 
     if (IS_DEV) {
-      this.debugStack = this.makePageStack('settingsDebug', '1040px');
+      this.debugStack = this.makePageStack('settingsDebug', '100%');
+      this.debugStack.paddingRight = '48px';
       this.debugStack.isVisible = false;
       contentBox.addControl(this.debugStack);
       this.buildDebugPage(this.debugStack);
+      this.backToSettingsBtn = this.makeNavButton(
+        'backMain',
+        '← 返回设置',
+        () => this.showPage('main'),
+        { width: '132px', height: '32px', fontSize: 13 },
+      );
+      this.backToSettingsBtn.horizontalAlignment =
+        Control.HORIZONTAL_ALIGNMENT_RIGHT;
+      this.backToSettingsBtn.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+      this.backToSettingsBtn.top = '28px';
+      this.backToSettingsBtn.left = '-40px';
+      this.backToSettingsBtn.isVisible = false;
+      this.panel.addControl(this.backToSettingsBtn);
     } else {
       this.debugStack = undefined;
+      this.backToSettingsBtn = undefined;
     }
 
     this.page = 'main';
@@ -304,19 +324,17 @@ export class SettingsPanel {
       }),
     );
 
-    stack.addControl(this.spacer(8));
-    stack.addControl(
-      this.makeNavButton('backMain', '← 返回设置', () => this.showPage('main')),
-    );
     stack.addControl(this.spacer(12));
 
-    // 双列网格布局：总宽 960px，左列 460px，中间间距 40px，右列 460px
+    // 双列随面板宽度伸缩，避免固定像素把右侧勾选框顶出屏幕
     const grid = new Grid('debugGrid');
-    grid.width = '960px';
+    grid.width = '100%';
+    // StackPanel 里相对行高的 Grid 高度会塌成 0，必须写死像素高度
+    grid.height = '460px';
     grid.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
-    grid.addColumnDefinition(460, true);
+    grid.addColumnDefinition(1);
     grid.addColumnDefinition(40, true);
-    grid.addColumnDefinition(460, true);
+    grid.addColumnDefinition(1);
     grid.addRowDefinition(1);
 
     const leftCol = new StackPanel('debugLeftCol');
@@ -341,6 +359,39 @@ export class SettingsPanel {
     );
     this.invincibleCheck = invincibleRow.check;
     leftCol.addControl(invincibleRow.row);
+
+    leftCol.addControl(this.spacer(4));
+    leftCol.addControl(
+      this.makeText('bulletBounceTitle', '子弹墙体反弹', {
+        fontSize: 13,
+        height: 22,
+        color: 'rgba(255,255,255,0.72)',
+      }),
+    );
+
+    this.bulletBounceCountChecks.clear();
+    const bounceOptions: Array<{ count: BulletBounceCount; label: string }> = [
+      { count: 0, label: '0次 (关)' },
+      { count: 1, label: '1次' },
+      { count: 2, label: '2次' },
+      { count: 3, label: '3次' },
+    ];
+    const bounceCells: Control[] = [];
+    for (const opt of bounceOptions) {
+      const row = this.makeToggleRow(
+        `bounceCount_${opt.count}`,
+        opt.label,
+        this.deps.getBulletBounceCount() === opt.count,
+        (checked) => {
+          if (this.syncingBounceUi) return;
+          if (checked) this.applyBounceCountFromUi(opt.count);
+          else this.syncBounceCountChecks(this.deps.getBulletBounceCount());
+        },
+      );
+      this.bulletBounceCountChecks.set(opt.count, row.check);
+      bounceCells.push(row.row);
+    }
+    leftCol.addControl(this.gridRow('bounceCountGrid', bounceCells, 4));
 
     this.addSection(leftCol, 'secDisplay', '显示调试');
     const gridRow = this.makeToggleRow(
@@ -469,6 +520,9 @@ export class SettingsPanel {
     this.page = page;
     this.mainStack.isVisible = page === 'main';
     if (this.debugStack) this.debugStack.isVisible = page === 'debug';
+    if (this.backToSettingsBtn) {
+      this.backToSettingsBtn.isVisible = page === 'debug';
+    }
     if (page === 'debug') this.syncDebugPage();
   }
 
@@ -476,6 +530,19 @@ export class SettingsPanel {
     return mode === 'fixed'
       ? '略倾俯视锁定：角色居中，可看侧身，不可拖拽'
       : '调试用轨道相机：可拖拽旋转与滚轮缩放';
+  }
+
+  private applyBounceCountFromUi(count: BulletBounceCount): void {
+    this.deps.setBulletBounceCount(count);
+    this.syncBounceCountChecks(count);
+  }
+
+  private syncBounceCountChecks(currentCount: BulletBounceCount): void {
+    this.syncingBounceUi = true;
+    for (const [count, check] of this.bulletBounceCountChecks) {
+      check.isChecked = count === currentCount;
+    }
+    this.syncingBounceUi = false;
   }
 
   private applyHitSfxFromUi(id: HitSfxId): void {
@@ -562,12 +629,13 @@ export class SettingsPanel {
     name: string,
     label: string,
     onClick: () => void,
+    size?: { width: string; height: string; fontSize: number },
   ): Button {
     const btn = Button.CreateSimpleButton(name, label);
-    btn.width = '100%';
-    btn.height = '40px';
+    btn.width = size?.width ?? '100%';
+    btn.height = size?.height ?? '40px';
     btn.color = 'rgba(255,255,255,0.92)';
-    btn.fontSize = 15;
+    btn.fontSize = size?.fontSize ?? 15;
     btn.fontFamily = UI_FONT;
     btn.background = 'rgba(255,255,255,0.10)';
     btn.cornerRadius = 8;
@@ -594,6 +662,7 @@ export class SettingsPanel {
     row.height = '32px';
     row.thickness = 0;
     row.background = 'transparent';
+    row.paddingRight = '8px';
 
     const tb = this.makeText(`${name}_label`, label, {
       fontSize: 15,
@@ -733,6 +802,7 @@ export class SettingsPanel {
     if (this.invincibleCheck) {
       this.invincibleCheck.isChecked = this.deps.getIsInvincible();
     }
+    this.syncBounceCountChecks(this.deps.getBulletBounceCount());
     if (this.zoomOutCheck) {
       this.zoomOutCheck.isChecked = this.deps.getAllowZoomOut();
     }

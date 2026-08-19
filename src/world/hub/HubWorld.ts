@@ -164,6 +164,7 @@ export class HubWorld implements GameWorld {
     }
 
     const minion = new Minion(scene, spawnX, spawnZ, {
+      isPlayer: true,
       facePositiveX: false,
       shadowGenerator: shadowGen,
       allBlack: true,

@@ -4,6 +4,7 @@ const STORAGE_KEY = 'luolu.camera.v3';
 /**
  * ArcRotateCamera 可恢复参数：
  * - alpha / beta / radius：轨道方位、仰角、距离
+ * - fixedRadius：固定视角下的平滑缩放半径
  * - target：注视点
  */
 export interface CameraStateSnapshot {
@@ -11,8 +12,10 @@ export interface CameraStateSnapshot {
   alpha: number;
   /** 垂直仰角（弧度） */
   beta: number;
-  /** 到目标点的距离 */
+  /** 到目标点的距离（自由模式） */
   radius: number;
+  /** 固定视角下的缩放目标距离（半径） */
+  fixedRadius?: number;
   /** 注视点 */
   targetX: number;
   targetY: number;
@@ -40,12 +43,39 @@ export function loadCameraState(): CameraStateSnapshot | null {
       alpha: data.alpha,
       beta: data.beta,
       radius: data.radius,
+      fixedRadius: isFiniteNumber(data.fixedRadius) ? data.fixedRadius : undefined,
       targetX: data.targetX,
       targetY: data.targetY,
       targetZ: data.targetZ,
     };
   } catch {
     return null;
+  }
+}
+
+export function loadFixedRadius(): number | null {
+  const state = loadCameraState();
+  return state && isFiniteNumber(state.fixedRadius) ? state.fixedRadius : null;
+}
+
+export function saveFixedRadius(fixedRadius: number): void {
+  try {
+    const current = loadCameraState();
+    if (current) {
+      saveCameraState({ ...current, fixedRadius });
+    } else {
+      saveCameraState({
+        alpha: 3.91,
+        beta: 0.9553,
+        radius: 30.0,
+        fixedRadius,
+        targetX: 0,
+        targetY: 0,
+        targetZ: 0,
+      });
+    }
+  } catch {
+    // 隐私模式 / 配额满时忽略
   }
 }
 

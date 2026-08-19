@@ -28,6 +28,8 @@ export interface ArenaColliderOptions {
   addLWall?: boolean;
   /** 是否生成传送阵朝场地内侧开口方围的物理碰撞 */
   addPadCoverWall?: boolean;
+  /** 与 Floor.hexagonCut 相同：切去屏幕左右两角变成六边形 */
+  hexagonCut?: number;
 }
 
 /**
@@ -162,14 +164,15 @@ export function buildArenaColliders(
     );
   }
 
-  // 1. 四周外围墙：算法自动根据四周围线路径解析生成
-  const loopPath = [
-    new Vector3(minX - outerThickness / 2, 0, minZ - outerThickness / 2),
-    new Vector3(maxX + outerThickness / 2, 0, minZ - outerThickness / 2),
-    new Vector3(maxX + outerThickness / 2, 0, maxZ + outerThickness / 2),
-    new Vector3(minX - outerThickness / 2, 0, maxZ + outerThickness / 2),
-    new Vector3(minX - outerThickness / 2, 0, minZ - outerThickness / 2),
-  ];
+  // 1. 四周外围墙：与 Floor 视觉墙同一条中心线
+  const loopPath = Floor.outerWallCenterPath(
+    minX,
+    maxX,
+    minZ,
+    maxZ,
+    outerThickness,
+    options.hexagonCut ?? 0,
+  );
   createCollidersFromExtrudePath(
     'PhysWall_Outer',
     loopPath,
@@ -203,14 +206,7 @@ export function buildArenaColliders(
 
   // 3. 四角 L 型围墙：算法自动根据 Floor 中的 4 个 L 管道路径点解析生成
   if (options.addLWall) {
-    const cornerConfigs = [
-      { name: 'BR', path: [new Vector3(8, 0, -5), new Vector3(5, 0, -5), new Vector3(5, 0, -8)] },
-      { name: 'TR', path: [new Vector3(8, 0, 5), new Vector3(5, 0, 5), new Vector3(5, 0, 8)] },
-      { name: 'TL', path: [new Vector3(-8, 0, 5), new Vector3(-5, 0, 5), new Vector3(-5, 0, 8)] },
-      { name: 'BL', path: [new Vector3(-8, 0, -5), new Vector3(-5, 0, -5), new Vector3(-5, 0, -8)] },
-    ];
-
-    for (const config of cornerConfigs) {
+    for (const config of Floor.L_WALL_CORNER_PATHS) {
       createCollidersFromExtrudePath(
         `PhysWall_L_${config.name}`,
         config.path,

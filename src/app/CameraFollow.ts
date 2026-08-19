@@ -16,9 +16,14 @@ export class CameraFollow {
   private currentRadius: number = FIXED_CAMERA.radius;
   /** 固定视角是否允许拉远缩小（默认关闭，仅允许放大/拉近，上限为基准 30.0） */
   private allowZoomOut = false;
+  private onRadiusChanged?: (radius: number) => void;
 
   constructor(followStrength = 6) {
     this.followStrength = followStrength;
+  }
+
+  setOnRadiusChanged(callback: (radius: number) => void): void {
+    this.onRadiusChanged = callback;
   }
 
   /** 获取当前缩放目标半径 */
@@ -32,6 +37,7 @@ export class CameraFollow {
     // 如果关闭了拉远权限且当前镜头处于拉远状态，自动平滑缩回默认基准 30.0
     if (!allow && this.targetRadius > FIXED_CAMERA.radius) {
       this.targetRadius = FIXED_CAMERA.radius;
+      this.onRadiusChanged?.(this.targetRadius);
     }
   }
 
@@ -41,12 +47,15 @@ export class CameraFollow {
   }
 
   /** 设置/重置缩放半径 */
-  setRadius(r: number): void {
+  setRadius(r: number, syncCurrent = true): void {
     const maxR = this.allowZoomOut ? FIXED_CAMERA.maxRadius : FIXED_CAMERA.radius;
     this.targetRadius = Math.min(
       maxR,
       Math.max(FIXED_CAMERA.minRadius, r),
     );
+    if (syncCurrent) {
+      this.currentRadius = this.targetRadius;
+    }
   }
 
   /** 绑定画布滚轮缩放 */
@@ -57,10 +66,14 @@ export class CameraFollow {
       // 向上滚动拉近放大（deltaY < 0），向下滚动拉远缩小（deltaY > 0）
       const factor = e.deltaY > 0 ? 1.10 : 0.90;
       const maxR = this.allowZoomOut ? FIXED_CAMERA.maxRadius : FIXED_CAMERA.radius;
-      this.targetRadius = Math.min(
+      const nextRadius = Math.min(
         maxR,
         Math.max(FIXED_CAMERA.minRadius, this.targetRadius * factor),
       );
+      if (Math.abs(nextRadius - this.targetRadius) > 1e-4) {
+        this.targetRadius = nextRadius;
+        this.onRadiusChanged?.(this.targetRadius);
+      }
     };
 
     canvas.addEventListener('wheel', onWheel, { passive: false });
