@@ -535,13 +535,21 @@ function createMaterials(
     tex.uScale = uScale;
     tex.vScale = vScale;
     floorMat.diffuseTexture = tex;
-    // 沉稳冷峻的暗黑玄武岩与幽暗深红地底熔岩流
-    floorMat.emissiveColor = new Color3(0.05, 0.02, 0.008);
-    floorMat.diffuseColor = new Color3(0.35, 0.28, 0.25);
-    floorMat.specularColor = new Color3(0.10, 0.05, 0.04);
-    floorMat.specularPower = 32;
 
-    const fallbackMat = mat(scene, 'fallbackMat_flameGrid', 0x060202);
+    // 增加重钢装甲高精度噪声法线贴图（倒角切面 + 螺栓浮雕 + 金属研磨微观拉丝噪点）
+    const normalTex = bakeFlameGridNormalTexture(scene, 512);
+    normalTex.uScale = uScale;
+    normalTex.vScale = vScale;
+    floorMat.bumpTexture = normalTex;
+    floorMat.bumpTexture.level = 0.45;
+
+    // 参考围墙红褐玄武岩色系的暗调红褐重钢装甲（深度压低漫反射，消除过曝发亮，深沉暗黑）
+    floorMat.diffuseColor = new Color3(0.36, 0.26, 0.21);
+    floorMat.specularColor = new Color3(0.20, 0.12, 0.08);
+    floorMat.specularPower = 48;
+    floorMat.emissiveColor = new Color3(0.012, 0.006, 0.003);
+
+    const fallbackMat = mat(scene, 'fallbackMat_flameGrid', 0x120805);
     return { floorMat, wallMat, fallbackMat };
   }
 
@@ -1281,7 +1289,7 @@ function bakeHubGridTexture(scene: Scene, size: number): DynamicTexture {
   return tex;
 }
 
-/** 1. 第一关专属暗黑火系玄武岩余烬地表（深黑焦炭石板 + 幽暗深血红裂隙 + 暗火核） */
+/** 1. 第一关专属精密平整红褐重钢装甲甲板（4x4 密集模数 + 纯平冷轧钢板 + 精密微倒角 + 沉头微铆钉 + 反应堆流线） */
 function bakeFlameGridTexture(scene: Scene, size: number): DynamicTexture {
   const tex = new DynamicTexture(
     'flameGridTex',
@@ -1294,164 +1302,255 @@ function bakeFlameGridTexture(scene: Scene, size: number): DynamicTexture {
 
   const ctx = tex.getContext() as unknown as CanvasRenderingContext2D;
 
-  // 1. 底层：深渊黑炭与极暗血红底色
-  const bgGrad = ctx.createRadialGradient(
-    size / 2,
-    size / 2,
-    size * 0.1,
-    size / 2,
-    size / 2,
-    size * 0.75,
-  );
-  bgGrad.addColorStop(0, '#0e0403');
-  bgGrad.addColorStop(1, '#040101');
-  ctx.fillStyle = bgGrad;
+  // 1. 底层：深暗红黑焦炭接缝阴影基底
+  ctx.fillStyle = '#140a07';
   ctx.fillRect(0, 0, size, size);
 
-  const gridMeters = 5;
-  const step = size / gridMeters;
+  // 采用 4x4（每块 1.25m x 1.25m）密集精密模块化装甲钢板
+  const panelsPerAxis = 4;
+  const panelSize = size / panelsPerAxis;
 
-  // 2. 绘制 1m x 1m 暗黑玄武岩石板（Dark Basalt / Ash Slabs）
-  for (let gx = 0; gx < gridMeters; gx++) {
-    for (let gy = 0; gy < gridMeters; gy++) {
-      const bx = gx * step;
-      const by = gy * step;
+  for (let py = 0; py < panelsPerAxis; py++) {
+    for (let px = 0; px < panelsPerAxis; px++) {
+      const bx = px * panelSize;
+      const by = py * panelSize;
+      const pad = 1.0; // 钢板四周极微小机械装甲间隙
+      const pw = panelSize - pad * 2;
+      const ph = panelSize - pad * 2;
 
-      // 石板内部极暗炭黑渐变
-      const slabGrad = ctx.createLinearGradient(bx, by, bx + step, by + step);
-      slabGrad.addColorStop(0, 'rgba(24, 8, 6, 0.55)');
-      slabGrad.addColorStop(0.5, 'rgba(12, 4, 3, 0.35)');
-      slabGrad.addColorStop(1, 'rgba(5, 2, 1, 0.80)');
-      ctx.fillStyle = slabGrad;
-      ctx.fillRect(bx + 2, by + 2, step - 4, step - 4);
+      // 2.1 钢板基底纯平填充（平整纯净，与围墙同系的红褐暗钢）
+      const pSeed = px * 17 + py * 31;
+      const toneShift = ((pSeed % 3) - 1) * 2;
+      const baseR = 46 + toneShift;
+      const baseG = 27 + Math.floor(toneShift * 0.6);
+      const baseB = 21 + Math.floor(toneShift * 0.5);
+      ctx.fillStyle = `rgb(${baseR}, ${baseG}, ${baseB})`;
+      ctx.fillRect(bx + pad, by + pad, pw, ph);
 
-      // 板块内部隐约幽暗的深红细冷裂痕
-      ctx.strokeStyle = 'rgba(160, 25, 12, 0.18)';
-      ctx.lineWidth = 1.0;
-      ctx.beginPath();
-      const crackSeed = (gx * 7 + gy * 13) % 4;
-      if (crackSeed === 0) {
-        ctx.moveTo(bx + 16, by + 24);
-        ctx.lineTo(bx + step * 0.45, by + step * 0.5);
-        ctx.lineTo(bx + step - 18, by + step * 0.4);
-        ctx.moveTo(bx + step * 0.45, by + step * 0.5);
-        ctx.lineTo(bx + step * 0.6, by + step - 16);
-      } else if (crackSeed === 1) {
-        ctx.moveTo(bx + step * 0.5, by + 16);
-        ctx.lineTo(bx + step * 0.35, by + step * 0.6);
-        ctx.lineTo(bx + 20, by + step - 20);
-      } else if (crackSeed === 2) {
-        ctx.moveTo(bx + 22, by + step * 0.4);
-        ctx.lineTo(bx + step * 0.55, by + step * 0.45);
-        ctx.lineTo(bx + step - 16, by + step - 24);
+      // 2.2 平整均匀的冷轧金属微研磨拉丝（非常微弱平滑，消除凹凸不平感）
+      const isHorizontalGrain = (px + py) % 2 === 0;
+      const grainLines = 14;
+      for (let g = 0; g < grainLines; g++) {
+        const seedG = (pSeed * 37 + g * 19) % 1000;
+        const gPos = (g / grainLines) * (isHorizontalGrain ? ph : pw);
+        const gThickness = 1.0;
+        const gAlpha = 0.012 + (seedG % 4) * 0.005;
+        ctx.fillStyle = `rgba(255, 205, 175, ${gAlpha})`;
+        if (isHorizontalGrain) {
+          ctx.fillRect(bx + pad + 1, by + pad + gPos, pw - 2, gThickness);
+        } else {
+          ctx.fillRect(bx + pad + gPos, by + pad + 1, gThickness, ph - 2);
+        }
       }
-      ctx.stroke();
 
-      // 微弱暗琥珀火痕
-      ctx.strokeStyle = 'rgba(210, 75, 20, 0.25)';
-      ctx.lineWidth = 0.6;
-      ctx.stroke();
+      // 2.3 极轻微平整漫反射光膜（平整均匀，绝无倾斜高坡）
+      ctx.fillStyle = 'rgba(255, 220, 190, 0.025)';
+      ctx.fillRect(bx + pad + 1, by + pad + 1, pw - 2, ph - 2);
 
-      // 散落极微弱暗红余烬点
-      const emberX = bx + 12 + ((gx * 31 + gy * 17) % (step - 24));
-      const emberY = by + 12 + ((gy * 29 + gx * 23) % (step - 24));
-      ctx.fillStyle = 'rgba(210, 80, 20, 0.65)';
-      ctx.beginPath();
-      ctx.arc(emberX, emberY, 1.2, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
+      // 2.4 四角精致微小工业沉头螺栓（Crisp Micro Hex Bolts）
+      const boltMargin = 7;
+      const boltCoords = [
+        { x: bx + pad + boltMargin, y: by + pad + boltMargin },
+        { x: bx + pad + pw - boltMargin, y: by + pad + boltMargin },
+        { x: bx + pad + boltMargin, y: by + pad + ph - boltMargin },
+        { x: bx + pad + pw - boltMargin, y: by + pad + ph - boltMargin },
+      ];
 
-  // 3. 熔岩沟槽：幽微细敛的深血红暗火
-  // 3.1 极暗深红光晕
-  ctx.lineWidth = 6;
-  ctx.strokeStyle = 'rgba(160, 20, 10, 0.14)';
-  for (let i = 0; i <= gridMeters; i++) {
-    const p = i * step;
-    ctx.beginPath();
-    ctx.moveTo(p, 0);
-    ctx.lineTo(p, size);
-    ctx.stroke();
-
-    ctx.beginPath();
-    ctx.moveTo(0, p);
-    ctx.lineTo(size, p);
-    ctx.stroke();
-  }
-
-  // 3.2 幽暗深血红细线
-  ctx.lineWidth = 1.8;
-  ctx.strokeStyle = 'rgba(195, 32, 12, 0.60)';
-  for (let i = 0; i <= gridMeters; i++) {
-    const p = i * step;
-    ctx.beginPath();
-    ctx.moveTo(p, 0);
-    ctx.lineTo(p, size);
-    ctx.stroke();
-
-    ctx.beginPath();
-    ctx.moveTo(0, p);
-    ctx.lineTo(size, p);
-    ctx.stroke();
-  }
-
-  // 3.3 极细暗赤橙火芯
-  ctx.lineWidth = 0.8;
-  ctx.strokeStyle = 'rgba(235, 95, 25, 0.75)';
-  for (let i = 0; i <= gridMeters; i++) {
-    const p = i * step;
-    ctx.beginPath();
-    ctx.moveTo(p, 0);
-    ctx.lineTo(p, size);
-    ctx.stroke();
-
-    ctx.beginPath();
-    ctx.moveTo(0, p);
-    ctx.lineTo(size, p);
-    ctx.stroke();
-  }
-
-  // 4. 节点幽暗火核信标
-  for (let x = 0; x <= gridMeters; x++) {
-    for (let y = 0; y <= gridMeters; y++) {
-      const px = x * step;
-      const py = y * step;
-      const isMajor =
-        (x === 0 || x === gridMeters) && (y === 0 || y === gridMeters);
-
-      // 微光暗晕
-      const glowRad = isMajor ? 8 : 4.5;
-      const glow = ctx.createRadialGradient(px, py, 0, px, py, glowRad);
-      glow.addColorStop(0, 'rgba(190, 30, 15, 0.35)');
-      glow.addColorStop(1, 'rgba(0, 0, 0, 0.0)');
-      ctx.fillStyle = glow;
-      ctx.beginPath();
-      ctx.arc(px, py, glowRad, 0, Math.PI * 2);
-      ctx.fill();
-
-      // 暗火微小圆点
-      ctx.fillStyle = isMajor
-        ? 'rgba(240, 90, 25, 0.90)'
-        : 'rgba(200, 60, 18, 0.75)';
-      ctx.beginPath();
-      ctx.arc(px, py, isMajor ? 2.0 : 1.3, 0, Math.PI * 2);
-      ctx.fill();
-
-      // 极微细暗红微针
-      if (isMajor) {
-        ctx.strokeStyle = 'rgba(225, 75, 25, 0.60)';
-        ctx.lineWidth = 0.9;
-        const arm = 3.5;
+      for (const b of boltCoords) {
+        // 沉头圆坑（深暗金属凹槽）
+        // 凹坑上边缘微弱金属切面
+        ctx.strokeStyle = 'rgba(255, 210, 175, 0.18)';
+        ctx.lineWidth = 0.6;
         ctx.beginPath();
-        ctx.moveTo(px - arm, py);
-        ctx.lineTo(px + arm, py);
-        ctx.moveTo(px, py - arm);
-        ctx.lineTo(px, py + arm);
+        ctx.arc(b.x, b.y, 2.2, Math.PI * 0.8, Math.PI * 1.8);
         ctx.stroke();
+
+        // 螺栓金属圆芯
+        ctx.fillStyle = 'rgba(165, 125, 105, 0.85)';
+        ctx.beginPath();
+        ctx.arc(b.x - 0.3, b.y - 0.3, 1.1, 0, Math.PI * 2);
+        ctx.fill();
+
+        // 螺栓金属高光反光微点
+        ctx.fillStyle = 'rgba(255, 245, 230, 0.80)';
+        ctx.beginPath();
+        ctx.arc(b.x - 0.5, b.y - 0.5, 0.5, 0, Math.PI * 2);
+        ctx.fill();
       }
+
+      // 2.5 钢板装甲极细 0.30px 机械微倒角（极隐蔽微弱，绝无粗边框）
+      // 受光顶边与左边（极弱化暖白金属微光）
+      ctx.strokeStyle = 'rgba(255, 215, 185, 0.035)';
+      ctx.lineWidth = 0.30;
+      ctx.beginPath();
+      ctx.moveTo(bx + pad, by + pad + ph);
+      ctx.lineTo(bx + pad, by + pad);
+      ctx.lineTo(bx + pad + pw, by + pad);
+      ctx.stroke();
+
+      // 背光底边与右边（极微弱阴影）
+      ctx.strokeStyle = 'rgba(10, 4, 3, 0.15)';
+      ctx.lineWidth = 0.30;
+      ctx.beginPath();
+      ctx.moveTo(bx + pad + pw, by + pad);
+      ctx.lineTo(bx + pad + pw, by + pad + ph);
+      ctx.lineTo(bx + pad, by + pad + ph);
+      ctx.stroke();
     }
   }
 
+  // 3. 装甲板接缝与反应堆等离子能量回路（极致纤细 0.22px~0.4px 极细暗丝）
+  for (let i = 0; i <= panelsPerAxis; i++) {
+    const p = i * panelSize;
+
+    // 3.1 极细微深暗缝（线宽收窄至 0.4px，透明度仅 0.15）
+    ctx.fillStyle = 'rgba(10, 4, 3, 0.15)';
+    ctx.fillRect(p - 0.2, 0, 0.4, size);
+    ctx.fillRect(0, p - 0.2, size, 0.4);
+
+    // 3.2 极细地温暗丝（0.22px 超细微丝，透明度 0.15，若隐若现）
+    ctx.strokeStyle = 'rgba(255, 95, 25, 0.15)';
+    ctx.lineWidth = 0.22;
+    ctx.beginPath();
+    ctx.moveTo(p, 0);
+    ctx.lineTo(p, size);
+    ctx.moveTo(0, p);
+    ctx.lineTo(size, p);
+    ctx.stroke();
+  }
+
+  // 4. 反应堆能量接口（极致弱化微点）
+  for (let x = 0; x <= panelsPerAxis; x++) {
+    for (let y = 0; y <= panelsPerAxis; y++) {
+      const px = x * panelSize;
+      const py = y * panelSize;
+
+      // 极微小暗金交接点
+      ctx.fillStyle = 'rgba(235, 110, 30, 0.15)';
+      ctx.beginPath();
+      ctx.arc(px, py, 0.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  tex.update(false);
+  return tex;
+}
+
+/** 1.1 第一关专属重钢装甲高精度噪声法线贴图（极平滑微切缝 + 细腻金属研磨微观拉丝噪点） */
+function bakeFlameGridNormalTexture(scene: Scene, size: number): DynamicTexture {
+  const tex = new DynamicTexture(
+    'flameGridNormalTex',
+    { width: size, height: size },
+    scene,
+    false,
+  );
+  tex.wrapU = Texture.WRAP_ADDRESSMODE;
+  tex.wrapV = Texture.WRAP_ADDRESSMODE;
+
+  const ctx = tex.getContext() as unknown as CanvasRenderingContext2D;
+  const imgData = ctx.createImageData(size, size);
+  const data = imgData.data;
+
+  const panelsPerAxis = 4;
+  const panelSize = size / panelsPerAxis; // 128
+  const boltMargin = 7;
+
+  // 1. 计算高度场（Height Field Array）
+  const heights = new Float32Array(size * size);
+
+  for (let y = 0; y < size; y++) {
+    const py = Math.floor(y / panelSize);
+    const ly = y % panelSize;
+
+    for (let x = 0; x < size; x++) {
+      const px = Math.floor(x / panelSize);
+      const lx = x % panelSize;
+      const idx = y * size + x;
+
+      // 1.1 钢板装甲边缘与接缝槽深度（极微细落差，半宽仅 0.4px，落差仅 0.06）
+      const distEdge = Math.min(lx, panelSize - lx, ly, panelSize - ly);
+      let h = 1.0;
+
+      if (distEdge < 0.4) {
+        h = 0.94;
+      } else if (distEdge < 1.0) {
+        h = 0.94 + ((distEdge - 0.4) / 0.6) * 0.06;
+      } else {
+        h = 1.0;
+      }
+
+      // 1.2 四角沉头螺栓与孔洞凹凸
+      const boltPts = [
+        { bx: boltMargin, by: boltMargin },
+        { bx: panelSize - boltMargin, by: boltMargin },
+        { bx: boltMargin, by: panelSize - boltMargin },
+        { bx: panelSize - boltMargin, by: panelSize - boltMargin },
+      ];
+
+      for (const bp of boltPts) {
+        const dx = lx - bp.bx;
+        const dy = ly - bp.by;
+        const d = Math.sqrt(dx * dx + dy * dy);
+        if (d < 2.0) {
+          if (d < 0.9) {
+            h = Math.max(h, 0.88 + (0.9 - d) * 0.2);
+          } else {
+            h = Math.min(h, 0.78 + (d - 0.9) * 0.2);
+          }
+        }
+      }
+
+      // 1.3 金属研磨各向异性拉丝与微观冷轧钢表面微噪
+      const u = x / 64;
+      const v = y / 64;
+      const isHoriz = (px + py) % 2 === 0;
+      const brushNoise = isHoriz
+        ? (periodicValueNoise(u * 16, v * 2, 32, 101) - 0.5) * 0.045
+        : (periodicValueNoise(u * 2, v * 16, 32, 101) - 0.5) * 0.045;
+      const microGrain = (hash2(x * 0.37 + 17, y * 0.43 + 31) - 0.5) * 0.025;
+
+      heights[idx] = h + brushNoise + microGrain;
+    }
+  }
+
+  // 2. 利用中心差分滤波器计算切线空间法线（微弱平滑强度 1.4）
+  const normalStrength = 1.4;
+
+  for (let y = 0; y < size; y++) {
+    const yPrev = (y - 1 + size) % size;
+    const yNext = (y + 1) % size;
+
+    for (let x = 0; x < size; x++) {
+      const xPrev = (x - 1 + size) % size;
+      const xNext = (x + 1) % size;
+
+      const hL = heights[y * size + xPrev];
+      const hR = heights[y * size + xNext];
+      const hU = heights[yPrev * size + x];
+      const hD = heights[yNext * size + x];
+
+      // 中心差分梯度
+      const dx = (hR - hL) * normalStrength;
+      const dy = (hD - hU) * normalStrength;
+
+      // 切线空间法线：N = normalize(-dx, -dy, 1.0)
+      const nz = 1.0;
+      const len = Math.sqrt(dx * dx + dy * dy + nz * nz);
+      const nx = -dx / len;
+      const ny = -dy / len;
+      const normZ = nz / len;
+
+      // 映射到切线空间 RGB (0..255)
+      const pIdx = (y * size + x) * 4;
+      data[pIdx] = Math.floor((nx * 0.5 + 0.5) * 255);
+      data[pIdx + 1] = Math.floor((ny * 0.5 + 0.5) * 255);
+      data[pIdx + 2] = Math.floor((normZ * 0.5 + 0.5) * 255);
+      data[pIdx + 3] = 255;
+    }
+  }
+
+  ctx.putImageData(imgData, 0, 0);
   tex.update(false);
   return tex;
 }
@@ -1766,6 +1865,34 @@ function valueNoise(x: number, y: number, seed: number): number {
   const b = hash2(x0 + 1 + seed * 0.11, y0 + seed * 0.17);
   const c = hash2(x0 + seed * 0.11, y0 + 1 + seed * 0.17);
   const d = hash2(x0 + 1 + seed * 0.11, y0 + 1 + seed * 0.17);
+
+  const ab = a + (b - a) * ux;
+  const cd = c + (d - c) * ux;
+  return ab + (cd - ab) * uy;
+}
+
+function periodicValueNoise(
+  x: number,
+  y: number,
+  period: number,
+  seed: number,
+): number {
+  const x0 = Math.floor(x);
+  const y0 = Math.floor(y);
+  const fx = x - x0;
+  const fy = y - y0;
+  const ux = fx * fx * (3 - 2 * fx);
+  const uy = fy * fy * (3 - 2 * fy);
+
+  const rx0 = ((x0 % period) + period) % period;
+  const rx1 = (((x0 + 1) % period) + period) % period;
+  const ry0 = ((y0 % period) + period) % period;
+  const ry1 = (((y0 + 1) % period) + period) % period;
+
+  const a = hash2(rx0 + seed * 0.11, ry0 + seed * 0.17);
+  const b = hash2(rx1 + seed * 0.11, ry0 + seed * 0.17);
+  const c = hash2(rx0 + seed * 0.11, ry1 + seed * 0.17);
+  const d = hash2(rx1 + seed * 0.11, ry1 + seed * 0.17);
 
   const ab = a + (b - a) * ux;
   const cd = c + (d - c) * ux;
